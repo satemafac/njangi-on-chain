@@ -42,6 +42,22 @@ export default {
           dim: "#8b8578", // captions
         },
         sui: "#4DA2FF",
+
+        // Landing surfaces + labels (Apple dark-page system: a pure-black
+        // canvas, tiles lifted a few steps above it, labels stepping down
+        // in contrast rather than hue). Gold stays the single accent.
+        night: {
+          DEFAULT: "#000000", // canvas
+          tile: "#141416", // bento tiles, sheets
+          raised: "#1d1d1f", // controls on a tile, hover fills
+          line: "#2c2c2e", // hairlines on tiles
+        },
+        mist: {
+          DEFAULT: "#f5f5f7", // primary labels, headlines
+          2: "#a1a1a6", // secondary copy (8:1 on black)
+          3: "#86868b", // captions, fine print (5.8:1 on black)
+          4: "#6e6e73", // large decorative text only (4.1:1)
+        },
       },
     },
   },

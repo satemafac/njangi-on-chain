@@ -1,20 +1,30 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { AnimatePresence, motion } from 'framer-motion';
+import { EASE_APPLE, useReducedMotionAfterMount } from './motion';
+
+const SLIDE_S = 0.7;
 
 /**
  * Kinetic type: cycles the names a savings circle is known by across cultures,
  * flipping one word in place — the heritage of the rotating-savings tradition,
  * rendered as motion.
  *
- * The run is bounded and deliberately *lands* on `settleOn` (the brand name), so
- * the sequence reads as "many names → ours" instead of freezing on whichever
- * word the timer happened to stop on. Names are sampled across the whole list so
- * a short run still spans cultures rather than the first few alphabetically.
+ * The run is bounded and both starts and *lands* on `settleOn` (the brand
+ * name): server HTML, no-JS and reduced motion all show that word, and the
+ * animated run reads "ours → the world's many names → ours" instead of
+ * freezing on whichever word a timer happened to stop on. Names are sampled
+ * across the whole list so a short run still spans cultures rather than the
+ * first few alphabetically.
+ *
+ * Timing is chained, not a blind interval: the next word is only scheduled
+ * once the previous slide has finished. On a busy main thread (a low-end
+ * phone, a hidden tab) an interval keeps firing while frames stall, and
+ * AnimatePresence piles every pending word into the slot at once.
  *
  * Accessibility: the animated word is decorative (aria-hidden) — pair it with a
  * static sr-only label at the call site. To satisfy WCAG 2.2.2 (no auto-motion
  * past 5s without a control) it settles after a short, bounded run AND pauses
- * while a mouse is over it. Reduced-motion → static settle word.
+ * while a mouse is over it.
  */
 export default function KineticNames({
   names,
@@ -27,17 +37,18 @@ export default function KineticNames({
   className?: string;
   interval?: number;
   maxCycles?: number;
-  /** Word the run comes to rest on. Defaults to the last name. */
+  /** Word the run starts from and comes to rest on. Defaults to the last name. */
   settleOn?: string;
 }) {
-  const reduce = useReducedMotion();
+  // Read after mount so the first client render matches the server HTML
+  // (framer's hook reports the real preference immediately, which renders a
+  // different element than the server did for reduced-motion visitors).
+  const reduce = useReducedMotionAfterMount();
   const [index, setIndex] = useState(0);
   const hoverPausedRef = useRef(false);
   const hiddenRef = useRef(false);
+  const timerRef = useRef<number | undefined>(undefined);
 
-  // Background tabs keep timers running but freeze rAF, so exit animations never
-  // finish and AnimatePresence stacks every word it was told to remove. Holding
-  // the cycle while hidden is what keeps them from piling up.
   useEffect(() => {
     const sync = () => {
       hiddenRef.current = document.visibilityState === 'hidden';
@@ -47,7 +58,7 @@ export default function KineticNames({
     return () => document.removeEventListener('visibilitychange', sync);
   }, []);
 
-  // The exact words this run will show, ending on the settle word.
+  // The exact words this run will show: home, a spread of others, home again.
   const sequence = useMemo(() => {
     const unique = names.filter((n, i) => names.indexOf(n) === i);
     if (unique.length === 0) return [];
@@ -61,27 +72,37 @@ export default function KineticNames({
     // Even stride across the full list so a 6-step run still spans cultures.
     const stride = pool.length / steps;
     const picked = Array.from({ length: steps }, (_, i) => pool[Math.floor(i * stride)]);
-    return [...picked, settle];
+    return [settle, ...picked, settle];
   }, [names, maxCycles, settleOn]);
+
+  const last = sequence.length - 1;
+
+  /** Advance one word after `delay`, holding while hovered or hidden. */
+  const scheduleNext = useCallback(
+    (delay: number) => {
+      window.clearTimeout(timerRef.current);
+      const tick = () => {
+        if (hoverPausedRef.current || hiddenRef.current) {
+          timerRef.current = window.setTimeout(tick, 300);
+          return;
+        }
+        setIndex((i) => Math.min(i + 1, last));
+      };
+      timerRef.current = window.setTimeout(tick, delay);
+    },
+    [last]
+  );
 
   useEffect(() => {
     setIndex(0);
     if (reduce || sequence.length <= 1) return;
-
-    let step = 0;
-    const id = window.setInterval(() => {
-      if (hoverPausedRef.current || hiddenRef.current) return; // hold the current word
-      step += 1;
-      setIndex(step);
-      if (step >= sequence.length - 1) window.clearInterval(id); // rest on the settle word
-    }, interval);
-
-    return () => window.clearInterval(id);
-  }, [reduce, sequence, interval]);
+    scheduleNext(interval);
+    return () => window.clearTimeout(timerRef.current);
+  }, [reduce, sequence, interval, scheduleNext]);
 
   if (sequence.length === 0) return null;
 
-  const current = sequence[Math.min(index, sequence.length - 1)];
+  const current = reduce ? sequence[last] : sequence[Math.min(index, last)];
 
   return (
     <span
@@ -133,7 +154,18 @@ export default function KineticNames({
               initial={{ y: '100%' }}
               animate={{ y: '0%' }}
               exit={{ y: '-100%' }}
-              transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
+              transition={{ duration: SLIDE_S, ease: EASE_APPLE }}
+              onAnimationComplete={(definition) => {
+                // Chain the next word off the finished *arrival* (the exit of
+                // the outgoing word reports completion too — ignore it).
+                const arrived =
+                  typeof definition === 'object' &&
+                  definition !== null &&
+                  (definition as { y?: string }).y === '0%';
+                if (arrived && index > 0 && index < last) {
+                  scheduleNext(Math.max(interval - SLIDE_S * 1000, 250));
+                }
+              }}
             >
               {current}
             </motion.span>

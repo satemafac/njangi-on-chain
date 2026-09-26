@@ -9,15 +9,16 @@ import { SUPPORTED_LOCALE_OPTIONS, type Locale } from '@/lib/i18n';
  * any component that uses `useTranslation`.
  *
  * `variant` themes the control: 'light' (default) for the app's light pages,
- * 'dark' for the near-black landing. Only the className strings change — the
- * markup, behavior, and a11y attributes are identical across variants.
+ * 'dark' for near-black pages, 'glass' for the landing's frosted Apple-style
+ * bar. Only the className strings change — the markup, behavior, and a11y
+ * attributes are identical across variants.
  */
 export function LocaleSwitcher({
   compact = false,
   variant = 'light',
 }: {
   compact?: boolean;
-  variant?: 'light' | 'dark';
+  variant?: 'light' | 'dark' | 'glass';
 }) {
   const { locale, setLocale } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -38,8 +39,13 @@ export function LocaleSwitcher({
   const currentLabel = SUPPORTED_LOCALE_OPTIONS.find((opt) => opt.code === locale)?.label ?? locale;
 
   const isDark = variant === 'dark';
+  const isGlass = variant === 'glass';
 
-  const triggerClass = isDark
+  const triggerClass = isGlass
+    ? `inline-flex items-center gap-1.5 rounded-full bg-white/[0.08] font-medium text-mist-2 transition-colors duration-200 hover:bg-white/[0.14] hover:text-mist focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold/80 ${
+        compact ? 'h-8 px-3 text-[12px]' : 'h-10 px-4 text-[14px]'
+      }`
+    : isDark
     ? compact
       ? 'inline-flex items-center gap-1.5 rounded-full border border-[#2a2620] bg-[#13121a]/70 px-3 py-2 text-xs font-medium text-[#cfc8ba] transition hover:border-[#E8B04B]/50 hover:text-[#f6d99a] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#f6d99a]'
       : 'inline-flex h-10 items-center gap-2 rounded-full border border-[#2a2620] bg-[#13121a]/70 px-4 text-sm font-medium text-[#cfc8ba] transition hover:border-[#E8B04B]/50 hover:text-[#f6d99a] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#f6d99a]'
@@ -47,12 +53,18 @@ export function LocaleSwitcher({
       ? 'inline-flex items-center gap-1 rounded-full border border-stone-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-600 transition hover:border-stone-300 hover:bg-stone-50'
       : 'inline-flex h-10 items-center gap-2 rounded-full border border-stone-200 bg-white px-3 text-sm font-medium text-slate-600 transition hover:border-stone-300 hover:bg-stone-50';
 
-  const panelClass = isDark
+  const panelClass = isGlass
+    ? 'absolute right-0 z-50 mt-2 w-44 overflow-hidden rounded-2xl bg-[#1c1c1e]/95 py-1 shadow-[0_24px_60px_-20px_rgba(0,0,0,0.9)] ring-1 ring-white/[0.08] backdrop-blur-xl'
+    : isDark
     ? 'absolute right-0 z-50 mt-2 w-44 overflow-hidden rounded-2xl border border-[#2a2620] bg-[#13121a] shadow-[0_24px_60px_-30px_rgba(0,0,0,0.9)]'
     : 'absolute right-0 z-50 mt-2 w-40 overflow-hidden rounded-xl border border-stone-200 bg-white shadow-lg';
 
   const optionClass = (selected: boolean) =>
-    isDark
+    isGlass
+      ? `flex w-full items-center justify-between px-4 py-2.5 text-[14px] transition-colors hover:bg-white/[0.06] ${
+          selected ? 'font-semibold text-gold' : 'text-mist-2'
+        }`
+      : isDark
       ? `flex w-full items-center justify-between px-4 py-2.5 text-sm transition hover:bg-white/[0.04] ${
           selected ? 'font-semibold text-[#E8B04B]' : 'text-[#cfc8ba]'
         }`
@@ -60,7 +72,9 @@ export function LocaleSwitcher({
           selected ? 'font-semibold text-emerald-700' : 'text-slate-700'
         }`;
 
-  const codeClass = isDark
+  const codeClass = isGlass
+    ? 'text-[11px] uppercase tracking-wider text-mist-3'
+    : isDark
     ? 'text-xs uppercase tracking-wider text-[#8b8578]'
     : 'text-xs uppercase tracking-wider text-slate-400';
 

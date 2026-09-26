@@ -1,18 +1,18 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
 import Head from 'next/head';
 import Image from 'next/image';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
 import * as Dialog from '@radix-ui/react-dialog';
-import { Instrument_Serif, Manrope } from 'next/font/google';
+import { Instrument_Serif, Inter } from 'next/font/google';
+import { MotionConfig } from 'framer-motion';
 import {
   ArrowRight,
-  BadgeCheck,
-  ChevronDown,
-  CircleDot,
+  Check,
+  ChevronRight,
   Coins,
   Globe2,
-  Mail,
+  Plus,
   Shield,
   type LucideIcon,
   Users,
@@ -20,11 +20,9 @@ import {
   Waypoints,
   X,
 } from 'lucide-react';
-import dynamic from 'next/dynamic';
 import { useAuth } from '../contexts/AuthContext';
 import { LoginButton } from '../components/LoginButton';
 import { LegalFooter } from '../components/LegalFooter';
-import { LocaleSwitcher } from '../components/ui/LocaleSwitcher';
 import { useTranslation } from '../hooks/useTranslation';
 import { getNetworkConfig, setCurrentNetwork } from '../services/network-config';
 import { SUPPORT_MAILTO } from '../lib/constants';
@@ -35,21 +33,15 @@ import {
 import { webApplication, website } from '../lib/structured-data';
 import { Seo } from '../components/Seo';
 import { Reveal, RevealItem } from '../components/landing/Reveal';
-import TiltCard from '../components/landing/TiltCard';
 import KineticNames from '../components/landing/KineticNames';
-import { useSmoothScroll } from '../components/landing/useSmoothScroll';
-
-// WebGL scenes are browser-only and lazy: keep them out of SSR + the critical
-// path so first paint (and the CSS gradient fallback) never blocks on them, and
-// the lazy chunk never collapses hero height (min-h reserved on the section).
-const DiasporaMeridian = dynamic(
-  () => import('../components/landing/DiasporaMeridian'),
-  { ssr: false, loading: () => null }
-);
-const AmbientField = dynamic(
-  () => import('../components/landing/AmbientField'),
-  { ssr: false, loading: () => null }
-);
+import LandingHeader from '../components/landing/LandingHeader';
+import HeroStage from '../components/landing/HeroStage';
+import ScrollLitText from '../components/landing/ScrollLitText';
+import ProofNumbers, { type Proof } from '../components/landing/ProofNumbers';
+import RotationStory from '../components/landing/RotationStory';
+import CircleMock from '../components/landing/CircleMock';
+import FeatureBento, { type Feature } from '../components/landing/FeatureBento';
+import NamesLight from '../components/landing/NamesLight';
 
 declare global {
   interface Window {
@@ -67,16 +59,22 @@ declare global {
   }
 }
 
-const wordmarkFont = Instrument_Serif({
+// Brand serif: the wordmark and the tradition's names (heritage voice).
+const serifFont = Instrument_Serif({
   subsets: ['latin'],
   weight: '400',
   display: 'swap',
 });
 
-const bodyFont = Manrope({
+// Everything else speaks SF Pro on Apple devices (see `.apple` in
+// globals.css). Inter is the stand-in elsewhere; preload is off so Apple
+// devices, which never use it, never download it.
+const sansFont = Inter({
   subsets: ['latin'],
-  weight: ['400', '500', '600', '700'],
+  axes: ['opsz'],
   display: 'swap',
+  preload: false,
+  variable: '--font-landing-sans',
 });
 
 const CULTURAL_NAMES = [
@@ -107,29 +105,34 @@ const CULTURAL_NAMES = [
   'Xitique',
 ];
 
-// Feature cards and workflow steps reference i18n keys; the visible copy is
+// Feature tiles and workflow steps reference i18n keys; the visible copy is
 // resolved at render time via the active locale (EN/FR funnel translation).
-const FEATURE_CARDS: Array<{
+const FEATURE_TILES: Array<{
+  key: Feature['key'];
   icon: LucideIcon;
   titleKey: string;
   descriptionKey: string;
 }> = [
   {
+    key: 'ledger',
     icon: Shield,
     titleKey: 'landing.feature.sharedVisibility.title',
     descriptionKey: 'landing.feature.sharedVisibility.body',
   },
   {
+    key: 'custody',
     icon: Wallet,
     titleKey: 'landing.feature.selfCustody.title',
     descriptionKey: 'landing.feature.selfCustody.body',
   },
   {
+    key: 'borderless',
     icon: Globe2,
     titleKey: 'landing.feature.borderless.title',
     descriptionKey: 'landing.feature.borderless.body',
   },
   {
+    key: 'friction',
     icon: Users,
     titleKey: 'landing.feature.culturalContinuity.title',
     descriptionKey: 'landing.feature.culturalContinuity.body',
@@ -234,16 +237,50 @@ const FAQ_ITEMS = [
   { id: 'network-switching', questionKey: 'landing.faq.q4', answerKey: 'landing.faq.a4' },
 ];
 
-const socialLinkClass =
-  'inline-flex items-center py-2.5 text-sm font-medium text-[#cfc8ba] transition-colors duration-200 hover:text-[#f6d99a] focus-visible:outline-none focus-visible:underline focus-visible:underline-offset-4';
+// ---- Shared class strings (Apple controls: pill buttons, chevron links) ----
+const focusRing =
+  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold/80 focus-visible:ring-offset-2 focus-visible:ring-offset-black';
+const goldButtonClass = `inline-flex h-12 items-center justify-center gap-1.5 rounded-full bg-gold px-7 text-[17px] font-medium tracking-[-0.022em] text-[#1d1d1f] transition-[background-color,transform] duration-200 hover:bg-[#f0bd5e] active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-60 ${focusRing}`;
+const quietButtonClass = `inline-flex h-12 items-center justify-center rounded-full bg-white/[0.1] px-6 text-[17px] font-medium tracking-[-0.022em] text-mist transition-[background-color,transform] duration-200 hover:bg-white/[0.16] active:scale-[0.97] ${focusRing}`;
+const chevronLinkClass = `group inline-flex items-center gap-0.5 rounded text-[17px] tracking-[-0.022em] text-gold underline-offset-4 hover:underline ${focusRing}`;
+const eyebrowClass = 'type-eyebrow text-gold';
+const sectionTitleClass = 'type-section mt-3 text-balance text-mist';
+const sectionBodyClass = 'type-intro mx-auto mt-5 max-w-[42rem] text-balance text-mist-2';
+
+function ChevronLink({
+  href,
+  children,
+  onClick,
+}: {
+  href: string;
+  children: React.ReactNode;
+  onClick?: React.MouseEventHandler<HTMLAnchorElement>;
+}) {
+  const content = (
+    <>
+      {children}
+      <ChevronRight
+        aria-hidden
+        className="h-[1.05em] w-[1.05em] transition-transform duration-200 group-hover:translate-x-0.5 rtl:rotate-180 rtl:group-hover:-translate-x-0.5"
+        strokeWidth={2}
+      />
+    </>
+  );
+  return href.startsWith('#') ? (
+    <a href={href} onClick={onClick} className={chevronLinkClass}>
+      {content}
+    </a>
+  ) : (
+    <Link href={href} className={chevronLinkClass}>
+      {content}
+    </Link>
+  );
+}
 
 export default function Home() {
   const router = useRouter();
   const { account } = useAuth();
   const { t } = useTranslation();
-
-  // Lenis smooth scroll (skips itself under prefers-reduced-motion).
-  useSmoothScroll();
 
   const [isAuthDialogOpen, setIsAuthDialogOpen] = useState(false);
   const [openFaqItems, setOpenFaqItems] = useState<Record<string, boolean>>({
@@ -462,23 +499,12 @@ export default function Home() {
     }
   }, [account, router]);
 
-  // The canonical origin now lives in src/lib/structured-data.ts (SITE_URL) and
-  // is applied by <Seo>, so this page no longer needs its own copy of it.
-  const currentNetworkName = NETWORK_CONFIG[network].networkName;
-
-  const proofItems = [
-    {
-      label: t('landing.proof.liveCircles'),
-      value: circleCount !== null ? `${circleCount}+` : t('landing.proof.syncing'),
-    },
-    {
-      label: t('landing.proof.supportedAssets'),
-      value: '6+',
-    },
-    {
-      label: t('landing.proof.custodyLabel'),
-      value: t('landing.proof.custodyValue'),
-    },
+  const proofItems: Proof[] = [
+    circleCount !== null
+      ? { label: t('landing.proof.liveCircles'), count: circleCount, suffix: '+' }
+      : { label: t('landing.proof.liveCircles'), text: t('landing.proof.syncing') },
+    { label: t('landing.proof.supportedAssets'), count: 6, suffix: '+' },
+    { label: t('landing.proof.custodyLabel'), text: t('landing.proof.custodyValue') },
   ];
 
   const previewStats = [
@@ -528,20 +554,31 @@ export default function Home() {
     },
   ];
 
-  const sectionEyebrowClass =
-    'text-[11px] font-semibold uppercase tracking-[0.32em] text-[#E8B04B]';
-  const sectionTitleClass = `${wordmarkFont.className} mt-4 text-[clamp(2rem,3.8vw,2.9rem)] font-normal leading-[1.08] tracking-[-0.01em] text-[#f5f1e8]`;
-  const sectionBodyClass =
-    'mt-4 max-w-2xl text-base leading-7 text-[#a8a294] sm:text-lg';
-  const glassCardClass =
-    'rounded-3xl border border-[#2a2620] bg-[#13121a]/85 shadow-[0_20px_60px_-30px_rgba(0,0,0,0.85)] backdrop-blur-sm';
-  const mutedCardClass = 'rounded-2xl border border-[#221f29] bg-[#13121a]/60';
-  const goldButtonClass =
-    'inline-flex items-center justify-center gap-2 rounded-full bg-gradient-to-r from-[#f6d99a] via-[#E8B04B] to-[#C8902F] px-6 py-3 text-sm font-semibold text-[#1a1304] shadow-[0_14px_44px_-14px_rgba(232,176,75,0.6)] transition-transform duration-200 hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#f6d99a] focus-visible:ring-offset-2 focus-visible:ring-offset-[#0a0a0c]';
-  const ghostButtonClass =
-    'inline-flex items-center justify-center gap-2 rounded-full border border-[#C8902F]/55 bg-white/[0.03] px-6 py-3 text-sm font-semibold text-[#f6d99a] backdrop-blur transition-colors duration-200 hover:border-[#E8B04B] hover:bg-[#E8B04B]/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#f6d99a] focus-visible:ring-offset-2 focus-visible:ring-offset-[#0a0a0c]';
-  const chipClass =
-    'inline-flex items-center gap-2 rounded-full border border-[#2a2620] bg-[#13121a]/70 px-4 py-2 text-sm font-medium text-[#cfc8ba]';
+  const openSignIn = (intent: 'login' | 'start') => {
+    if (intent === 'start') {
+      // "Start a circle" means start a circle: the OAuth callback honours
+      // this and skips the dashboard detour.
+      rememberPostLoginDestination('/create-circle');
+    } else {
+      // A plain login lands on the dashboard: drop any "start a circle"
+      // intent left by an earlier click.
+      clearPostLoginDestination();
+    }
+    setIsAuthDialogOpen(true);
+  };
+
+  const scrollToHow = (e: React.MouseEvent<HTMLAnchorElement>) => {
+    const target = document.getElementById('how');
+    if (!target) return;
+    e.preventDefault();
+    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    target.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'start' });
+    history.replaceState(null, '', '#how');
+  };
+
+  const sheetClass = `apple ${sansFont.variable} sheet fixed left-1/2 top-1/2 z-50 w-[calc(100%-2rem)] max-w-[30rem] -translate-x-1/2 -translate-y-1/2 rounded-[24px] bg-[#1c1c1e] p-6 text-mist shadow-[0_40px_120px_-30px_rgba(0,0,0,0.9)] ring-1 ring-white/[0.08] focus:outline-none sm:p-8`;
+  const sheetScrimClass = 'sheet-scrim fixed inset-0 z-50 bg-black/60 backdrop-blur-md';
+  const sheetCloseClass = `absolute right-4 top-4 flex h-9 w-9 items-center justify-center rounded-full bg-white/[0.08] text-mist-2 transition-colors duration-200 hover:bg-white/[0.14] hover:text-mist rtl:left-4 rtl:right-auto ${focusRing}`;
 
   return (
     <>
@@ -565,913 +602,646 @@ export default function Home() {
         path="/"
         ogTitle="Njangi On-Chain — savings circles for the global diaspora"
         ogDescription="The rotating savings circle your community already trusts — njangi, esusu, tontine — now self-custodied, scheduled, and verifiable on-chain. No treasurer. No seed phrase."
-        themeColor="#0a0a0c"
+        themeColor="#000000"
         jsonLd={[website(), webApplication()]}
       />
 
       <Head>
-        {/* Not SEO: tell the browser this page is dark and paint html/body dark,
-            so iOS Safari tints the status bar / top safe-area dark instead of
-            sampling the (globally white) body background. Scoped to the landing
-            via next/head, so light app pages keep their default. */}
+        {/* Not SEO: tell the browser this page is dark and paint html/body
+            black, so iOS Safari tints the status bar / top safe-area to match
+            instead of sampling the (globally white) body background. Scoped
+            to the landing via next/head, so light app pages keep theirs. */}
         <meta name="color-scheme" content="dark" />
-        <style>{`html,body{background-color:#0a0a0c!important}`}</style>
+        <style>{`html,body{background-color:#000!important}`}</style>
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
         <meta name="apple-mobile-web-app-title" content="Njangi On-Chain" />
       </Head>
 
-      <div
-        className={`${bodyFont.className} relative min-h-screen overflow-x-clip bg-[#0a0a0c] text-[#f3efe6]`}
-      >
-        {/* Skip link — first focusable element for keyboard users */}
-        <a
-          href="#main"
-          className="sr-only rounded-full focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-[60] focus:bg-[#E8B04B] focus:px-4 focus:py-2 focus:text-sm focus:font-semibold focus:text-[#1a1304]"
-        >
-          Skip to content
-        </a>
-
-        {/* Ambient depth field (desktop only) + base glow, behind all content */}
+      {/* reducedMotion="user": every framer animation on the page drops its
+          movement for people who asked for less (opacity fades remain). */}
+      <MotionConfig reducedMotion="user">
         <div
-          aria-hidden
-          className="pointer-events-none fixed inset-0"
-          style={{
-            zIndex: 0,
-            background:
-              'radial-gradient(1100px circle at 82% -8%, rgba(232,176,75,0.10), transparent 55%), radial-gradient(900px circle at 0% 100%, rgba(77,162,255,0.06), transparent 55%)',
-          }}
-        />
-        <AmbientField />
-
-        <Dialog.Root
-          open={isNetworkSwitchModalOpen}
-          onOpenChange={setIsNetworkSwitchModalOpen}
+          className={`${sansFont.variable} apple relative min-h-screen overflow-x-clip bg-black text-mist`}
         >
-          <Dialog.Portal>
-            <Dialog.Overlay className="fixed inset-0 z-50 bg-[#05050a]/70 backdrop-blur-sm" />
-            <Dialog.Content
-              className={`fixed left-1/2 top-1/2 z-50 w-[calc(100%-2rem)] max-w-xl -translate-x-1/2 -translate-y-1/2 rounded-3xl border border-[#2a2620] bg-[#13121a] p-6 shadow-[0_40px_120px_-40px_rgba(0,0,0,0.9)] sm:p-7 ${bodyFont.className}`}
-            >
-              <div className="pr-10">
-                <Dialog.Title
-                  className={`${wordmarkFont.className} text-2xl tracking-[-0.02em] text-[#f5f1e8]`}
-                >
-                  {t('landing.networkSwitchTitle', {
-                    network: pendingNetwork
-                      ? NETWORK_CONFIG[pendingNetwork].networkName
-                      : '',
-                  })}
-                </Dialog.Title>
-                <Dialog.Description className="mt-3 text-sm leading-6 text-[#a8a294]">
-                  {t('landing.networkSwitchBody')}
-                </Dialog.Description>
-              </div>
+          {/* Skip link — first focusable element for keyboard users */}
+          <a
+            href="#main"
+            className="sr-only rounded-full focus:not-sr-only focus:fixed focus:left-4 focus:top-3 focus:z-[60] focus:bg-gold focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:text-[#1d1d1f]"
+          >
+            Skip to content
+          </a>
 
-              <div className={`${mutedCardClass} mt-6 p-4`}>
-                <ul className="space-y-2 text-sm leading-6 text-[#cfc8ba]">
-                  <li>Generate a different wallet address for the same account.</li>
-                  <li>Require a fresh sign-in before continuing.</li>
-                  <li>Show circles and balances from the selected network only.</li>
-                </ul>
-                <p className="mt-4 text-sm font-medium text-[#E8B04B]">
-                  The wallet you use on{' '}
-                  {pendingNetwork
-                    ? NETWORK_CONFIG[pendingNetwork].networkName.toLowerCase()
-                    : 'the selected network'}{' '}
-                  is separate from the other environment.
-                </p>
-              </div>
-
-              <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
-                <button
-                  type="button"
-                  onClick={cancelNetworkSwitch}
-                  className="rounded-full border border-[#2a2620] bg-white/[0.03] px-5 py-3 text-sm font-semibold text-[#f3efe6] transition-colors duration-200 hover:bg-white/[0.07] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#f6d99a] focus-visible:ring-offset-2 focus-visible:ring-offset-[#13121a]"
-                >
-                  {t('landing.networkSwitchStay')}
-                </button>
-                <button
-                  type="button"
-                  onClick={confirmNetworkSwitch}
-                  className={goldButtonClass}
-                >
-                  {t('landing.networkSwitchConfirm', {
-                    network: pendingNetwork
-                      ? NETWORK_CONFIG[pendingNetwork].networkName
-                      : '',
-                  })}
-                </button>
-              </div>
-
-              <Dialog.Close asChild>
-                <button
-                  type="button"
-                  onClick={cancelNetworkSwitch}
-                  className="absolute right-5 top-5 rounded-full border border-[#2a2620] bg-white/[0.03] p-3 text-[#a8a294] transition-colors duration-200 hover:text-[#f5f1e8] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#f6d99a]"
-                >
-                  <X className="h-4 w-4" />
-                  <span className="sr-only">Close</span>
-                </button>
-              </Dialog.Close>
-            </Dialog.Content>
-          </Dialog.Portal>
-        </Dialog.Root>
-
-        <Dialog.Root open={isAuthDialogOpen} onOpenChange={setIsAuthDialogOpen}>
-          <Dialog.Portal>
-            <Dialog.Overlay className="fixed inset-0 z-50 bg-[#05050a]/70 backdrop-blur-sm" />
-            <Dialog.Content
-              className={`fixed left-1/2 top-1/2 z-50 w-[calc(100%-2rem)] max-w-xl -translate-x-1/2 -translate-y-1/2 rounded-3xl border border-[#2a2620] bg-[#13121a] p-5 shadow-[0_40px_120px_-40px_rgba(0,0,0,0.9)] sm:p-7 ${bodyFont.className}`}
-            >
-              <div className="pr-10">
-                <Dialog.Title
-                  className={`${wordmarkFont.className} text-2xl tracking-[-0.02em] text-[#f5f1e8]`}
-                >
-                  {t('landing.signInTitle')}
-                </Dialog.Title>
-                <Dialog.Description className="mt-3 text-sm leading-6 text-[#a8a294]">
-                  {t('landing.signInBody')}
-                </Dialog.Description>
-              </div>
-
-              <div className={`${mutedCardClass} mt-6 p-4 sm:p-5`}>
-                <LoginButton variant="landing" />
-              </div>
-
-              <div className="mt-5 flex flex-wrap items-center gap-4 text-sm text-[#a8a294]">
-                <span className="inline-flex items-center gap-2">
-                  <BadgeCheck className="h-4 w-4 text-[#E8B04B]" />
-                  {t('landing.noSeedPhrase')}
-                </span>
-                <span className="inline-flex items-center gap-2">
-                  <BadgeCheck className="h-4 w-4 text-[#E8B04B]" />
-                  {t('landing.builtForCircles')}
-                </span>
-              </div>
-
-              <Dialog.Close asChild>
-                <button
-                  type="button"
-                  className="absolute right-5 top-5 rounded-full border border-[#2a2620] bg-white/[0.03] p-3 text-[#a8a294] transition-colors duration-200 hover:text-[#f5f1e8] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#f6d99a]"
-                >
-                  <X className="h-4 w-4" />
-                  <span className="sr-only">Close sign-in options</span>
-                </button>
-              </Dialog.Close>
-            </Dialog.Content>
-          </Dialog.Portal>
-        </Dialog.Root>
-
-        <div className="relative z-10">
-          <header className="sticky top-0 z-30 border-b border-[#2a2620]/80 bg-[#0a0a0c]/70 backdrop-blur-md">
-            <div className="mx-auto flex max-w-6xl flex-col gap-4 px-5 py-4 sm:px-8 lg:flex-row lg:items-center lg:justify-between">
-              <Link href="/" className="flex min-w-0 items-center gap-3">
-                <span className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-full border border-white/10 bg-white/[0.04]">
-                  <Image
-                    src="/njangi-on-chain-logo.png"
-                    alt="Njangi On-Chain"
-                    width={80}
-                    height={80}
-                    className="h-full w-full object-contain"
-                    priority
-                    unoptimized
-                  />
-                </span>
-                <span className="min-w-0">
-                  <span
-                    className={`${wordmarkFont.className} block truncate text-[1.9rem] leading-none tracking-[-0.04em] text-[#f5f1e8]`}
-                  >
-                    Njangi
-                  </span>
-                  <span className="mt-1 block truncate pl-0.5 text-[0.62rem] font-semibold uppercase tracking-[0.42em] text-[#E8B04B]">
-                    On-chain
-                  </span>
-                </span>
-              </Link>
-
-              <div className="flex flex-col gap-3 sm:items-end">
-                <nav className="flex flex-wrap items-center gap-5 text-sm font-medium">
-                  <Link href="/learn" className={socialLinkClass}>
-                    {t('nav.learn')}
-                  </Link>
-                  <Link href="/faq" className={socialLinkClass}>
-                    {t('nav.faq')}
-                  </Link>
-                  <Link href="#launch" className={socialLinkClass}>
-                    {t('nav.mainnetUpdates')}
-                  </Link>
-                  <LocaleSwitcher compact variant="dark" />
-                </nav>
-
-                <div className="flex flex-wrap items-center gap-3">
-                  <div className="inline-flex items-center rounded-full border border-[#2a2620] bg-[#13121a]/70 p-1">
-                    <button
-                      type="button"
-                      aria-pressed={network === 'testnet'}
-                      onClick={() => switchNetwork('testnet')}
-                      className={`inline-flex items-center gap-1.5 rounded-full px-4 py-2 text-sm font-semibold transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#f6d99a] ${
-                        network === 'testnet'
-                          ? 'bg-[#E8B04B] text-[#1a1304]'
-                          : 'text-[#a8a294] hover:text-[#f5f1e8]'
-                      }`}
-                    >
-                      {network === 'testnet' && <BadgeCheck className="h-3.5 w-3.5" />}
-                      {t('nav.testnet')}
-                    </button>
-                    <button
-                      type="button"
-                      aria-pressed={network === 'mainnet'}
-                      onClick={() => switchNetwork('mainnet')}
-                      className={`inline-flex items-center gap-1.5 rounded-full px-4 py-2 text-sm font-semibold transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#f6d99a] ${
-                        network === 'mainnet'
-                          ? 'bg-[#E8B04B] text-[#1a1304]'
-                          : 'text-[#a8a294] hover:text-[#f5f1e8]'
-                      }`}
-                    >
-                      {network === 'mainnet' && <BadgeCheck className="h-3.5 w-3.5" />}
-                      {t('nav.mainnet')}
-                    </button>
-                  </div>
-
-                  <div className="hidden items-center gap-2 rounded-full border border-[#2a2620] bg-[#13121a]/60 px-3 py-2 text-sm text-[#a8a294] sm:inline-flex">
-                    <CircleDot className="h-4 w-4 text-[#4DA2FF]" />
-                    {t('nav.viewing', { network: currentNetworkName })}
-                  </div>
-
-                  {account ? (
-                    <Link href="/dashboard" className={goldButtonClass}>
-                      {t('nav.openDashboard')}
-                      <ArrowRight className="h-4 w-4" />
-                    </Link>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        // A plain login lands on the dashboard: drop any
-                        // "start a circle" intent left by an earlier click.
-                        clearPostLoginDestination();
-                        setIsAuthDialogOpen(true);
-                      }}
-                      className={goldButtonClass}
-                    >
-                      {t('nav.login')}
-                      <ArrowRight className="h-4 w-4" />
-                    </button>
-                  )}
+          <Dialog.Root open={isNetworkSwitchModalOpen} onOpenChange={setIsNetworkSwitchModalOpen}>
+            <Dialog.Portal>
+              <Dialog.Overlay className={sheetScrimClass} />
+              <Dialog.Content className={sheetClass}>
+                <div className="pe-10">
+                  <Dialog.Title className="text-[24px] font-semibold leading-tight tracking-[0.009em] text-mist">
+                    {t('landing.networkSwitchTitle', {
+                      network: pendingNetwork ? NETWORK_CONFIG[pendingNetwork].networkName : '',
+                    })}
+                  </Dialog.Title>
+                  <Dialog.Description className="type-body mt-3 text-mist-2">
+                    {t('landing.networkSwitchBody')}
+                  </Dialog.Description>
                 </div>
-              </div>
-            </div>
-          </header>
+
+                <div className="mt-6 rounded-2xl bg-white/[0.05] p-5">
+                  <ul className="type-caption space-y-2.5 text-mist-2">
+                    <li className="flex gap-2.5">
+                      <Check aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-gold" />
+                      Generate a different wallet address for the same account.
+                    </li>
+                    <li className="flex gap-2.5">
+                      <Check aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-gold" />
+                      Require a fresh sign-in before continuing.
+                    </li>
+                    <li className="flex gap-2.5">
+                      <Check aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-gold" />
+                      Show circles and balances from the selected network only.
+                    </li>
+                  </ul>
+                  <p className="type-caption mt-4 font-medium text-gold">
+                    The wallet you use on{' '}
+                    {pendingNetwork
+                      ? NETWORK_CONFIG[pendingNetwork].networkName.toLowerCase()
+                      : 'the selected network'}{' '}
+                    is separate from the other environment.
+                  </p>
+                </div>
+
+                <div className="mt-7 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+                  <button type="button" onClick={cancelNetworkSwitch} className={quietButtonClass}>
+                    {t('landing.networkSwitchStay')}
+                  </button>
+                  <button type="button" onClick={confirmNetworkSwitch} className={goldButtonClass}>
+                    {t('landing.networkSwitchConfirm', {
+                      network: pendingNetwork ? NETWORK_CONFIG[pendingNetwork].networkName : '',
+                    })}
+                  </button>
+                </div>
+
+                <Dialog.Close asChild>
+                  <button type="button" onClick={cancelNetworkSwitch} className={sheetCloseClass}>
+                    <X className="h-4 w-4" />
+                    <span className="sr-only">Close</span>
+                  </button>
+                </Dialog.Close>
+              </Dialog.Content>
+            </Dialog.Portal>
+          </Dialog.Root>
+
+          <Dialog.Root open={isAuthDialogOpen} onOpenChange={setIsAuthDialogOpen}>
+            <Dialog.Portal>
+              <Dialog.Overlay className={sheetScrimClass} />
+              <Dialog.Content className={sheetClass}>
+                <div className="pe-10">
+                  <Dialog.Title className="text-[24px] font-semibold leading-tight tracking-[0.009em] text-mist">
+                    {t('landing.signInTitle')}
+                  </Dialog.Title>
+                  <Dialog.Description className="type-body mt-3 text-mist-2">
+                    {t('landing.signInBody')}
+                  </Dialog.Description>
+                </div>
+
+                <div className="mt-6">
+                  {/* Stacked, full-width — how Apple lays out sign-in choices. */}
+                  <LoginButton variant="landing" className="sm:!grid-cols-1" />
+                </div>
+
+                <div className="type-caption mt-6 flex flex-wrap items-center gap-x-5 gap-y-2 text-mist-3">
+                  <span className="inline-flex items-center gap-1.5">
+                    <Check aria-hidden className="h-4 w-4 text-gold" />
+                    {t('landing.noSeedPhrase')}
+                  </span>
+                  <span className="inline-flex items-center gap-1.5">
+                    <Check aria-hidden className="h-4 w-4 text-gold" />
+                    {t('landing.builtForCircles')}
+                  </span>
+                </div>
+
+                <Dialog.Close asChild>
+                  <button type="button" className={sheetCloseClass}>
+                    <X className="h-4 w-4" />
+                    <span className="sr-only">Close sign-in options</span>
+                  </button>
+                </Dialog.Close>
+              </Dialog.Content>
+            </Dialog.Portal>
+          </Dialog.Root>
+
+          <LandingHeader
+            signedIn={!!account}
+            network={network}
+            onSwitchNetwork={switchNetwork}
+            onLogin={() => openSignIn('login')}
+            t={t}
+            serifClassName={serifFont.className}
+            fontVariables={sansFont.variable}
+          />
 
           <main>
             {/* ===================== HERO ===================== */}
-            <section
-              id="main"
-              className="relative flex min-h-[100svh] items-center overflow-hidden [@media(min-height:1000px)]:items-start"
-            >
-              {/* genuine 3D scene + CSS fallback behind it */}
-              <div className="absolute inset-0">
+            <HeroStage id="main">
+              <div className="mx-auto flex h-full max-w-[1100px] flex-col items-center px-5 pt-[calc(52px+8svh)] text-center sm:px-8 md:pt-[calc(52px+10svh)]">
+                <p className="rise" style={{ '--d': '60ms' } as CSSProperties}>
+                  <span className="sr-only">{t('landing.heritageAlso')}</span>
+                  <span
+                    className={`${serifFont.className} block text-[clamp(2.25rem,1.6rem+2vw,3.25rem)] leading-[1.2] tracking-[-0.01em]`}
+                  >
+                    <KineticNames
+                      names={CULTURAL_NAMES}
+                      className="text-gold-gradient text-center"
+                      interval={1500}
+                      settleOn="Njangi"
+                    />
+                  </span>
+                </p>
+                <p
+                  className="rise type-eyebrow mt-2 text-balance text-mist-3"
+                  style={{ '--d': '140ms' } as CSSProperties}
+                >
+                  {t('landing.eyebrow')}
+                </p>
+                <h1
+                  className="rise mt-6 max-w-[21ch] text-balance text-mist type-hero"
+                  style={{ '--d': '220ms', fontSize: 'clamp(2.25rem, 1.1rem + 4.2vw, 4.5rem)' } as CSSProperties}
+                >
+                  {t('landing.heroTitle')}
+                </h1>
                 <div
-                  aria-hidden
-                  className="absolute inset-0"
-                  style={{
-                    background:
-                      'radial-gradient(820px circle at 72% 44%, rgba(232,176,75,0.18), transparent 62%), #0a0a0c',
-                  }}
-                />
-                <DiasporaMeridian />
-              </div>
-
-              {/* legibility scrim — darkened on BOTH sides so copy reads in LTR + RTL */}
-              <div
-                aria-hidden
-                className="pointer-events-none absolute inset-0"
-                style={{
-                  background:
-                    'linear-gradient(90deg, rgba(10,10,12,0.92) 0%, rgba(10,10,12,0.55) 34%, rgba(10,10,12,0.22) 50%, rgba(10,10,12,0.5) 66%, rgba(10,10,12,0.9) 100%)',
-                }}
-              />
-              <div
-                aria-hidden
-                className="pointer-events-none absolute inset-0"
-                style={{
-                  background:
-                    'linear-gradient(180deg, rgba(10,10,12,0.5) 0%, transparent 22%, transparent 62%, rgba(10,10,12,0.95) 100%)',
-                }}
-              />
-
-              <div className="relative z-20 mx-auto w-full max-w-6xl px-5 py-24 sm:px-8">
-                <div className="max-w-2xl">
-                  <Reveal>
-                    <RevealItem>
-                      <p className={sectionEyebrowClass}>{t('landing.eyebrow')}</p>
-                    </RevealItem>
-                    <RevealItem>
-                      <p
-                        className={`${wordmarkFont.className} mt-5 flex flex-wrap items-baseline gap-x-3 text-2xl text-[#EDE4D3] sm:text-[1.75rem]`}
-                      >
-                        <span className="sr-only">{t('landing.heritageAlso')}</span>
-                        <KineticNames
-                          names={CULTURAL_NAMES}
-                          className="text-gold-gradient"
-                          interval={1900}
-                          settleOn="Njangi"
-                        />
-                        <span className="text-base font-normal tracking-[0.04em] text-[#8b8578] sm:text-lg">
-                          one tradition, many names
-                        </span>
-                      </p>
-                    </RevealItem>
-                    <RevealItem>
-                      <h1
-                        className={`${wordmarkFont.className} mt-4 text-[clamp(2.5rem,6vw,4.6rem)] font-normal leading-[1.02] tracking-[-0.01em] text-[#f8f4ec]`}
-                      >
-                        {t('landing.heroTitle')}
-                      </h1>
-                    </RevealItem>
-                    <RevealItem>
-                      <p className="mt-6 max-w-xl text-lg leading-8 text-[#cfc8ba] sm:text-xl">
-                        {t('landing.heroSubtitle')}
-                      </p>
-                    </RevealItem>
-                    <RevealItem>
-                      <div className="mt-9 flex flex-wrap items-center gap-3">
-                        {account ? (
-                          <Link href="/dashboard" className={goldButtonClass}>
-                            {t('nav.openDashboard')}
-                            <ArrowRight className="h-4 w-4" />
-                          </Link>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              // "Start a circle" means start a circle: the
-                              // OAuth callback honours this and skips the
-                              // dashboard detour.
-                              rememberPostLoginDestination('/create-circle');
-                              setIsAuthDialogOpen(true);
-                            }}
-                            className={goldButtonClass}
-                          >
-                            {t('landing.heroPrimaryCta')}
-                            <ArrowRight className="h-4 w-4" />
-                          </button>
-                        )}
-                        <Link href="#how" className={ghostButtonClass}>
-                          {t('landing.exploreHowItWorks')}
-                        </Link>
-                      </div>
-                      <p className="mt-3 text-sm leading-6 text-[#8b8578]">
-                        {t('landing.heroCtaReassure')}
-                      </p>
-                    </RevealItem>
-                    <RevealItem>
-                      <div className="mt-7 flex flex-wrap gap-3">
-                        <span className={chipClass}>
-                          <BadgeCheck className="h-4 w-4 text-[#E8B04B]" />
-                          {t('landing.noSeedPhrase')}
-                        </span>
-                        <span className={chipClass}>
-                          <BadgeCheck className="h-4 w-4 text-[#E8B04B]" />
-                          {t('landing.builtForCircles')}
-                        </span>
-                      </div>
-                    </RevealItem>
-                    <RevealItem>
-                      <p className="mt-6 max-w-md text-sm leading-6 text-[#f6d99a]">
-                        {t('landing.testnetNote')}
-                      </p>
-                    </RevealItem>
-                    <RevealItem>
-                      <dl className="mt-10 grid max-w-lg grid-cols-3 gap-3">
-                        {proofItems.map((item) => (
-                          <div key={item.label} className={`${mutedCardClass} p-4`}>
-                            <dt className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[#8b8578]">
-                              {item.label}
-                            </dt>
-                            <dd className="mt-2 text-xl font-semibold tracking-[-0.02em] text-[#f5f1e8]">
-                              {item.value}
-                            </dd>
-                          </div>
-                        ))}
-                      </dl>
-                    </RevealItem>
-                  </Reveal>
+                  className="rise mt-10 flex flex-col items-center gap-5 sm:flex-row sm:gap-8"
+                  style={{ '--d': '380ms' } as CSSProperties}
+                >
+                  {account ? (
+                    <Link href="/dashboard" className={goldButtonClass}>
+                      {t('nav.openDashboard')}
+                      <ArrowRight aria-hidden className="h-4 w-4 rtl:rotate-180" />
+                    </Link>
+                  ) : (
+                    <button type="button" onClick={() => openSignIn('start')} className={goldButtonClass}>
+                      {t('landing.heroPrimaryCta')}
+                    </button>
+                  )}
+                  <ChevronLink href="#how" onClick={scrollToHow}>
+                    {t('landing.exploreHowItWorks')}
+                  </ChevronLink>
                 </div>
+                <p
+                  className="rise type-caption mt-7 max-w-[34rem] text-balance text-mist-3"
+                  style={{ '--d': '480ms' } as CSSProperties}
+                >
+                  {t('landing.heroCtaReassure')}
+                </p>
+                <p
+                  className="rise type-caption mt-2 inline-flex max-w-[34rem] items-start gap-2 text-start text-mist-2"
+                  style={{ '--d': '540ms' } as CSSProperties}
+                >
+                  <span aria-hidden className="relative mt-[0.42em] flex h-2 w-2 shrink-0">
+                    <span className="absolute inset-0 rounded-full bg-gold/70 [animation:ping_1.8s_cubic-bezier(0,0,0.2,1)_4]" />
+                    <span className="relative h-2 w-2 rounded-full bg-gold" />
+                  </span>
+                  {t('landing.testnetNote')}
+                </p>
               </div>
+            </HeroStage>
 
-              <div
-                aria-hidden
-                className="pointer-events-none absolute bottom-6 left-1/2 z-20 -translate-x-1/2 text-[#8b8578]"
-              >
-                <ChevronDown className="h-6 w-6 animate-bounce" />
+            {/* ============ STATEMENT (reads at scroll pace) ============ */}
+            <section className="px-5 pb-24 pt-28 sm:px-8 md:pb-36 md:pt-40">
+              <ScrollLitText
+                text={t('landing.heroSubtitle')}
+                className="mx-auto max-w-[980px] text-balance text-[clamp(1.75rem,1.15rem+2.3vw,3rem)] font-semibold leading-[1.17] tracking-[-0.004em] text-mist"
+              />
+            </section>
+
+            {/* ================= PROOF ================= */}
+            <section aria-label="Njangi On-Chain at a glance" className="px-5 pb-28 sm:px-8 md:pb-44">
+              <ProofNumbers items={proofItems} />
+            </section>
+
+            {/* ================= HOW IT WORKS ================= */}
+            <section id="how" className="relative scroll-mt-10 pt-4">
+              <Reveal className="mx-auto max-w-[980px] px-5 text-center sm:px-8">
+                <RevealItem>
+                  <p className={eyebrowClass}>{t('landing.workflow.eyebrow')}</p>
+                </RevealItem>
+                <RevealItem>
+                  <h2 className={sectionTitleClass}>{t('landing.workflow.title')}</h2>
+                </RevealItem>
+                <RevealItem>
+                  <p className={sectionBodyClass}>{t('landing.workflow.body')}</p>
+                </RevealItem>
+              </Reveal>
+              <div className="mt-6 md:mt-10">
+                <RotationStory
+                  steps={WORKFLOW_STEPS.map((step) => ({
+                    number: step.number,
+                    title: t(step.titleKey),
+                    body: t(step.descriptionKey),
+                  }))}
+                />
               </div>
             </section>
 
             {/* ============== INSIDE A LIVE CIRCLE ============== */}
-            <section className="relative px-5 py-20 sm:px-8 md:py-28">
-              <div className="mx-auto max-w-6xl">
-                <Reveal className="grid gap-10 lg:grid-cols-[0.9fr_1.1fr] lg:items-center">
-                  <RevealItem className="min-w-0">
-                    <p className={sectionEyebrowClass}>Circle operations</p>
-                    <h2 className={sectionTitleClass}>
-                      Less noise. More clarity for members.
-                    </h2>
-                    <p className={sectionBodyClass}>
-                      Every contribution, turn, and approval lives in one shared
-                      view — so the circle runs on the same facts instead of one
-                      organizer&apos;s memory.
-                    </p>
-                    <p className="mt-8 text-[11px] font-semibold uppercase tracking-[0.18em] text-[#8b8578]">
-                      Illustrative example
-                    </p>
-                    <div className="mt-3 grid grid-cols-2 gap-3">
-                      {previewStats.map((stat) => (
-                        <div key={stat.label} className={`${mutedCardClass} p-4`}>
-                          <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[#8b8578]">
-                            {stat.label}
-                          </p>
-                          <p className="mt-2 text-lg font-semibold tracking-[-0.02em] text-[#f5f1e8]">
-                            {stat.value}
-                          </p>
-                          <p className="mt-2 text-sm leading-6 text-[#a8a294]">
-                            {stat.caption}
-                          </p>
-                        </div>
-                      ))}
-                    </div>
-                  </RevealItem>
-
-                  <RevealItem className="min-w-0">
-                    <TiltCard>
-                      <div className={`${glassCardClass} bg-weave relative overflow-hidden p-6 md:p-8`}>
-                        <div className="flex items-center justify-between gap-3">
-                          <p className="text-sm font-semibold text-[#f5f1e8]">
-                            What a cycle looks like
-                          </p>
-                          <span className="inline-flex items-center gap-2 rounded-full border border-[#2a2620] px-3 py-1 text-xs font-medium uppercase tracking-[0.18em] text-[#8b8578]">
-                            Example cycle
-                          </span>
-                        </div>
-                        <div className="mt-5 space-y-3">
-                          {cycleSnapshot.map((row) => (
-                            <div
-                              key={row.title}
-                              className="flex items-start gap-3 rounded-2xl border border-[#221f29] bg-[#0d0c12]/70 px-4 py-3"
-                            >
-                              <row.icon className="mt-0.5 h-4 w-4 shrink-0 text-[#E8B04B]" />
-                              <div>
-                                <p className="text-sm font-semibold text-[#f5f1e8]">
-                                  {row.title}
-                                </p>
-                                <p className="mt-1 text-sm leading-6 text-[#a8a294]">
-                                  {row.body}
-                                </p>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    </TiltCard>
-                  </RevealItem>
-                </Reveal>
-              </div>
-            </section>
-
-            {/* ================= HOW IT WORKS ================= */}
-            <section id="how" className="relative px-5 py-20 sm:px-8 md:py-28">
-              <div className="mx-auto max-w-6xl">
-                <Reveal className="max-w-2xl">
-                  <RevealItem>
-                    <p className={sectionEyebrowClass}>{t('landing.workflow.eyebrow')}</p>
-                  </RevealItem>
-                  <RevealItem>
-                    <h2 className={sectionTitleClass}>{t('landing.workflow.title')}</h2>
-                  </RevealItem>
-                  <RevealItem>
-                    <p className={sectionBodyClass}>{t('landing.workflow.body')}</p>
-                  </RevealItem>
-                </Reveal>
-
-                <Reveal className="mt-12 grid gap-4 md:grid-cols-3">
-                  {WORKFLOW_STEPS.map((step) => (
-                    <RevealItem key={step.number} className="h-full">
-                      <TiltCard className="h-full">
-                        <div className={`${glassCardClass} bg-weave relative h-full overflow-hidden p-6 md:p-7`}>
-                          <p className="text-sm font-semibold tracking-[0.24em] text-[#E8B04B]">
-                            {step.number}
-                          </p>
-                          <h3 className="mt-5 text-lg font-semibold tracking-[-0.02em] text-[#f5f1e8]">
-                            {t(step.titleKey)}
-                          </h3>
-                          <p className="mt-3 text-sm leading-6 text-[#a8a294]">
-                            {t(step.descriptionKey)}
-                          </p>
-                        </div>
-                      </TiltCard>
-                    </RevealItem>
-                  ))}
-                </Reveal>
+            <section className="px-5 py-28 sm:px-8 md:py-40">
+              <Reveal className="mx-auto max-w-[980px] text-center">
+                <RevealItem>
+                  <p className={eyebrowClass}>Circle operations</p>
+                </RevealItem>
+                <RevealItem>
+                  <h2 className={sectionTitleClass}>Less noise. More clarity for members.</h2>
+                </RevealItem>
+                <RevealItem>
+                  <p className={sectionBodyClass}>
+                    Every contribution, turn, and approval lives in one shared view — so the circle
+                    runs on the same facts instead of one organizer&apos;s memory.
+                  </p>
+                </RevealItem>
+              </Reveal>
+              <div className="mt-14 md:mt-20">
+                <CircleMock
+                  heading="What a cycle looks like"
+                  badge="Example cycle"
+                  caption="Illustrative example"
+                  stats={previewStats}
+                  rows={cycleSnapshot}
+                />
               </div>
             </section>
 
             {/* =================== FEATURES =================== */}
-            <section className="relative px-5 py-20 sm:px-8 md:py-28">
-              <div className="mx-auto max-w-6xl">
-                <Reveal className="max-w-2xl">
-                  <RevealItem>
-                    <p className={sectionEyebrowClass}>{t('landing.features.eyebrow')}</p>
-                  </RevealItem>
-                  <RevealItem>
-                    <h2 className={sectionTitleClass}>{t('landing.features.title')}</h2>
-                  </RevealItem>
-                  <RevealItem>
-                    <p className={sectionBodyClass}>{t('landing.features.body')}</p>
-                  </RevealItem>
-                </Reveal>
-
-                <Reveal className="mt-12 grid gap-4 sm:grid-cols-2">
-                  {FEATURE_CARDS.map(({ icon: Icon, titleKey, descriptionKey }) => (
-                    <RevealItem key={titleKey} className="h-full">
-                      <TiltCard className="h-full">
-                        <div className={`${glassCardClass} bg-weave relative h-full overflow-hidden p-6 md:p-7`}>
-                          <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-[#2a2620] bg-[#E8B04B]/10 text-[#E8B04B]">
-                            <Icon className="h-5 w-5" />
-                          </div>
-                          <h3 className="mt-6 text-xl font-semibold tracking-[-0.02em] text-[#f5f1e8]">
-                            {t(titleKey)}
-                          </h3>
-                          <p className="mt-3 text-sm leading-6 text-[#a8a294] sm:text-base">
-                            {t(descriptionKey)}
-                          </p>
-                        </div>
-                      </TiltCard>
-                    </RevealItem>
-                  ))}
-                </Reveal>
+            <section className="px-5 py-28 sm:px-8 md:py-40">
+              <Reveal className="mx-auto max-w-[980px] text-center">
+                <RevealItem>
+                  <p className={eyebrowClass}>{t('landing.features.eyebrow')}</p>
+                </RevealItem>
+                <RevealItem>
+                  <h2 className={sectionTitleClass}>{t('landing.features.title')}</h2>
+                </RevealItem>
+                <RevealItem>
+                  <p className={sectionBodyClass}>{t('landing.features.body')}</p>
+                </RevealItem>
+              </Reveal>
+              <div className="mt-14 md:mt-20">
+                <FeatureBento
+                  features={FEATURE_TILES.map((tile) => ({
+                    key: tile.key,
+                    icon: tile.icon,
+                    title: t(tile.titleKey),
+                    body: t(tile.descriptionKey),
+                  }))}
+                />
               </div>
             </section>
 
             {/* ================== COMPARISON ================== */}
-            <section className="relative px-5 py-20 sm:px-8 md:py-28">
-              <div className="mx-auto max-w-6xl">
-                <Reveal className="max-w-3xl">
-                  <RevealItem>
-                    <p className={sectionEyebrowClass}>Why this shape matters</p>
-                  </RevealItem>
-                  <RevealItem>
-                    <h2 className={sectionTitleClass}>
-                      Positioned between informal coordination and generic fintech.
-                    </h2>
-                  </RevealItem>
-                  <RevealItem>
-                    <p className={sectionBodyClass}>
-                      Traditional circles carry social strength. Modern financial
-                      apps carry infrastructure. Njangi On-Chain keeps the first
-                      while borrowing only the useful parts of the second.
-                    </p>
-                  </RevealItem>
-                </Reveal>
+            <section className="px-5 py-28 sm:px-8 md:py-40">
+              <Reveal className="mx-auto max-w-[980px] text-center">
+                <RevealItem>
+                  <p className={eyebrowClass}>Why this shape matters</p>
+                </RevealItem>
+                <RevealItem>
+                  <h2 className={sectionTitleClass}>
+                    Positioned between informal coordination and generic fintech.
+                  </h2>
+                </RevealItem>
+                <RevealItem>
+                  <p className={sectionBodyClass}>
+                    Traditional circles carry social strength. Modern financial apps carry
+                    infrastructure. Njangi On-Chain keeps the first while borrowing only the useful
+                    parts of the second.
+                  </p>
+                </RevealItem>
+              </Reveal>
 
-                <div className={`${glassCardClass} mt-12 hidden overflow-hidden lg:block`}>
-                  <div className="grid grid-cols-[0.9fr_1fr_1.05fr_1fr] border-b border-[#2a2620] bg-[#0d0c12]/70">
-                    <div className="px-6 py-4 text-xs font-semibold uppercase tracking-[0.22em] text-[#8b8578]">
-                      Operating lens
-                    </div>
-                    <div className="px-6 py-4 text-xs font-semibold uppercase tracking-[0.22em] text-[#8b8578]">
-                      Traditional circle
-                    </div>
-                    <div className="border-t-2 border-[#C8902F] bg-[#E8B04B]/[0.06] px-6 py-4 text-xs font-semibold uppercase tracking-[0.22em] text-[#E8B04B]">
-                      Njangi On-Chain
-                    </div>
-                    <div className="px-6 py-4 text-xs font-semibold uppercase tracking-[0.22em] text-[#8b8578]">
-                      Banks and fintech
-                    </div>
-                  </div>
+              <Reveal className="mx-auto mt-16 hidden max-w-[1100px] lg:block" amount={0.15}>
+                <RevealItem>
+                  <table className="w-full border-separate border-spacing-0 text-start">
+                    <caption className="sr-only">
+                      How a traditional circle, Njangi On-Chain, and banks or fintech apps compare
+                    </caption>
+                    <thead>
+                      <tr>
+                        <th
+                          scope="col"
+                          className="w-[20%] px-6 pb-6 pt-9 text-start align-bottom text-[12px] font-semibold uppercase tracking-[0.08em] text-mist-3"
+                        >
+                          Operating lens
+                        </th>
+                        <th
+                          scope="col"
+                          className="px-6 pb-6 pt-9 text-start align-bottom text-[19px] font-semibold tracking-[0.012em] text-mist-2"
+                        >
+                          Traditional circle
+                        </th>
+                        <th
+                          scope="col"
+                          className="rounded-t-[28px] bg-night-tile px-7 pb-6 pt-9 text-start align-bottom text-[19px] font-semibold tracking-[0.012em] text-gold"
+                        >
+                          Njangi On-Chain
+                        </th>
+                        <th
+                          scope="col"
+                          className="px-6 pb-6 pt-9 text-start align-bottom text-[19px] font-semibold tracking-[0.012em] text-mist-2"
+                        >
+                          Banks and fintech
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {COMPARISON_ROWS.map((row, index) => {
+                        const last = index === COMPARISON_ROWS.length - 1;
+                        return (
+                          <tr key={row.label}>
+                            <th
+                              scope="row"
+                              className="border-t border-white/[0.1] px-6 py-6 text-start align-top text-[15px] font-semibold tracking-[-0.01em] text-mist"
+                            >
+                              {row.label}
+                            </th>
+                            <td className="type-caption border-t border-white/[0.1] px-6 py-6 align-top text-mist-3">
+                              {row.traditional}
+                            </td>
+                            <td
+                              className={`border-t border-white/[0.07] bg-night-tile px-7 py-6 align-top text-[15px] leading-6 tracking-[-0.01em] text-mist ${
+                                last ? 'rounded-b-[28px] pb-9' : ''
+                              }`}
+                            >
+                              {row.onchain}
+                            </td>
+                            <td className="type-caption border-t border-white/[0.1] px-6 py-6 align-top text-mist-3">
+                              {row.fintech}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </RevealItem>
+              </Reveal>
 
-                  {COMPARISON_ROWS.map((row, index) => (
+              <Reveal className="mx-auto mt-14 grid max-w-[640px] gap-4 lg:hidden" amount={0.1}>
+                {COMPARISON_CARDS.map((card) => (
+                  <RevealItem key={card.title}>
                     <div
-                      key={row.label}
-                      className={`grid grid-cols-[0.9fr_1fr_1.05fr_1fr] ${
-                        index !== 0 ? 'border-t border-[#221f29]' : ''
+                      className={`rounded-[28px] p-7 sm:p-8 ${
+                        card.highlight ? 'bg-night-tile ring-1 ring-gold/30' : 'bg-night-tile/60'
                       }`}
                     >
-                      <div className="px-6 py-5 text-sm font-semibold text-[#f5f1e8]">
-                        {row.label}
-                      </div>
-                      <div className="px-6 py-5 text-sm leading-6 text-[#a8a294]">
-                        {row.traditional}
-                      </div>
-                      <div className="bg-[#E8B04B]/[0.06] px-6 py-5 text-sm font-medium leading-6 text-[#f3efe6]">
-                        {row.onchain}
-                      </div>
-                      <div className="px-6 py-5 text-sm leading-6 text-[#a8a294]">
-                        {row.fintech}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-
-                <div className="mt-12 grid gap-4 lg:hidden">
-                  {COMPARISON_CARDS.map((card) => (
-                    <div
-                      key={card.title}
-                      className={`rounded-3xl border p-6 ${
-                        card.highlight
-                          ? 'border-[#C8902F]/60 bg-[#E8B04B]/[0.06] text-[#f3efe6]'
-                          : 'border-[#2a2620] bg-[#13121a]/70 text-[#a8a294]'
-                      }`}
-                    >
-                      <h3
-                        className={`text-xl font-semibold tracking-[-0.02em] ${
-                          card.highlight ? 'text-[#E8B04B]' : 'text-[#f5f1e8]'
-                        }`}
-                      >
+                      <h3 className={`type-tile ${card.highlight ? 'text-gold' : 'text-mist'}`}>
                         {card.title}
                       </h3>
-                      <ul className="mt-5 space-y-3 text-sm leading-6">
+                      <ul className="mt-5 space-y-3">
                         {card.items.map((item) => (
-                          <li key={item} className="flex items-start gap-3">
-                            <span className="mt-2 h-1.5 w-1.5 rounded-full bg-[#E8B04B]" />
+                          <li key={item} className="type-body flex items-start gap-3 text-mist-2">
+                            {card.highlight ? (
+                              <Check aria-hidden className="mt-[0.2em] h-4 w-4 shrink-0 text-gold" />
+                            ) : (
+                              <span aria-hidden className="mt-[0.6em] h-1.5 w-1.5 shrink-0 rounded-full bg-mist-4" />
+                            )}
                             <span>{item}</span>
                           </li>
                         ))}
                       </ul>
                     </div>
-                  ))}
-                </div>
-              </div>
+                  </RevealItem>
+                ))}
+              </Reveal>
             </section>
 
             {/* =================== TRADITION =================== */}
-            <section className="relative overflow-hidden px-5 py-20 sm:px-8 md:py-28">
-              <div
-                aria-hidden
-                className="bg-rings pointer-events-none absolute inset-0"
-              />
-              <div className="relative mx-auto max-w-4xl text-center">
-                <Reveal>
-                  <RevealItem>
-                    <p className={sectionEyebrowClass}>{t('landing.tradition.eyebrow')}</p>
-                  </RevealItem>
-                  <RevealItem>
-                    <h2
-                      className={`${wordmarkFont.className} mt-4 text-[clamp(2rem,4vw,3rem)] font-normal leading-[1.06] tracking-[-0.01em] text-[#f5f1e8]`}
-                    >
-                      {t('landing.tradition.title')}
-                    </h2>
-                  </RevealItem>
-                  <RevealItem>
-                    <p className={`${sectionBodyClass} mx-auto`}>
-                      {t('landing.tradition.body')}
-                    </p>
-                  </RevealItem>
-                </Reveal>
-
-                <Reveal className="mt-10 flex flex-wrap justify-center gap-2.5">
-                  {CULTURAL_NAMES.map((name) => (
-                    <RevealItem key={name}>
-                      <span className="rounded-full border border-[#2a2620] bg-[#13121a]/70 px-4 py-2 text-sm font-medium text-[#EDE4D3]">
-                        {name}
-                      </span>
-                    </RevealItem>
-                  ))}
-                </Reveal>
+            <section className="px-5 py-28 sm:px-8 md:py-40">
+              <Reveal className="mx-auto max-w-[980px] text-center">
+                <RevealItem>
+                  <p className={eyebrowClass}>{t('landing.tradition.eyebrow')}</p>
+                </RevealItem>
+                <RevealItem>
+                  <h2 className={sectionTitleClass}>{t('landing.tradition.title')}</h2>
+                </RevealItem>
+                <RevealItem>
+                  <p className={sectionBodyClass}>{t('landing.tradition.body')}</p>
+                </RevealItem>
+              </Reveal>
+              <div className="mt-14 md:mt-20">
+                <NamesLight
+                  names={CULTURAL_NAMES}
+                  highlight="Njangi"
+                  serifClassName={serifFont.className}
+                />
               </div>
             </section>
 
             {/* ================= LAUNCH / WAITLIST ================= */}
-            <section id="launch" className="relative px-5 py-20 sm:px-8 md:py-28">
-              <div className="mx-auto max-w-6xl">
-                <div className="relative overflow-hidden rounded-3xl border border-[#2a2620]/40 bg-[#13121a]/70 p-7 shadow-[0_20px_60px_-30px_rgba(0,0,0,0.85)] backdrop-blur-sm sm:p-9 lg:p-10">
-                  <div aria-hidden className="bg-rings pointer-events-none absolute inset-0" />
-                  {/* Soft corner vignette — the card melts into the page at the
-                      edges while the center stays fully readable. */}
-                  <div
-                    aria-hidden
-                    className="pointer-events-none absolute inset-0"
-                    style={{
-                      background:
-                        'radial-gradient(125% 115% at 50% 42%, transparent 46%, rgba(10,10,12,0.82) 100%)',
-                    }}
+            <section id="launch" className="scroll-mt-16 px-5 py-28 sm:px-8 md:py-40">
+              <div className="relative mx-auto max-w-[1100px] overflow-hidden rounded-[32px] bg-night-tile px-6 py-16 text-center sm:px-12 md:py-24">
+                <div
+                  aria-hidden
+                  className="pointer-events-none absolute inset-x-0 -top-40 mx-auto h-80 max-w-[720px] rounded-full"
+                  style={{ background: 'radial-gradient(closest-side, rgba(232,176,75,0.16), transparent)' }}
+                />
+                <Reveal className="relative mx-auto max-w-[44rem]">
+                  <RevealItem>
+                    <p className={eyebrowClass}>{t('landing.launch.eyebrow')}</p>
+                  </RevealItem>
+                  <RevealItem>
+                    <h2 className={sectionTitleClass}>{t('landing.launch.title')}</h2>
+                  </RevealItem>
+                  <RevealItem>
+                    <p className={sectionBodyClass}>{t('landing.launch.body')}</p>
+                  </RevealItem>
+                </Reveal>
+
+                <form
+                  onSubmit={handleMainnetSignup}
+                  className="relative mx-auto mt-10 flex max-w-[36rem] flex-col gap-3 sm:flex-row"
+                >
+                  <label htmlFor="mainnet-email" className="sr-only">
+                    {t('landing.launch.emailPlaceholder')}
+                  </label>
+                  <input
+                    id="mainnet-email"
+                    type="email"
+                    autoComplete="email"
+                    placeholder={t('landing.launch.emailPlaceholder')}
+                    value={signupEmail}
+                    onChange={(e) => setSignupEmail(e.target.value)}
+                    required
+                    disabled={isSignupLoading}
+                    className="h-12 w-full min-w-0 rounded-full bg-black/70 px-6 sm:w-auto sm:flex-1 text-[17px] tracking-[-0.022em] text-mist outline-none ring-1 ring-white/[0.14] transition-shadow duration-200 placeholder:text-mist-3 focus:ring-2 focus:ring-gold/80 disabled:cursor-not-allowed disabled:opacity-60"
                   />
-                  <div className="relative grid gap-10 lg:grid-cols-[0.95fr_1.05fr] lg:items-start">
-                    <Reveal className="min-w-0 max-w-xl">
-                      <RevealItem>
-                        <p className={sectionEyebrowClass}>{t('landing.launch.eyebrow')}</p>
-                      </RevealItem>
-                      <RevealItem>
-                        <h2 className={sectionTitleClass}>{t('landing.launch.title')}</h2>
-                      </RevealItem>
-                      <RevealItem>
-                        <p className={sectionBodyClass}>{t('landing.launch.body')}</p>
-                      </RevealItem>
-                      <RevealItem>
-                        <div className="mt-8 space-y-3">
-                          {launchNotes.map((note) => (
-                            <div
-                              key={note}
-                              className="flex items-start gap-3 rounded-2xl border border-[#221f29] bg-[#0d0c12]/70 px-4 py-3"
-                            >
-                              <BadgeCheck className="mt-0.5 h-4 w-4 shrink-0 text-[#E8B04B]" />
-                              <p className="text-sm leading-6 text-[#a8a294]">{note}</p>
-                            </div>
-                          ))}
-                        </div>
-                      </RevealItem>
-                    </Reveal>
+                  <button type="submit" disabled={isSignupLoading} className={goldButtonClass}>
+                    {isSignupLoading ? t('landing.launch.signingUp') : t('landing.launch.notifyButton')}
+                  </button>
+                </form>
 
-                    <div className={`${mutedCardClass} min-w-0 p-6 sm:p-7`}>
-                      <div className="inline-flex items-center gap-2 rounded-full border border-[#2a2620] bg-[#0d0c12]/70 px-3 py-2 text-sm font-medium text-[#a8a294]">
-                        <Mail className="h-4 w-4 text-[#E8B04B]" />
-                        {t('landing.launch.eyebrow')}
-                      </div>
-
-                      <form
-                        onSubmit={handleMainnetSignup}
-                        className="mt-6 flex flex-col gap-3"
-                      >
-                        <label htmlFor="mainnet-email" className="sr-only">
-                          {t('landing.launch.emailPlaceholder')}
-                        </label>
-                        <input
-                          id="mainnet-email"
-                          type="email"
-                          placeholder={t('landing.launch.emailPlaceholder')}
-                          value={signupEmail}
-                          onChange={(e) => setSignupEmail(e.target.value)}
-                          required
-                          disabled={isSignupLoading}
-                          className="w-full rounded-xl border border-[#2a2620] bg-[#0d0c12] px-5 py-4 text-base text-[#f3efe6] outline-none transition-colors duration-200 placeholder:text-[#a89e8d] focus:border-[#E8B04B] focus-visible:ring-2 focus-visible:ring-[#f6d99a] disabled:cursor-not-allowed disabled:opacity-60"
-                        />
-                        <button
-                          type="submit"
-                          disabled={isSignupLoading}
-                          className={`${goldButtonClass} w-full py-4 disabled:cursor-not-allowed disabled:opacity-60`}
-                        >
-                          {isSignupLoading
-                            ? t('landing.launch.signingUp')
-                            : t('landing.launch.notifyButton')}
-                        </button>
-                      </form>
-
-                      {signupMessage && (
-                        <div
-                          className={`mt-4 rounded-2xl border px-4 py-3 text-sm ${
-                            showSignupSuccess
-                              ? 'border-[#2e6b46] bg-[#102a1c] text-[#7ee2a8]'
-                              : 'border-[#6b2e2e] bg-[#2a1010] text-[#f0a8a8]'
-                          }`}
-                        >
-                          {signupMessage}
-                        </div>
-                      )}
-
-                      <p className="mt-4 text-sm leading-6 text-[#8b8578]">
-                        {t('landing.launch.disclaimer')}
-                      </p>
-                    </div>
-                  </div>
+                <div role="status" aria-live="polite" className="relative">
+                  {signupMessage && (
+                    <p
+                      className={`type-caption mx-auto mt-4 inline-flex max-w-[36rem] items-center gap-2 rounded-full px-4 py-2 ${
+                        showSignupSuccess
+                          ? 'bg-[#30d158]/[0.12] text-[#30d158]'
+                          : 'bg-[#ff453a]/[0.12] text-[#ff6961]'
+                      }`}
+                    >
+                      {showSignupSuccess && <Check aria-hidden className="h-4 w-4" />}
+                      {signupMessage}
+                    </p>
+                  )}
                 </div>
+
+                <p className="type-caption relative mx-auto mt-4 max-w-[36rem] text-mist-3">
+                  {t('landing.launch.disclaimer')}
+                </p>
+
+                <ul className="relative mx-auto mt-14 grid max-w-[60rem] gap-6 border-t border-white/[0.08] pt-10 text-start sm:grid-cols-3">
+                  {launchNotes.map((note) => (
+                    <li key={note} className="type-caption flex items-start gap-3 text-mist-2">
+                      <Check aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-gold" />
+                      <span>{note}</span>
+                    </li>
+                  ))}
+                </ul>
               </div>
             </section>
 
             {/* ===================== FAQ ===================== */}
-            <section className="relative px-5 py-20 sm:px-8 md:py-28">
-              <div className="mx-auto max-w-4xl">
+            <section className="px-5 py-28 sm:px-8 md:py-40">
+              <div className="mx-auto max-w-[860px]">
                 <Reveal className="text-center">
                   <RevealItem>
-                    <p className={sectionEyebrowClass}>{t('landing.faq.eyebrow')}</p>
+                    <p className={eyebrowClass}>{t('landing.faq.eyebrow')}</p>
                   </RevealItem>
                   <RevealItem>
                     <h2 className={sectionTitleClass}>{t('landing.faq.title')}</h2>
                   </RevealItem>
                   <RevealItem>
-                    <p className={`${sectionBodyClass} mx-auto`}>{t('landing.faq.body')}</p>
+                    <p className={sectionBodyClass}>{t('landing.faq.body')}</p>
                   </RevealItem>
                 </Reveal>
 
-                <div className="mt-12 space-y-4">
-                  {FAQ_ITEMS.map((item) => (
-                    <div key={item.id} className={`${glassCardClass} overflow-hidden`}>
-                      <button
-                        type="button"
-                        id={`faq-q-${item.id}`}
-                        onClick={() => toggleFaqItem(item.id)}
-                        aria-expanded={openFaqItems[item.id]}
-                        aria-controls={`faq-panel-${item.id}`}
-                        className="flex w-full items-center justify-between gap-4 px-6 py-5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#f6d99a] sm:px-7"
-                      >
-                        <span className="text-lg font-semibold tracking-[-0.02em] text-[#f5f1e8]">
-                          {t(item.questionKey)}
-                        </span>
-                        <ChevronDown
-                          className={`h-5 w-5 shrink-0 text-[#E8B04B] transition-transform duration-200 ${
-                            openFaqItems[item.id] ? 'rotate-180' : ''
+                <div className="mt-14 border-b border-white/[0.1]">
+                  {FAQ_ITEMS.map((item) => {
+                    const open = !!openFaqItems[item.id];
+                    return (
+                      <div key={item.id} className="border-t border-white/[0.1]">
+                        <h3>
+                          <button
+                            type="button"
+                            id={`faq-q-${item.id}`}
+                            onClick={() => toggleFaqItem(item.id)}
+                            aria-expanded={open}
+                            aria-controls={`faq-panel-${item.id}`}
+                            className={`group flex w-full items-center justify-between gap-6 rounded-lg py-6 text-start ${focusRing}`}
+                          >
+                            <span className="text-[clamp(1.1875rem,1.08rem+0.45vw,1.5rem)] font-semibold leading-snug tracking-[0.009em] text-mist">
+                              {t(item.questionKey)}
+                            </span>
+                            <span
+                              aria-hidden
+                              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white/[0.08] text-mist-2 transition-colors duration-200 group-hover:bg-white/[0.14] group-hover:text-mist"
+                            >
+                              <Plus
+                                className={`h-4 w-4 transition-transform duration-300 ease-[cubic-bezier(0.25,0.1,0.25,1)] ${
+                                  open ? 'rotate-45' : ''
+                                }`}
+                                strokeWidth={2.2}
+                              />
+                            </span>
+                          </button>
+                        </h3>
+                        <div
+                          id={`faq-panel-${item.id}`}
+                          role="region"
+                          aria-labelledby={`faq-q-${item.id}`}
+                          inert={!open}
+                          className={`grid transition-[grid-template-rows,opacity] duration-500 ease-[cubic-bezier(0.28,0.11,0.32,1)] ${
+                            open ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'
                           }`}
-                        />
-                      </button>
-                      <div
-                        id={`faq-panel-${item.id}`}
-                        role="region"
-                        aria-labelledby={`faq-q-${item.id}`}
-                        hidden={!openFaqItems[item.id]}
-                        className="border-t border-[#221f29] px-6 pb-6 pt-4 sm:px-7"
-                      >
-                        <p className="text-sm leading-7 text-[#a8a294] sm:text-base">
-                          {t(item.answerKey)}
-                        </p>
+                        >
+                          <div className="overflow-hidden">
+                            <p className="type-body max-w-[46rem] pb-7 text-mist-2">{t(item.answerKey)}</p>
+                          </div>
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
 
-                <div className="mt-8 flex flex-col items-center justify-center gap-3 text-sm font-semibold sm:flex-row">
-                  <Link
-                    href="/learn"
-                    className="inline-flex items-center gap-2 py-2.5 text-[#cfc8ba] transition-colors duration-200 hover:text-[#f6d99a] focus-visible:outline-none focus-visible:underline focus-visible:underline-offset-4"
-                  >
-                    {t('landing.faq.learnLink')}
-                    <ArrowRight className="h-4 w-4" />
-                  </Link>
-                  <Link
-                    href="/faq"
-                    className="inline-flex items-center gap-2 py-2.5 text-[#cfc8ba] transition-colors duration-200 hover:text-[#f6d99a] focus-visible:outline-none focus-visible:underline focus-visible:underline-offset-4"
-                  >
-                    {t('landing.faq.fullFaqLink')}
-                    <ArrowRight className="h-4 w-4" />
-                  </Link>
+                <div className="mt-10 flex flex-col items-center justify-center gap-4 sm:flex-row sm:gap-10">
+                  <ChevronLink href="/learn">{t('landing.faq.learnLink')}</ChevronLink>
+                  <ChevronLink href="/faq">{t('landing.faq.fullFaqLink')}</ChevronLink>
                 </div>
               </div>
             </section>
           </main>
 
-          <footer className="relative border-t border-[#2a2620] bg-[#0a0a0c]/80">
-            <div className="bg-weave pointer-events-none absolute inset-0" aria-hidden />
-            <div className="relative mx-auto max-w-6xl px-5 py-10 sm:px-8">
-              <div className="flex flex-col gap-8 lg:flex-row lg:items-start lg:justify-between">
-                <div className="flex items-center gap-4">
-                  <span className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-full border border-white/10 bg-white/[0.04]">
+          <footer className="border-t border-white/[0.08]">
+            <div className="mx-auto max-w-[1100px] px-5 py-12 sm:px-8">
+              <div className="flex flex-col gap-8 md:flex-row md:items-center md:justify-between">
+                <div className="flex items-center gap-3">
+                  <span className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-full bg-white/[0.06]">
                     <Image
                       src="/njangi-on-chain-logo.png"
-                      alt="Njangi On-Chain"
+                      alt=""
                       width={72}
                       height={72}
                       className="h-full w-full object-contain"
                       unoptimized
                     />
                   </span>
-                  <div>
-                    <p
-                      className={`${wordmarkFont.className} text-[1.9rem] leading-none tracking-[-0.04em] text-[#f5f1e8]`}
+                  <span className="flex items-baseline gap-1.5">
+                    <span
+                      className={`${serifFont.className} text-[1.6rem] leading-none tracking-[-0.03em] text-mist`}
                     >
                       Njangi
-                    </p>
-                    <p className="mt-1 text-[0.62rem] font-semibold uppercase tracking-[0.42em] text-[#E8B04B]">
+                    </span>
+                    <span className="text-[0.58rem] font-semibold uppercase tracking-[0.3em] text-gold">
                       On-chain
-                    </p>
-                  </div>
+                    </span>
+                  </span>
                 </div>
 
-                <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
-                  <Link href="/learn" className={socialLinkClass}>
-                    {t('nav.learn')}
-                  </Link>
-                  <Link href="/faq" className={socialLinkClass}>
-                    {t('nav.faq')}
-                  </Link>
-                  <a
-                    href="https://x.com/njangi_on_chain"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className={socialLinkClass}
-                  >
-                    X
-                  </a>
-                  <a
-                    href="https://www.instagram.com/njangionchain"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className={socialLinkClass}
-                  >
-                    Instagram
-                  </a>
-                  <a href={SUPPORT_MAILTO} className={socialLinkClass}>
-                    Email
-                  </a>
-                </div>
+                <nav aria-label="Footer" className="flex flex-wrap items-center gap-x-7 gap-y-1">
+                  {[
+                    { href: '/learn', label: t('nav.learn'), external: false },
+                    { href: '/faq', label: t('nav.faq'), external: false },
+                    { href: 'https://x.com/njangi_on_chain', label: 'X', external: true },
+                    { href: 'https://www.instagram.com/njangionchain', label: 'Instagram', external: true },
+                    { href: SUPPORT_MAILTO, label: 'Email', external: false },
+                  ].map((link) =>
+                    link.href.startsWith('/') ? (
+                      <Link
+                        key={link.label}
+                        href={link.href}
+                        className={`type-caption rounded py-2.5 text-mist-2 transition-colors duration-200 hover:text-mist ${focusRing}`}
+                      >
+                        {link.label}
+                      </Link>
+                    ) : (
+                      <a
+                        key={link.label}
+                        href={link.href}
+                        {...(link.external ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
+                        className={`type-caption rounded py-2.5 text-mist-2 transition-colors duration-200 hover:text-mist ${focusRing}`}
+                      >
+                        {link.label}
+                      </a>
+                    )
+                  )}
+                </nav>
               </div>
 
-              <div className="mt-8 flex flex-col gap-2 border-t border-[#221f29] pt-4 text-sm text-[#8b8578] sm:flex-row sm:items-center sm:justify-between">
+              <div className="type-fine mt-8 flex flex-col gap-3 border-t border-white/[0.08] pt-6 text-mist-3 md:flex-row md:items-center md:justify-between">
                 <p>{t('landing.footer.rights', { year: new Date().getFullYear() })}</p>
-                <LegalFooter />
+                <LegalFooter tone="dark" className="text-[12px]" />
                 <p>{t('landing.footer.tagline')}</p>
               </div>
             </div>
           </footer>
         </div>
-      </div>
+      </MotionConfig>
     </>
   );
 }
