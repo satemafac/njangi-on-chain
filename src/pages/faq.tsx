@@ -44,7 +44,7 @@ export default function FAQPage() {
         {
           id: "how-to-start",
           question: "How do I get started with Njangi On-Chain?",
-          answer: "Getting started is simple: 1) Click 'Login' and authenticate with your Google, Facebook, or other social account using zkLogin, 2) Create a new savings circle or join an existing one, 3) Agree the contribution amount and rotation order with your group, 4) Post your security deposit and start contributing. There is no seed phrase to write down and no token to buy first."
+          answer: "Getting started is simple: 1) Click 'Login' and sign in with your Google, Facebook or Apple account using zkLogin, 2) Create a new savings circle, or join one from the invite link its organiser sends you, 3) Agree the contribution amount and rotation order with your group, 4) Post your security deposit and start contributing. There is no seed phrase to write down; contributions are paid in USDC or SUI."
         },
         {
           id: "cost-to-use",
@@ -64,22 +64,22 @@ export default function FAQPage() {
         {
           id: "how-its-different",
           question: "How is Njangi On-Chain different from traditional savings circles?",
-          answer: "The circle is the same; what changes is who holds the money and who keeps the record. 1) Nobody holds the pot — each cycle's contributions sit in escrow that only the scheduled recipient can open, 2) the rotation runs to the order your circle agreed rather than to memory, 3) every contribution and payout is on a shared record any member can check, 4) members can vote to stop a circle and get their money back, and 5) a circle can span countries, so family abroad can take part."
+          answer: "The circle is the same; what changes is who holds the money and who keeps the record. 1) Nobody holds the pot — each cycle's contributions sit in escrow that only the scheduled recipient can open, 2) the rotation runs to the order your circle agreed rather than to memory, 3) every contribution and payout is on a shared record any member can check, 4) stopping a circle early goes to a member vote, and a stopped circle returns each member's security deposit, and 5) a circle can span countries, so family abroad can take part."
         },
         {
           id: "smart-contracts-work",
           question: "How is the money actually held?",
-          answer: "Each cycle's contributions are held by a contract — a set of rules fixed before anyone pays in, which nobody can quietly change afterwards, including us. It holds the contributions in escrow, release the pot to the member whose turn it is under the rotation order your circle agreed, record every contribution and payout on chain, and apply the same rules to everyone. The rotation order is set by the circle admin before the circle starts, not drawn at random."
+          answer: "Each cycle's contributions are held by a contract — a set of rules fixed before anyone pays in, which nobody can quietly change afterwards, including us. It holds the contributions in escrow, releases the pot to the member whose turn it is under the rotation order your circle agreed, records every contribution and payout on chain, and applies the same rules to everyone. The rotation order is set by the circle admin before the circle starts, not drawn at random."
         },
         {
           id: "payout-order",
           question: "How is the payout order determined?",
-          answer: "The circle admin sets the rotation order, the same way a njangi treasurer traditionally would — by arranging members into positions the group has agreed on. It is not random. What is different from a paper list is that the order is stored on-chain and visible to every member, and any change to it is recorded as an on-chain event, so nobody can quietly move themselves up the queue. Once the order is set, each cycle pays the member in the next position until everyone has had their turn."
+          answer: "The circle admin sets the rotation order, the same way a njangi treasurer traditionally would — by arranging members into positions the group has agreed on. It is not random. What is different from a paper list is that the order is stored on-chain, where any member can check it, and any change to it is recorded as an on-chain event, so nobody can quietly move themselves up the queue. Once the order is set, each cycle pays the member in the next position until everyone has had their turn."
         },
         {
           id: "what-happens-missed-payment",
           question: "What happens if someone misses a payment?",
-          answer: "The circle's rules cover missed payments, and they are applied the same way to everyone. Depending on what your circle agreed: the member may pay a penalty fee, they might be moved later in the payout queue, or in severe cases, they could be removed from the circle. All of it is agreed when joining and applied automatically, not decided by a person after the fact."
+          answer: "The round waits. The member whose turn it is can collect only once everyone else has paid, and nothing in the app can force a member to pay, so a missed payment can make a payout late or stop it happening at all. That is why a circle works best with people who already trust each other."
         }
       ]
     },
@@ -89,7 +89,7 @@ export default function FAQPage() {
         {
           id: "zklogin-secure",
           question: "Is zkLogin secure? How does it work?",
-          answer: "zkLogin is a cutting-edge authentication system that's actually more secure than traditional passwords. It uses zero-knowledge proofs to verify your identity through social accounts (Google, Facebook, etc.) without putting your personal information on the public record. You get the convenience of a social login without a seed phrase to lose."
+          answer: "zkLogin lets you sign in with your Google, Facebook or Apple account instead of a seed phrase. It uses zero-knowledge proofs, so your wallet is tied to that account without putting your personal information on the public record. That also means your wallet is only as safe as the account you sign in with: protect it with a strong password and two-step verification."
         },
         {
           id: "funds-security",
@@ -99,7 +99,7 @@ export default function FAQPage() {
         {
           id: "what-if-member-leaves",
           question: "What if a member wants to leave the circle?",
-          answer: "Members can leave circles, but there are important considerations: 1) If they haven't received their payout yet, they may forfeit their contributions (depending on circle rules), 2) If they've already been paid, they must complete their remaining contribution obligations, 3) Some circles allow transferring membership to a trusted replacement, 4) All departure rules are set when the circle is created and applied the same way to everyone."
+          answer: "Before a circle starts, the admin can remove a member, and that member's security deposit is returned. Once the circle is running, the app has no way to leave it or hand your place to someone else, and nothing can force a member to keep paying; if someone stops, the rounds wait for them. If the whole group wants to stop, the admin can put it to a member vote, and a stopped circle returns each member's security deposit."
         },
         {
           id: "identity-verification",
@@ -109,7 +109,7 @@ export default function FAQPage() {
         {
           id: "network-or-app-down",
           question: "What if the network or the app goes down?",
-          answer: "Your circle's money is not held by us and does not depend on our app being up: it sits in the escrow contract on a public network run by thousands of independent operators, and the record stays readable even if this website is unavailable. What this does not do is make your account recoverable if you lose access to the social account you signed in with — sign-in is currently one-way, so keep access to that account."
+          answer: "Your circle's money is not held by us and does not depend on our app being up: it sits in the escrow contract on a public network run by independent validators, and the record stays readable even if this website is unavailable. What this does not do is make your account recoverable if you lose access to the social account you signed in with — sign-in is currently one-way, so keep access to that account."
         }
       ]
     },
@@ -119,7 +119,7 @@ export default function FAQPage() {
         {
           id: "create-vs-join",
           question: "Should I create a new circle or join an existing one?",
-          answer: "Both options have benefits: Create a new circle if you want to invite specific friends/family, set your own rules and schedule, or start with people you already trust. Join an existing circle if you want to start immediately, connect with new community members, or find circles with specific contribution amounts that match your budget."
+          answer: "Create a new circle if you want to invite specific friends or family and set your own amount and schedule. Join a circle when someone you know sends you its invite link: there is no public list of circles to browse, and the organiser approves each member who asks to join."
         },
         {
           id: "circle-size-limits",
@@ -144,17 +144,17 @@ export default function FAQPage() {
         {
           id: "cultural-names",
           question: "Why do you mention so many different names (Tontine, Sou Sou, etc.)?",
-          answer: "Rotating savings and credit associations exist in virtually every culture worldwide, each with their own name and traditions: Njangi (Cameroon), Tontine (French-speaking Africa), Sou Sou (Caribbean), ROSCA (Economics), Chama (Kenya), Hui (China), and dozens more. We honor all these traditions while providing a universal platform that serves every community."
+          answer: "Rotating savings and credit associations exist in virtually every culture worldwide, each with their own name and traditions: Njangi (Cameroon), Tontine (French-speaking Africa), Sou Sou (Caribbean), ROSCA (Economics), Chama (Kenya), Hui (China), and dozens more. We honor all these traditions; the product runs the rotating format they share."
         },
         {
           id: "preserve-culture",
           question: "How does the platform preserve cultural traditions?",
-          answer: "While we modernize the financial infrastructure, we preserve cultural elements through: customizable circle ceremonies and rituals, support for traditional meeting schedules, cultural naming and language options, community celebration features, and integration with diaspora communities. Technology enhances tradition rather than replacing it."
+          answer: "The app handles the money and the record; the meetings, the meals and the ceremonies stay with your group. You can give your circle the name your group already uses, switch the app between languages including English and French, and a member who collects their pot gets a short celebration on screen."
         },
         {
           id: "global-participation",
           question: "Can I join circles with people from other countries?",
-          answer: "Yes — this is one of the main reasons the product exists. A circle can include family at home and relatives abroad, so a njangi no longer has to end at a border. Contributions are made in a digital dollar so everyone is paying the same agreed amount regardless of where they live."
+          answer: "Yes — this is one of the main reasons the product exists. A circle can include family at home and relatives abroad, so a njangi no longer has to end at a border. A circle can settle in USDC, a digital dollar, so everyone pays the same agreed amount regardless of where they live."
         },
         {
           id: "regulations-compliance",

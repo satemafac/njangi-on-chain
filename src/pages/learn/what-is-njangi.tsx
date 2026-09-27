@@ -104,7 +104,7 @@ export default function WhatIsNjangiPage() {
         ]}
         cta={{
           title: 'Ready to Join the Future of Community Savings?',
-          body: 'Start a Njangi with the people you already trust, at home or abroad, with non-custodial coordination and partner-led on/off ramps.',
+          body: 'Start a Njangi with the people you already trust, at home or abroad, with non-custodial coordination.',
           primary: { label: 'Start Your Circle', href: '/create-circle' },
           secondary: { label: 'View Dashboard', href: '/dashboard' },
         }}

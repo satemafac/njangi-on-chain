@@ -23,17 +23,17 @@ const TOPICS = [
     points: [
       'Nobody holds the pot \u2014 not even us',
       'Every contribution visible to every member',
-      'Members can vote to stop a circle',
-      'No seed phrase, no token to buy first',
+      'Members vote on stopping a circle',
+      'No seed phrase to write down',
     ],
   },
   {
-    title: 'Partner-led Fiat Ramps',
+    title: 'Funding Through Your Exchange',
     points: [
-      'Coinbase, MoonPay and Transak on-ramps',
-      'Multi-currency support (USD, EUR, XAF, NGN, KES\u2026)',
-      'KYC and AML handled by licensed partners',
-      'Geo-aware provider selection',
+      'Withdraw USDC to your wallet over the Sui network',
+      'Cash out the same way: send to your exchange, then sell',
+      'Set amounts in USD, EUR, XAF, NGN, KES\u2026',
+      'No cash ever passes through the app',
     ],
   },
 ];
@@ -84,8 +84,8 @@ export default function LearnIndexPage() {
     },
     {
       title: "What is a Chit Fund?",
-      subtitle: "India, and the only one decided by auction",
-      description: "Every other rotating circle fixes the turn order once. A chit fund re-decides it every month by bidding — worked through with numbers.",
+      subtitle: "India, and the best-known one decided by auction",
+      description: "Most rotating circles fix the turn order once. A chit fund re-decides it every month by bidding — worked through with numbers.",
       href: "/learn/chit-fund",
       tag: "Fundamentals",
       readTime: "9 min read",
@@ -93,7 +93,7 @@ export default function LearnIndexPage() {
     {
       title: "What is a Chama?",
       subtitle: "Kenya, and what happens after the pot",
-      description: "The one tradition that routinely outgrows its own rotation — table banking, group-owned land, and the meeting that holds it together.",
+      description: "A tradition that routinely outgrows its own rotation — table banking, group-owned land, and the meeting that holds it together.",
       href: "/learn/chama",
       tag: "Regional Focus",
       readTime: "8 min read",
@@ -101,7 +101,7 @@ export default function LearnIndexPage() {
     {
       title: "What is Esusu?",
       subtitle: "Nigeria, and the word that crossed the Atlantic",
-      description: "The Yoruba original, and the probable ancestor of the Caribbean susu and Jamaican pardna — an institution that survived the Middle Passage intact.",
+      description: "The Yoruba original, and the probable ancestor of the Caribbean susu and Jamaican pardna — an institution that crossed the Atlantic with enslaved Africans.",
       href: "/learn/esusu",
       tag: "Cultural Traditions",
       readTime: "8 min read",

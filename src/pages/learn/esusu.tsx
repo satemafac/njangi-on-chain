@@ -27,12 +27,12 @@ const FAQS = [
   {
     question: 'What is esusu?',
     answer:
-      'Esusu is a Yoruba rotating savings circle. A group agrees an amount and a schedule, everyone contributes the same sum each round, and one member takes the whole pool until every member has had a turn. It is one of the oldest rotating savings practices with a continuously documented history.',
+      'Esusu is a Yoruba rotating savings circle. A group agrees an amount and a schedule, everyone contributes the same sum each round, and one member takes the whole pool until every member has had a turn. Its earliest known written description dates from 1852.',
   },
   {
     question: 'Is esusu the same as susu?',
     answer:
-      'They are the same institution, and almost certainly the same word. Esusu is West African and Yoruba; susu, sou-sou and the Jamaican pardna are its Caribbean descendants, carried across the Atlantic by enslaved West Africans. The mechanics survived the crossing intact and the name shifted with the language.',
+      'They are the same institution, and the Caribbean word is widely held to come from the Yoruba one. Susu and sou-sou are its Caribbean forms; in Jamaica the same practice goes by an English name, partner or pardna. It is widely held to have crossed the Atlantic with enslaved West Africans.',
   },
   {
     question: 'What is the difference between esusu and ajo?',
@@ -40,14 +40,14 @@ const FAQS = [
       'Esusu rotates: everyone contributes and each member takes the whole pool in turn. Ajo, in its collector form, does not — a collector visits daily, takes what you can spare, and returns your own money at the end of the period minus a fee. One gives you everyone\'s money now; the other gives you your own money back later. In practice Yoruba speakers use "ajo" for both, so context decides.',
   },
   {
-    question: 'What is the olori esusu?',
+    question: 'Who runs an esusu?',
     answer:
       'The head of the group. They collect the contributions, keep the record, and carry responsibility if a member falls short. It is a position of standing rather than an administrative chore, and it is not given to someone the group does not already trust with their reputation.',
   },
   {
     question: 'Is esusu legal in Nigeria?',
     answer:
-      'Esusu is an informal arrangement between people who know each other and is not a licensed financial activity. It is not regulated as a bank or a lender because it is neither — nobody takes anyone else\'s money, and nobody is charged for borrowing. Members contribute and receive their turn.',
+      'Esusu is an informal arrangement between people who know each other. No licence is involved, and it sits outside Nigeria\'s formal financial regulation: members contribute, take their turn, and nobody pays a charge for receiving the pool early.',
   },
 ];
 
@@ -119,9 +119,9 @@ export default function EsusuPage() {
         title="What is esusu?"
         standfirst={
           <p>
-            Esusu is a Yoruba rotating savings circle, and one of the oldest with a continuously
-            documented history. It is also the reason a savings circle in Kingston and a savings
-            circle in Lagos are called almost the same thing.
+            Esusu is a Yoruba rotating savings circle, written about since at least 1852. It is also
+            widely held to be the reason a savings circle in Port of Spain and a savings circle in
+            Lagos are called almost the same thing.
           </p>
         }
         breadcrumbs={[
@@ -148,9 +148,8 @@ export default function EsusuPage() {
             people.
           </p>
           <p>
-            Order is normally settled at the outset, by drawing lots or by seniority within the
-            group. A head — the <strong>olori esusu</strong> in Yoruba — collects, keeps the
-            record, and is responsible if a member falls short.
+            Order is normally settled at the outset, by drawing lots or by agreement. A head
+            collects, keeps the record, and is responsible if a member falls short.
           </p>
         </Section>
 
@@ -161,28 +160,25 @@ export default function EsusuPage() {
             — not a practice in development, but one long settled.
           </p>
           <p>
-            Enslaved West Africans carried it across the Atlantic, and it survived. It runs in the
-            Caribbean today as{' '}
+            It is widely held to have crossed the Atlantic with enslaved West Africans, and it
+            survived. It runs in the Caribbean today as{' '}
             <Link href="/learn/susu" className="text-gold-hi underline underline-offset-4 hover:text-gold">
               susu and sou-sou
             </Link>
-            , and in Jamaica as{' '}
+            , and in Jamaica, under the English name partner, as{' '}
             <Link href="/learn/pardna" className="text-gold-hi underline underline-offset-4 hover:text-gold">
               pardna
             </Link>
-            . The mechanics are unchanged; the name shifted with the language.
+            . The mechanics are the same.
           </p>
           <div className={`${cardClass} mt-6 px-6 py-6 sm:px-8`}>
             <h3 className="text-[11px] font-semibold uppercase tracking-[0.2em] text-gold">
               Why that is worth stating plainly
             </h3>
             <p className="mt-3 text-base leading-7 text-cream-muted">
-              Esusu is one of the clearest cases of a functioning economic institution surviving
-              the Middle Passage intact. People arrived with nothing, and rebuilt a working
-              financial system out of memory and trust because the structure travelled in their
-              heads. Tracing esusu to susu to pardna connects West African, Caribbean and Black
-              American savings practice into a single continuous tradition rather than a set of
-              coincidental local customs.
+              Esusu is a clear case of an economic institution crossing the Atlantic and
+              surviving. Tracing esusu to susu and pardna connects West African and Caribbean
+              savings practice into one tradition rather than a set of coincidental local customs.
             </p>
           </div>
         </Section>
@@ -199,7 +195,7 @@ export default function EsusuPage() {
             fact that you will be standing three stalls from everyone you owe, tomorrow morning.
           </p>
           <p>
-            The Igbo variant, <strong>isusu</strong>, runs identically. Across northern Nigeria the
+            The Igbo variant, <strong>isusu</strong>, works on the same principle. Across northern Nigeria the
             Hausa <strong>adashi</strong> fills the same role. And{' '}
             <Link href="/learn/ajo" className="text-gold-hi underline underline-offset-4 hover:text-gold">
               ajo
@@ -212,8 +208,8 @@ export default function EsusuPage() {
         <Section id="diaspora" title="Esusu abroad">
           <p>
             Nigerian communities in the United Kingdom, the United States and Canada run esusu
-            widely — to raise a house deposit, cover school fees, or send a lump sum home. Groups
-            are frequently drawn from a single hometown association, so the social ties abroad are
+            widely — to raise a house deposit, cover school fees, or send a lump sum home. Some
+            groups are drawn from a single hometown association, so the social ties abroad are
             as strong as the ones at home, sometimes stronger.
           </p>
           <p>
