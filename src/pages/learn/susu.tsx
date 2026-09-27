@@ -105,7 +105,7 @@ export default function SouSouCryptoPage() {
         ]}
         cta={{
           title: 'Ready to Join the Caribbean Savings Revolution?',
-          body: 'Connect with Caribbean and West African diaspora communities worldwide through sou sou circles where nobody holds the pot and every member can check the record.',
+          body: 'Run a sou sou with family and friends at home or abroad, where nobody holds the pot and every member can check the record.',
           primary: { label: 'Start Your Sou Sou', href: '/create-circle' },
           secondary: { label: 'Explore Platform', href: '/dashboard' },
         }}
@@ -161,10 +161,9 @@ export default function SouSouCryptoPage() {
                 title: 'Greater Antilles',
                 points: [
                   <><strong>Jamaica</strong> - Partner/Pardner</>,
-                  <><strong>Haiti</strong> - Sol/Association</>,
-                  <><strong>Dominican Republic</strong> - San/Caja</>,
-                  <><strong>Puerto Rico</strong> - Vaca</>,
-                  <><strong>Cuba</strong> - Vaca (Historical)</>,
+                  <><strong>Haiti</strong> - Sol</>,
+                  <><strong>Dominican Republic</strong> - San</>,
+                  <><strong>Cuba</strong> - Vaquita</>,
                 ],
               },
               {
@@ -172,19 +171,18 @@ export default function SouSouCryptoPage() {
                 points: [
                   <><strong>Trinidad & Tobago</strong> - Sou Sou</>,
                   <><strong>Barbados</strong> - Meeting Turn</>,
-                  <><strong>Grenada</strong> - Box Money</>,
-                  <><strong>St. Lucia</strong> - Cooperative</>,
-                  <><strong>Dominica</strong> - Sou Sou Circle</>,
+                  <><strong>Grenada</strong> - Susu</>,
+                  <><strong>St. Lucia</strong> - Sou Sou</>,
                 ],
               },
               {
-                title: 'West Africa Origins',
+                title: 'West Africa',
                 points: [
                   <><strong>Ghana</strong> - Susu</>,
                   <><strong>Sierra Leone</strong> - Osusu</>,
                   <><strong>Nigeria</strong> - Esusu (Yoruba)</>,
                   <><strong>Gambia</strong> - Osusu</>,
-                  <><strong>Liberia</strong> - Susu (Kru)</>,
+                  <><strong>Liberia</strong> - Susu</>,
                 ],
               },
             ]}

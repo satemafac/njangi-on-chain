@@ -104,7 +104,7 @@ export default function WhatIsNjangiPage() {
         ]}
         cta={{
           title: 'Ready to Join the Future of Community Savings?',
-          body: 'Start your digital Njangi journey today and connect with trusted communities worldwide with non-custodial coordination and partner-led on/off ramps.',
+          body: 'Start a Njangi with the people you already trust, at home or abroad, with non-custodial coordination and partner-led on/off ramps.',
           primary: { label: 'Start Your Circle', href: '/create-circle' },
           secondary: { label: 'View Dashboard', href: '/dashboard' },
         }}
@@ -142,10 +142,10 @@ export default function WhatIsNjangiPage() {
             </Definition>
             <Definition term="Pronunciation and spelling">
               Said <strong>n-JAHN-gee</strong>, with the stress on the middle syllable. It is also
-              written <strong>njangui</strong>, and occasionally <strong>njange</strong> or{' '}
-              <strong>jangi</strong> — all the same word, spelled as different people heard it. In
-              francophone parts of Cameroon the same practice is usually called a{' '}
-              <Link href="/learn/tontine">tontine</Link>.
+              written <strong>njangui</strong> or <strong>djangui</strong>, and occasionally{' '}
+              <strong>djanggi</strong>, <strong>njange</strong> or <strong>jangi</strong> — all the
+              same word, spelled as different people heard it. In francophone parts of Cameroon the
+              same practice is usually called a <Link href="/learn/tontine">tontine</Link>.
             </Definition>
             <Definition term="Where the word comes from">
               Njangi belongs to the Grassfields of the North West and South West regions of Cameroon
@@ -192,10 +192,11 @@ export default function WhatIsNjangiPage() {
         </GuideSection>
 
         <GuideSection id="history" title="Historical Origins & Cultural Significance">
-          <h3>Ancient Roots in West Africa</h3>
+          <h3>How Old Is Njangi?</h3>
           <p>
-            Njangi traces its origins to ancient West African financial traditions, with similar
-            systems documented for <strong>over 1,000 years</strong>. The practice emerged from the
+            No one knows when njangi began. A Yoruba vocabulary published in <strong>1852</strong>{' '}
+            already described savings clubs of exactly this kind in neighbouring Nigeria, and
+            researchers were describing njangi in Cameroon by the 1970s. The practice emerged from the
             fundamental human need for financial cooperation and community support, particularly in
             agricultural societies where seasonal cash flows required collective savings strategies.
           </p>
@@ -221,11 +222,11 @@ export default function WhatIsNjangiPage() {
             </ul>
           </Callout>
 
-          <h3>Evolution Across Africa</h3>
-          <p>From Cameroon, similar systems spread throughout Africa under different names:</p>
+          <h3>Across Africa</h3>
+          <p>Other African communities run the same arrangement under their own names:</p>
           <TermGrid
             items={[
-              { title: 'Djanggis', body: 'Alternate Cameroon term' },
+              { title: 'Esusu', body: 'Nigeria (Yoruba)' },
               { title: 'Tontines', body: 'French-speaking Africa' },
               { title: 'Susus', body: 'Ghana, Sierra Leone' },
               { title: 'Stokvels', body: 'South Africa' },

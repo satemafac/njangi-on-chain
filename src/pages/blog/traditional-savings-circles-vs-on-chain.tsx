@@ -160,8 +160,9 @@ export default function TraditionalSavingsVsBlockchainPost() {
         <p>
           Blockchain systems, by contrast, embed trust directly into the technology. Smart contracts
           automatically execute agreements without human intervention, so no coordinator holds the pooled
-          cash or decides where it goes. This enables participation by people who don&rsquo;t know each other
-          personally but want to benefit from collective savings.
+          cash or decides where it goes. That does not make strangers safe to save with, though: if a
+          member stops paying, a payout can be late or not happen at all, which is why people join by
+          invite link and the organiser approves each one.
         </p>
 
         <h3>2. Geographic and Accessibility Constraints</h3>
@@ -210,7 +211,7 @@ export default function TraditionalSavingsVsBlockchainPost() {
               title: 'Traditional Esusu',
               points: [
                 'Monthly pool: $2,000',
-                'Each member receives: $2,000 (once per 20 months)',
+                'Each member receives: $2,000 (once per 20 months, including their own $100)',
                 'Total program value: $40,000',
                 'Custody: one treasurer holds the cash',
                 'Coordinator risk: High',
@@ -221,9 +222,9 @@ export default function TraditionalSavingsVsBlockchainPost() {
               title: 'Blockchain ROSCA',
               highlight: true,
               points: [
-                'Monthly pool: $2,000',
-                'Each member receives: $2,000 (on a verifiable schedule)',
-                'Total program value: $40,000',
+                'Monthly pool: $1,900 (the member collecting that month doesn’t pay in)',
+                'Each member receives: $1,900 once, and pays $100 in each of the other 19 months',
+                'Total program value: $38,000',
                 'Custody: smart-contract escrow, not a treasurer',
                 'Coordinator discretion over funds: none',
                 'Time spent: 15 minutes/month',
@@ -285,8 +286,9 @@ export default function TraditionalSavingsVsBlockchainPost() {
 
         <p>
           Whether you choose traditional or blockchain savings circles, the most important step
-          is starting. Both approaches have proven effective for building wealth and strengthening
-          communities—the key is finding the one that best fits your specific needs and circumstances.
+          is starting. Rotating savings circles have helped communities save together for generations;
+          the on-chain version is new, so the key is choosing the approach that best fits your
+          group&rsquo;s needs and circumstances.
         </p>
 
         <Callout icon={BookOpen} title="Learn More">

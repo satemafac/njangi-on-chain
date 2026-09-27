@@ -86,7 +86,7 @@ export default function TontineBlockchainPage() {
         ]}
         cta={{
           title: 'Ready to Join the African Finance Revolution?',
-          body: 'Start your digital tontine journey today and connect with African communities worldwide while preserving cultural traditions through transparent, non-custodial coordination.',
+          body: 'Start a tontine with the people you already save with, at home or abroad: the same rotation, run on transparent, non-custodial coordination.',
           primary: { label: 'Start Your Tontine', href: '/create-circle' },
           secondary: { label: 'Explore Platform', href: '/dashboard' },
         }}
@@ -144,25 +144,23 @@ export default function TontineBlockchainPage() {
           <h3>West Africa</h3>
           <ul>
             <li><strong>Senegal</strong> - Tontines</li>
-            <li><strong>Mali</strong> - Ton & Community Savings</li>
+            <li><strong>Mali</strong> - Tontines (ton and pari in Bambara)</li>
             <li><strong>Burkina Faso</strong> - Tontines</li>
-            <li><strong>Côte d&rsquo;Ivoire</strong> - Urban Professional Groups</li>
+            <li><strong>Côte d&rsquo;Ivoire</strong> - Tontines</li>
           </ul>
 
           <h3>Central Africa</h3>
           <ul>
             <li><strong>Cameroon</strong> - Tontines & Njangis</li>
-            <li><strong>CAR</strong> - Community Solidarity</li>
-            <li><strong>Gabon</strong> - Associations Tournantes</li>
-            <li><strong>Chad</strong> - Cross-border Networks</li>
+            <li><strong>CAR</strong> - Tontines (kelemba in Sango)</li>
+            <li><strong>Gabon</strong> - Tontines</li>
+            <li><strong>Chad</strong> - Tontines</li>
           </ul>
 
           <h3>Island Nations</h3>
           <ul>
-            <li><strong>Madagascar</strong> - Fihavanana Circles</li>
-            <li><strong>Comoros</strong> - Islamic Tontines</li>
-            <li><strong>Mauritius</strong> - Multi-cultural Groups</li>
-            <li><strong>Seychelles</strong> - Tourism Worker Circles</li>
+            <li><strong>Madagascar</strong> - Tontines</li>
+            <li><strong>Comoros</strong> - Tontines</li>
           </ul>
 
           <h3>Regional Specializations</h3>
