@@ -690,7 +690,16 @@ export default function Home() {
 
           <main>
             {/* ===================== HERO ===================== */}
-            <HeroStage id="main">
+            <HeroStage
+              id="main"
+              globeStrings={{
+                alsoCalled: t('landing.globe.alsoCalled'),
+                nearby: t('landing.globe.nearby'),
+                readMore: t('landing.globe.readMore'),
+                hintHover: t('landing.globe.hintHover'),
+                hintTouch: t('landing.globe.hintTouch'),
+              }}
+            >
               <div className="mx-auto flex h-full max-w-[1100px] flex-col items-center px-5 pt-[calc(52px+8svh)] text-center sm:px-8 md:pt-[calc(52px+10svh)]">
                 <p className="rise" style={{ '--d': '60ms' } as CSSProperties}>
                   <span className="sr-only">{t('landing.heritageAlso')}</span>

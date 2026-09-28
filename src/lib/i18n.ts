@@ -125,6 +125,11 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'nav.notifications': 'Notifications',
     // Landing page
     'landing.eyebrow': 'Rotating savings circles — for the global diaspora',
+    'landing.globe.alsoCalled': 'Also called {names}',
+    'landing.globe.nearby': 'Nearby: {names}',
+    'landing.globe.readMore': 'Read about it',
+    'landing.globe.hintHover': 'Hover the globe to see what each place calls its circle',
+    'landing.globe.hintTouch': 'Tap the globe to see what each place calls its circle',
     'landing.heroTitle':
       'The savings circle your family already trusts — now with rules nobody can quietly break.',
     'landing.heroSubtitle':
@@ -619,6 +624,11 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'nav.notifications': 'Notifications',
     // Page d'accueil
     'landing.eyebrow': "Cercles d'épargne tournante — pour la diaspora mondiale",
+    'landing.globe.alsoCalled': 'Aussi appelé {names}',
+    'landing.globe.nearby': 'À proximité : {names}',
+    'landing.globe.readMore': 'En savoir plus',
+    'landing.globe.hintHover': 'Survolez le globe pour découvrir le nom local de chaque cercle',
+    'landing.globe.hintTouch': 'Touchez le globe pour découvrir le nom local de chaque cercle',
     'landing.heroTitle':
       "Le cercle d'épargne auquel votre famille fait déjà confiance — désormais avec des règles que personne ne peut contourner en silence.",
     'landing.heroSubtitle':
