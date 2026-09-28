@@ -1,11 +1,12 @@
-import { useRef, type ReactNode } from 'react';
+import { useRef, useState, type ReactNode } from 'react';
 import dynamic from 'next/dynamic';
-import { motion, useScroll, useTransform } from 'framer-motion';
+import { motion, useMotionValueEvent, useScroll, useTransform } from 'framer-motion';
 import { useReducedMotionAfterMount } from './motion';
+import type { GlobeStrings } from './CirclesGlobe';
 
 // Browser-only and lazy: three.js stays out of SSR and the critical path, so
 // the headline paints (and animates in via CSS) before any WebGL arrives.
-const DiasporaMeridian = dynamic(() => import('./DiasporaMeridian'), {
+const CirclesGlobe = dynamic(() => import('./CirclesGlobe'), {
   ssr: false,
   loading: () => null,
 });
@@ -22,9 +23,11 @@ const DiasporaMeridian = dynamic(() => import('./DiasporaMeridian'), {
 export default function HeroStage({
   id,
   children,
+  globeStrings,
 }: {
   id?: string;
   children: ReactNode;
+  globeStrings: GlobeStrings;
 }) {
   const ref = useRef<HTMLElement>(null);
   const reduce = useReducedMotionAfterMount();
@@ -38,6 +41,11 @@ export default function HeroStage({
   const copyScale = useTransform(scrollYProgress, [0, 0.6], [1, 0.94]);
   // The warm horizon glow brightens as the planet clears the fold.
   const glowOpacity = useTransform(scrollYProgress, [0, 0.7], [0.4, 0.75]);
+  // The copy sits over the globe. Its box lets the pointer through to the
+  // planet and only its links and buttons catch it — and once the copy has
+  // faded out, not even those, so the risen globe is fully interactive.
+  const [copyLive, setCopyLive] = useState(true);
+  useMotionValueEvent(copyOpacity, 'change', (value) => setCopyLive(value > 0.08));
 
   return (
     <section
@@ -62,7 +70,7 @@ export default function HeroStage({
         {/* Always the same progress value: swapping the prop would tear down
             and rebuild the WebGL scene. The globe reads reduced motion itself
             and renders one settled frame. */}
-        <DiasporaMeridian progress={scrollYProgress} />
+        <CirclesGlobe progress={scrollYProgress} strings={globeStrings} />
 
         {/* Keep the copy crisp: a soft dark vignette under the text column. */}
         <div
@@ -75,7 +83,9 @@ export default function HeroStage({
         />
 
         <motion.div
-          className="relative z-10 h-full will-change-transform"
+          className={`pointer-events-none relative z-10 h-full will-change-transform ${
+            copyLive || reduce ? '[&_a]:pointer-events-auto [&_button]:pointer-events-auto' : ''
+          }`}
           // Reduced motion passes explicit rest values rather than dropping
           // the style prop: framer would otherwise leave the last scrubbed
           // inline values on the element.
