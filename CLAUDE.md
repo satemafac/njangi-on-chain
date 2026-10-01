@@ -361,9 +361,9 @@ publish runbook below is separate (it ships contracts, not the web app).
      before expiry (tracked via `walrus_end_epoch` in Postgres).
 4. Vercel runs `next build`; the active Sui network is `NEXT_PUBLIC_SUI_NETWORK`.
 
-On Vercel the cron functions replace the standalone Heroku worker dyno described
-under "Cycle-finalized WhatsApp notifier" below — that section is retained only
-for the legacy worker-process deployment.
+Heroku is retired: Vercel is the only deploy target. The `Procfile`,
+`.slugignore`, root Dockerfiles and Heroku runbooks were deleted on
+2026-10-01, and the Vercel crons above replaced the old worker dynos.
 
 **Publish runbook (testnet)**:
 1. `npm run validate:move-network` — Move.toml byte-equal to canonical
@@ -412,22 +412,18 @@ the deployer key and rewrites `Published.toml` itself.
 inits if the env file got out of sync. Skips inits for any registry env
 var that's already populated, so it's safe to re-run.
 
-**Cycle-finalized WhatsApp notifier** (legacy worker-dyno path; superseded by
-the Vercel `/api/cron/cycle-finalized` job on the Vercel deploy above):
-- Worker script: `scripts/cycle-finalized-notifier.mjs`. Launches via
-  `npm run notifier:cycle-finalized` or the `notifier` process in
-  `Procfile`. Polls `CycleFinalized` events every `POLL_INTERVAL_MS`
-  (default 60s), persists its cursor to `.cycle-finalized-cursor.json`
-  (git-ignored), and POSTs to `/api/whatsapp/notify/your-turn` for each
-  new recipient.
-- Required env on the worker dyno:
-  `PACKAGE_ID`, `NOTIFY_ENDPOINT` (points at the web dyno),
-  `INTERNAL_NOTIFY_SECRET` (must match the web dyno),
+**Cycle-finalized WhatsApp notifier** (deprecated local-dev poller; production
+runs the same logic as the Vercel `/api/cron/cycle-finalized` job above):
+- Script: `scripts/cycle-finalized-notifier.mjs`, run by hand against a dev
+  server with `npm run notifier:cycle-finalized`; never deploy it as a
+  worker. Polls `CycleFinalized` events every `POLL_INTERVAL_MS`
+  (default 60s), persists its cursor (Postgres when `DATABASE_URL` is set,
+  else the git-ignored `.cycle-finalized-cursor.json`), and POSTs to
+  `/api/whatsapp/notify/your-turn` for each new recipient.
+- Required env: `PACKAGE_ID`, `NOTIFY_ENDPOINT` (full URL of the notify
+  route), `INTERNAL_NOTIFY_SECRET` (must match the app's),
   `NETWORK` (`testnet`/`mainnet`), `SUI_RPC_URL` (optional override),
   `COIN_DECIMALS`, `COIN_SYMBOL`.
-- Deploying on Heroku: `heroku ps:scale notifier=1 -a <app>` after pushing
-  this Procfile. Rotate `INTERNAL_NOTIFY_SECRET` by setting the new value
-  on both the web and notifier dynos in the same release.
 
 **Compliance attestor console**:
 - Page: `/admin/compliance`. Uses the Phase 2 client-side signer, so the
