@@ -32,11 +32,12 @@ Use these network-specific public keys:
 - `NEXT_PUBLIC_MAINNET_WHATSAPP_PACKAGE_ID`
 - `NEXT_PUBLIC_TESTNET_WHATSAPP_REGISTRY_ID`
 - `NEXT_PUBLIC_MAINNET_WHATSAPP_REGISTRY_ID`
-- `NEXT_PUBLIC_ENOKI_TESTNET`
-- `NEXT_PUBLIC_ENOKI_MAINNET`
 
 Keep server/runtime keys unprefixed:
 
+- `ENOKI_API_KEY_TESTNET`, `ENOKI_API_KEY_MAINNET`: the Enoki private key that
+  fetches zkLogin salts and zkProofs. Never give it a `NEXT_PUBLIC_` prefix;
+  Next.js inlines those values into the browser bundle.
 - `WHATSAPP_*`
 - `DATABASE_URL`
 - `BACKEND_AUTH_TOKEN`
@@ -53,7 +54,7 @@ The app still tolerates these as one-release shims and warns when it uses them:
 - `NEXT_PUBLIC_WHATSAPP_PACKAGE_ID`
 - `NEXT_PUBLIC_WHATSAPP_REGISTRY_ID`
 - `SUI_WHATSAPP_LINKS_REGISTRY_ID`
-- `NEXT_PUBLIC_ENOKI`
+- `NEXT_PUBLIC_ENOKI_TESTNET`, `NEXT_PUBLIC_ENOKI_MAINNET`, `NEXT_PUBLIC_ENOKI`
 - `NEXT_PUBLIC_SUI_RPC_URL`
 - `NEXT_PUBLIC_SUI_GRAPHQL_URL`
 - `SUI_GRAPHQL_URL`
@@ -62,6 +63,12 @@ The app still tolerates these as one-release shims and warns when it uses them:
 
 If a canonical key and a legacy alias are both set with different values, startup fails.
 
+The three `NEXT_PUBLIC_ENOKI*` aliases are more than old names. Next.js
+inlines their values into the browser bundle, so a key stored in one is public.
+`npm run validate:env` fails while any of them holds an `enoki_private_*` key.
+Move the key to `ENOKI_API_KEY_*`, rotate it in the Enoki portal (a new key in
+the same Enoki app keeps every address), then delete the alias.
+
 ## Hosted environment (Vercel)
 
 The app deploys on **Vercel**; production Postgres is **Neon**. There is no
@@ -69,8 +76,10 @@ per-app config-sync script — set environment variables directly in the Vercel
 project dashboard (Project → Settings → Environment Variables).
 
 - Server-only secrets (`ZKLOGIN_SECRET`, `WALRUS_PII_MASTER_KEY`,
-  `INTERNAL_NOTIFY_SECRET`, `CRON_SECRET`, ramp secrets, etc.) must **not**
-  carry the `NEXT_PUBLIC_` prefix, so Next.js keeps them off the client bundle.
+  `INTERNAL_NOTIFY_SECRET`, `CRON_SECRET`,
+  `ENOKI_API_KEY_TESTNET`/`ENOKI_API_KEY_MAINNET`, ramp secrets, etc.) must
+  **not** carry the `NEXT_PUBLIC_` prefix, so Next.js keeps them off the client
+  bundle.
 - `NEXT_PUBLIC_*` values must be present at build time, before `next build`.
 - Cron jobs (your-turn nudges, circle-event relays, Walrus renewal) are
   declared in [`vercel.json`](/Volumes/Developing/njangi-on-chain/vercel.json)

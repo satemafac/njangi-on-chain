@@ -264,9 +264,10 @@ await whatsappService.sendMessage("+1234567890",
 ## Environment Variables (Enoki Integration)
 
 ```env
-# Enoki Service (Primary)
-NEXT_PUBLIC_ENOKI_TESTNET=your_testnet_enoki_api_key
-NEXT_PUBLIC_ENOKI_MAINNET=your_mainnet_enoki_api_key
+# Enoki Service (Primary). Server-only: a NEXT_PUBLIC_ name would put the
+# private key in the browser bundle.
+ENOKI_API_KEY_TESTNET=your_testnet_enoki_api_key
+ENOKI_API_KEY_MAINNET=your_mainnet_enoki_api_key
 
 # WhatsApp Business API
 WHATSAPP_ACCESS_TOKEN=your_whatsapp_token
