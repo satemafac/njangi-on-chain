@@ -196,7 +196,10 @@ Frontend → zkLogin API (/api/zkLogin) → Move Contract → Event Parsing → 
 Key environment variables:
 - `NEXT_PUBLIC_PACKAGE_ID`: Auto-updated by build script
 - `ZKLOGIN_SECRET`: Session encryption
-- Various API keys for Cetus, NAVI, zkLogin services
+- `ENOKI_API_KEY_TESTNET`/`ENOKI_API_KEY_MAINNET`: Enoki key for zkLogin salts
+  and zkProofs (server-only; the deprecated `NEXT_PUBLIC_ENOKI_*` names put it
+  in the browser bundle)
+- Various API keys for Cetus, NAVI
 
 ## Claude Code Skills
 
