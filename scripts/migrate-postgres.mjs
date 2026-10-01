@@ -4,8 +4,8 @@
 // `CREATE INDEX IF NOT EXISTS`), so re-runs are safe.
 //
 // Tables consolidated here:
-//   1. salts                          (src/services/postgres-adapter.ts)
-//   2. recovery_codes                 (src/services/postgres-adapter.ts)
+//   1. salts                          (legacy; scripts/process-deletion-request.mjs)
+//   2. recovery_codes                 (legacy; scripts/process-deletion-request.mjs)
 //   3. join_requests                  (src/services/database-service.ts)
 //   4. mainnet_signups                (src/services/mainnet-signup-database.ts)
 //   5. whatsapp_phone_index           (src/lib/whatsapp-link-index.ts)
@@ -75,6 +75,10 @@ const pool = new pg.Pool({
 // rest. Names are used for the per-table log line.
 const STATEMENTS = [
   {
+    // salts + recovery_codes are LEGACY. They belonged to the self-hosted
+    // salt service, retired when salts moved to Enoki (2025-05-24, 11b5e7b)
+    // and since deleted; nothing writes them now. They stay because
+    // scripts/process-deletion-request.mjs still erases any legacy rows.
     name: 'salts',
     sql: `CREATE TABLE IF NOT EXISTS salts (
             id SERIAL PRIMARY KEY,

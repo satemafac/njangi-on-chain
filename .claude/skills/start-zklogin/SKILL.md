@@ -14,7 +14,7 @@ Start the Docker-based zkLogin prover services for development.
 
 - Docker containers start successfully
 - Prover service responds on port 5001
-- Salt service responds on port 5003
+- Prover frontend responds on port 5003 (salts come from Enoki; there is no local salt service)
 - No connection errors in logs
 - Ready to handle zkLogin authentication flows
 
