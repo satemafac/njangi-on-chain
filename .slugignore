@@ -17,10 +17,7 @@ out-static/
 CLAUDE.md
 docs/
 DeFi_Integration_Research.md
-ENOKI_MIGRATION.md
 stablecoin_notes.md
-zklogin-services.md
-ZKLOGIN-SERVICES-README.md
 
 # Database and service files
 salt-database.json
@@ -30,8 +27,6 @@ data/
 test-*.js
 test-*.json
 test-*.cjs
-db-check.cjs
-package-db-check.json
 download-*.sh
 start-*.sh
 *.config.yaml
@@ -61,7 +56,6 @@ Move.lock
 
 # ZKLogin utilities
 zklogin-utils/
-zklogin-switch.sh
 heroku-zklogin-services.sh
 
 # Other services
