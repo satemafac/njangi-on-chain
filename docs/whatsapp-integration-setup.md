@@ -74,11 +74,11 @@ The WhatsApp integration allows users to:
 5. This is your `WHATSAPP_VERIFY_TOKEN`
 
 ### 3.2 Subscribe to Webhook Fields
-Subscribe to these webhook fields:
-- `messages`: For incoming messages
-- `message_deliveries`: For delivery status
-- `message_reads`: For read receipts
-- `messaging_postbacks`: For button clicks
+Subscribe to the `messages` field. It carries incoming messages, button and
+list replies, and the sent, delivered and read statuses of the messages the
+app sends. `message_deliveries`, `message_reads` and `messaging_postbacks` are
+Messenger webhook fields for Facebook Pages and don't exist for WhatsApp; see
+[WhatsApp API setup](whatsapp-api-setup.md#step-2-configure-webhook-in-meta-console).
 
 ### 3.3 Get App Secret
 1. Go to App Settings > Basic
