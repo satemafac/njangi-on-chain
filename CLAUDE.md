@@ -197,8 +197,8 @@ Key environment variables:
 - `NEXT_PUBLIC_PACKAGE_ID`: Auto-updated by build script
 - `ZKLOGIN_SECRET`: Session encryption
 - `ENOKI_API_KEY_TESTNET`/`ENOKI_API_KEY_MAINNET`: Enoki key for zkLogin salts
-  and zkProofs (server-only; the deprecated `NEXT_PUBLIC_ENOKI_*` names put it
-  in the browser bundle)
+  and zkProofs (server-only; the old `NEXT_PUBLIC_ENOKI*` names put it in the
+  browser bundle, are no longer read, and fail `npm run validate:env`)
 - Various API keys for Cetus, NAVI
 
 ## Claude Code Skills
