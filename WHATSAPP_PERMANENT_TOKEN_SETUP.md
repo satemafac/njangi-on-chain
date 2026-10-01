@@ -25,53 +25,64 @@ Temporary access tokens generated in Meta Dev Dashboard expire after 24 hours, c
 1. Go to **Meta Business Suite** → **WhatsApp** → **Getting Started**
 2. Select your WhatsApp Business Account
 3. Add the System User with the **Admin** role
-4. The token can now access your phone number ID (`881828818344477`)
+4. The token can now access your phone number ID (the value of `WHATSAPP_PHONE_NUMBER_ID`)
 
-### Step 4: Update Heroku Environment Variable
+### Step 4: Update the Vercel Environment Variable
+
+Production reads the token from `WHATSAPP_ACCESS_TOKEN` in the Vercel project.
+It is a server-only variable: never copy the token into a `NEXT_PUBLIC_`
+variable, because Next.js inlines those into the browser bundle.
+
+1. In the Vercel project, open **Settings → Environment Variables**.
+2. Edit `WHATSAPP_ACCESS_TOKEN` in the **Production** environment, paste the
+   new token, keep it **Sensitive**, and save. If Preview or Development also
+   lists the variable, update it there too.
+3. Redeploy production. Vercel applies environment variable changes only to
+   deployments built after the change: open **Deployments**, then the current
+   production deployment's **⋯** menu, and choose **Redeploy**.
+
+The same steps with the CLI. `vercel env update` prompts for the value, so the
+token never lands in your shell history:
 
 ```bash
-# Copy your new permanent token
-heroku config:set WHATSAPP_ACCESS_TOKEN="your-permanent-token-here" -a njangi-on-chain
+# See which environments hold the variable (Sensitive values stay hidden)
+vercel env ls
 
-# Restart the app
-heroku restart -a njangi-on-chain
+# Replace the Production value
+vercel env update WHATSAPP_ACCESS_TOKEN production --sensitive
 
-# Verify it's set correctly
-heroku config -a njangi-on-chain | grep WHATSAPP_ACCESS_TOKEN
+# Rebuild the current production deployment so it picks up the new value
+vercel redeploy <production-deployment-url>
 ```
 
-## Alternative: Get Token via API
-
-If you have access to your app's token, you can also get a permanent token via the Graph API:
-
-```bash
-curl -X POST \
-  "https://graph.instagram.com/v21.0/{YOUR_BUSINESS_ACCOUNT_ID}/access_tokens?business_app={APP_ID}&access_token={EXISTING_TOKEN}"
-```
-
-## Current Heroku Setup
-- **Phone Number ID**: `881828818344477`
-- **WhatsApp Business Account ID**: `4338352046412081`
-- **Current Token Status**: ❌ Expired (temporary test token)
+[docs/whatsapp-api-setup.md](docs/whatsapp-api-setup.md#for-production-vercel)
+lists the other WhatsApp variables and the Vercel environments that need them.
 
 ## Testing the Permanent Token
 
-Once set, test it:
+1. **Check the token itself.** This prints the business number and its
+   verified name. Error 190 means the token is invalid or expired:
 
-```bash
-# Health check
-curl https://njangionchain.com/api/whatsapp/health
+   ```bash
+   read -rs WHATSAPP_ACCESS_TOKEN   # paste the token; it is not echoed or saved to history
+   curl -s "https://graph.facebook.com/v23.0/<phone-number-id>?fields=display_phone_number,verified_name" \
+     -H "Authorization: Bearer $WHATSAPP_ACCESS_TOKEN"
+   ```
 
-# Manual notification test
-curl -X POST https://njangionchain.com/api/whatsapp/notify-circle-link \
-  -H "Content-Type: application/json" \
-  -d '{
-    "phoneNumber": "+13019790161",
-    "circleId": "0x1639fcff0c0f7a48ba0a1aa9f727985f1c9360d399bd8210dc99f26c07237d8e",
-    "adminAddress": "0xe833deaa9c038ac2edd397323ed5dbde1e622aadfd0d526332a214a31f9de17d",
-    "type": "confirmation"
-  }'
-```
+   Meta's [Access Token Debugger](https://developers.facebook.com/tools/debug/accesstoken/)
+   shows when a token expires. A permanent token has no expiry date.
+
+2. **Check production.** From a WhatsApp number that can message the business
+   number, send `help`. The production webhook (`/api/whatsapp/webhook`)
+   answers with the channel's help text, sent with `WHATSAPP_ACCESS_TOKEN`.
+   No reply? Open the project's **Logs** tab in Vercel, filter to
+   `/api/whatsapp/webhook`, and look for:
+   - `Failed to send help message` with error code 190 in the body:
+     production still has the old token. Check the Production value, and
+     check that you redeployed.
+   - `Rejected webhook with missing or invalid signature`: the request never
+     reached the reply. `WHATSAPP_APP_SECRET` doesn't match the Meta app's
+     secret.
 
 ## Error Reference
 
@@ -92,7 +103,7 @@ curl -X POST https://njangionchain.com/api/whatsapp/notify-circle-link \
 ## Next Steps
 
 1. ✅ Get permanent access token from Meta Business Suite
-2. ✅ Set `WHATSAPP_ACCESS_TOKEN` on Heroku
-3. ✅ Restart app
-4. ✅ Test circle linking - should now receive WhatsApp message
+2. ✅ Set `WHATSAPP_ACCESS_TOKEN` in the Vercel Production environment
+3. ✅ Redeploy production
+4. ✅ Send `help` to the business number and get the reply
 
