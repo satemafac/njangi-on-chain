@@ -5,7 +5,8 @@
 //
 // What deletion can and cannot do mirrors the Privacy Policy (Section 9):
 // off-chain rows are deleted / cryptographically erased; on-chain data is
-// permanent and unaffected.
+// permanent and unaffected. Wallet access is unaffected too: Enoki supplies
+// the zkLogin salt at every sign-in, so no row we delete derives an address.
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
@@ -26,12 +27,13 @@ const STRINGS: Record<LegalLocale, Record<string, string>> = {
     home: 'Home',
     title: 'Data Deletion Request',
     intro:
-      'Use this form to ask us to delete the personal data we hold about you off-chain (OAuth identifiers, email, wallet salt record, recovery-code hashes, WhatsApp routing data, join requests, preferences). We verify each request before acting on it and respond within the legally required time.',
+      'Use this form to ask us to delete the personal data we hold about you off-chain (OAuth identifiers, email, sign-in sessions, WhatsApp routing data, join requests, preferences). We verify each request before acting on it and respond within the legally required time.',
     chainTitle: 'What deletion cannot do',
     chainBody:
       'Data on the public Sui blockchain — your wallet address, circle membership, and transaction history — is permanent and cannot be deleted by us or anyone else. Deletion severs the link between that address and the identity data we hold. Records we must keep by law (e.g. billing and legal-acceptance records) are retained.',
-    walletWarning:
-      'Warning: deleting your wallet salt record may make your wallet unrecoverable through this Service. Withdraw or transfer funds before requesting deletion.',
+    walletTitle: 'Your wallet keeps working',
+    walletBody:
+      'We do not keep the salt that determines your wallet address beyond your sign-in session: our zkLogin provider, Enoki, supplies it each time you sign in. Deleting your data therefore does not change your address or lock you out of it, and it does not move, freeze, or withdraw any funds. If you sign in again later with the same social account, you reach the same wallet.',
     emailLabel: 'Account email address',
     emailPlaceholder: 'The email of the Google / Facebook / Apple account you sign in with',
     addressLabel: 'Sui wallet address (optional)',
@@ -39,7 +41,7 @@ const STRINGS: Record<LegalLocale, Record<string, string>> = {
     detailsLabel: 'Additional details (optional)',
     detailsPlaceholder: 'Anything that helps us identify your data, or specific items to delete.',
     confirmLabel:
-      'I understand that on-chain data cannot be deleted, that deleting my wallet salt record may make my wallet unrecoverable through this Service, and I want to proceed.',
+      'I understand that on-chain data cannot be deleted and that records you must keep by law are retained, and I want to proceed.',
     submit: 'Submit deletion request',
     submitting: 'Submitting…',
     successTitle: 'Request received',
@@ -57,12 +59,13 @@ const STRINGS: Record<LegalLocale, Record<string, string>> = {
     home: 'Accueil',
     title: 'Demande de suppression des données',
     intro:
-      "Utilisez ce formulaire pour nous demander de supprimer les données personnelles que nous détenons hors chaîne (identifiants OAuth, courriel, sel cryptographique du portefeuille, empreintes des codes de récupération, données d'acheminement WhatsApp, demandes d'adhésion, préférences). Nous vérifions chaque demande avant d'agir et répondons dans le délai légal.",
+      "Utilisez ce formulaire pour nous demander de supprimer les données personnelles que nous détenons hors chaîne (identifiants OAuth, courriel, sessions de connexion, données d'acheminement WhatsApp, demandes d'adhésion, préférences). Nous vérifions chaque demande avant d'agir et répondons dans le délai légal.",
     chainTitle: 'Ce que la suppression ne peut pas faire',
     chainBody:
       "Les données sur la blockchain publique Sui — votre adresse, votre appartenance aux cercles et votre historique de transactions — sont permanentes et ne peuvent être supprimées par personne. La suppression rompt le lien entre cette adresse et les données d'identité que nous détenons. Les registres que la loi nous impose de conserver (facturation, acceptations juridiques) sont conservés.",
-    walletWarning:
-      'Attention : la suppression du sel cryptographique de votre portefeuille peut rendre celui-ci irrécupérable via ce Service. Retirez ou transférez vos fonds avant de demander la suppression.',
+    walletTitle: 'Votre portefeuille continue de fonctionner',
+    walletBody:
+      "Nous ne conservons pas, au-delà de votre session de connexion, le sel qui détermine l'adresse de votre portefeuille : notre prestataire zkLogin, Enoki, le fournit à chaque connexion. La suppression de vos données ne modifie donc pas votre adresse, ne vous en bloque pas l'accès, et ne déplace, ne gèle ni ne retire aucun fonds. Si vous vous reconnectez plus tard avec le même compte social, vous retrouvez le même portefeuille.",
     emailLabel: 'Adresse courriel du compte',
     emailPlaceholder: 'Le courriel du compte Google / Facebook / Apple utilisé pour vous connecter',
     addressLabel: 'Adresse de portefeuille Sui (facultatif)',
@@ -70,7 +73,7 @@ const STRINGS: Record<LegalLocale, Record<string, string>> = {
     detailsLabel: 'Précisions (facultatif)',
     detailsPlaceholder: 'Tout élément qui nous aide à identifier vos données, ou les éléments précis à supprimer.',
     confirmLabel:
-      "Je comprends que les données sur la chaîne ne peuvent pas être supprimées, que la suppression du sel de mon portefeuille peut le rendre irrécupérable via ce Service, et je souhaite continuer.",
+      "Je comprends que les données sur la chaîne ne peuvent pas être supprimées et que les registres que vous devez conserver en vertu de la loi sont maintenus, et je souhaite continuer.",
     submit: 'Envoyer la demande de suppression',
     submitting: 'Envoi…',
     successTitle: 'Demande reçue',
@@ -232,8 +235,9 @@ export default function DataDeletionPage() {
             <p className="mt-2 text-sm leading-relaxed text-[#556070]">{t.chainBody}</p>
           </div>
 
-          <div className="mt-4 rounded-xl border border-amber-400 bg-amber-50 p-4 text-sm leading-relaxed text-amber-900">
-            {t.walletWarning}
+          <div className="mt-4 rounded-xl border border-[#ddd5ca] bg-white p-4">
+            <h2 className="text-sm font-semibold text-[#111827]">{t.walletTitle}</h2>
+            <p className="mt-2 text-sm leading-relaxed text-[#556070]">{t.walletBody}</p>
           </div>
 
           {state.kind === 'success' ? (
