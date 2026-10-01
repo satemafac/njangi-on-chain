@@ -77,27 +77,54 @@ WHATSAPP_WEBHOOK_URL=https://yourdomain.com/api/whatsapp/webhook
 WHATSAPP_API_VERSION=v21.0
 ```
 
-### For Production (Heroku/Vercel)
+### For Production (Vercel)
 
-**Set environment variables in your hosting platform:**
+Production runs on Vercel. Add these in the Vercel project under
+**Settings → Environment Variables**, in the **Production** environment:
 
 ```bash
-# Heroku
-heroku config:set WHATSAPP_PHONE_NUMBER_ID=your_phone_number_id
-heroku config:set WHATSAPP_ACCESS_TOKEN=your_access_token
-heroku config:set WHATSAPP_VERIFY_TOKEN=your_verify_token
-heroku config:set WHATSAPP_APP_SECRET=your_app_secret
-heroku config:set WHATSAPP_WEBHOOK_URL=https://your-app.herokuapp.com/api/whatsapp/webhook
-heroku config:set WHATSAPP_API_VERSION=v21.0
-
-# Vercel (add to Vercel dashboard > Settings > Environment Variables)
 WHATSAPP_PHONE_NUMBER_ID=your_phone_number_id
 WHATSAPP_ACCESS_TOKEN=your_access_token
 WHATSAPP_VERIFY_TOKEN=your_verify_token
 WHATSAPP_APP_SECRET=your_app_secret
-WHATSAPP_WEBHOOK_URL=https://your-app.vercel.app/api/whatsapp/webhook
+WHATSAPP_WEBHOOK_URL=https://njangionchain.com/api/whatsapp/webhook
 WHATSAPP_API_VERSION=v21.0
 ```
+
+The CLI works too. It prompts for the value, so a secret never lands in your
+shell history:
+
+```bash
+vercel env add WHATSAPP_ACCESS_TOKEN production --sensitive
+```
+
+- **Keep these names server-only.** Never give a WhatsApp secret a
+  `NEXT_PUBLIC_` name: Next.js inlines `NEXT_PUBLIC_*` values into the browser
+  bundle, where anyone can read them.
+- **Mark the access token, app secret and verify token Sensitive.** Vercel
+  never shows a Sensitive value again after you save it.
+- **Production is the environment that needs them.** Meta calls the
+  production webhook, and Vercel runs cron jobs (the WhatsApp notifiers) only
+  on production. Preview URLs sit behind Vercel Authentication, so Meta can't
+  reach them. Add a variable to Preview only if preview deployments should
+  send real WhatsApp messages.
+- **Redeploy after every change.** Vercel applies environment variable
+  changes only to deployments built after the change. Open **Deployments**,
+  then the current production deployment's **⋯** menu, and choose
+  **Redeploy** (CLI: `vercel redeploy <production-deployment-url>`).
+- **The registry ids are public, build-time values.**
+  `NEXT_PUBLIC_TESTNET_WHATSAPP_PACKAGE_ID`,
+  `NEXT_PUBLIC_TESTNET_WHATSAPP_REGISTRY_ID` and their `MAINNET` pair identify
+  the Move package and the on-chain `WhatsAppLinksRegistry` object.
+  `move/build_and_test.sh` and `scripts/bootstrap-package.mjs` write them to
+  `.env.local` when you publish. Whenever they change, copy the active
+  network's pair into Production and Preview, then redeploy: Next.js inlines
+  `NEXT_PUBLIC_*` values at build time, so the running site keeps the old ids
+  until it is rebuilt.
+
+`.env.example` has the full variable list with defaults. See
+[docs/environment.md](environment.md#hosted-environment-vercel) for the rest
+of the Vercel setup.
 
 ---
 
@@ -107,7 +134,10 @@ WHATSAPP_API_VERSION=v21.0
 
 Your webhook endpoint must be publicly accessible:
 - **Development**: Use ngrok: `ngrok http 3000`
-- **Production**: Deploy to Heroku/Vercel first
+- **Production**: `https://njangionchain.com/api/whatsapp/webhook`, served by
+  the Vercel deployment. Use the apex host: `www.njangionchain.com` answers
+  with a 308 redirect. Preview URLs won't work either, because they sit behind
+  Vercel Authentication.
 
 ### Step 2: Configure Webhook in Meta Console
 
@@ -124,7 +154,8 @@ Your webhook endpoint must be publicly accessible:
 ### Step 3: Test Webhook
 
 1. **Click "Verify and Save"** in Meta Console
-2. **Check your app logs** to see webhook verification
+2. **Check your app logs** to see webhook verification (on Vercel: the
+   project's **Logs** tab, filtered to `/api/whatsapp/webhook`)
 3. **Send a test message** to your WhatsApp number
 4. **Verify message appears** in your logs
 
@@ -222,6 +253,7 @@ git status
 - [ ] Added and verified phone number
 - [ ] Got all 6 API credentials
 - [ ] Added credentials to .env file
+- [ ] Set the production variables in Vercel and redeployed
 - [ ] Deployed app with public webhook URL
 - [ ] Configured webhook in Meta Console
 - [ ] Tested webhook verification
