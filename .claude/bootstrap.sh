@@ -37,7 +37,8 @@ backup() {
 # --- Skills: symlink project-specific skills into ~/.claude/skills ---
 echo "📚 Setting up project skills..."
 
-# Remove old njangi-specific symlinks first
+# Remove old njangi-specific symlinks first. start-zklogin was retired with the
+# local Docker prover; it stays listed so a re-run removes its dangling link.
 if [[ -d "${HOME_CLAUDE_DIR}/skills" ]]; then
   for skill in test-contracts build-deploy verify-circle start-zklogin check-env deploy-testnet; do
     skill_path="${HOME_CLAUDE_DIR}/skills/${skill}"
@@ -118,15 +119,13 @@ echo "📋 Available skills:"
 echo "   /test-contracts    - Run Move contract tests"
 echo "   /build-deploy      - Build and deploy contracts"
 echo "   /verify-circle     - Check circle state on-chain"
-echo "   /start-zklogin     - Start zkLogin services"
 echo "   /check-env         - Validate environment"
 echo "   /deploy-testnet    - Full testnet deployment"
 echo ""
 echo "🔧 Next steps:"
 echo "   1. Restart Claude Code to load new skills"
 echo "   2. Run /check-env to verify configuration"
-echo "   3. Run /start-zklogin to start development services"
-echo "   4. See CLAUDE.md for detailed workflow guide"
+echo "   3. See CLAUDE.md for detailed workflow guide"
 echo ""
 
 if [[ -d "$BACKUP_DIR" ]]; then

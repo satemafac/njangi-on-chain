@@ -9,9 +9,10 @@ Validate environment configuration for njangi-on-chain development.
    - NEXT_PUBLIC_PACKAGE_ID
    - ZKLOGIN_SECRET
    - Database connection strings
-   - API keys for Cetus, NAVI, zkLogin services
+   - The active network's Enoki API key (server-only `ENOKI_API_KEY_TESTNET` / `ENOKI_API_KEY_MAINNET`)
+   - API keys for Cetus, NAVI
 3. Check that package IDs match deployed contracts
-4. Verify Docker services are configured
+4. Flag any `NEXT_PUBLIC_ENOKI*` variable: Next.js inlines it into the browser bundle, so it must never hold the Enoki key
 5. Report any missing or misconfigured variables
 
 ## Required Variables
@@ -23,7 +24,7 @@ Validate environment configuration for njangi-on-chain development.
 ### Services
 - Cetus API keys/endpoints
 - NAVI protocol addresses
-- zkLogin service configuration
+- Enoki API key: `ENOKI_API_KEY_TESTNET` / `ENOKI_API_KEY_MAINNET` (server-only)
 
 ### Database
 - SQLite/PostgreSQL connection strings
@@ -40,5 +41,5 @@ Validate environment configuration for njangi-on-chain development.
 ## Notes
 
 - Package ID updates automatically when deploying contracts
-- zkLogin services must be running (ports 5001, 5003)
+- zkLogin needs no local services: salts and zkProofs come from Enoki
 - Check CLAUDE.md for full environment setup instructions

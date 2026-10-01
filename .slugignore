@@ -37,7 +37,6 @@ wasp_config.yaml
 
 # Docker files (not needed for Heroku)
 Dockerfile*
-docker-compose.yml
 
 # Git and editor files
 .git/

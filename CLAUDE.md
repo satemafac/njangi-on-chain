@@ -53,15 +53,6 @@ npm start
 npm run lint
 ```
 
-### zkLogin Services (Docker)
-```bash
-# Start zkLogin prover services
-docker-compose up -d
-
-# Alternative: Local zkLogin services
-./start-zklogin-services.sh
-```
-
 ## Architecture Overview
 
 ### Core System Integration
@@ -128,7 +119,11 @@ Frontend → zkLogin API (/api/zkLogin) → Move Contract → Event Parsing → 
   from a tree that never contained v7's code is how upgrades get lost.
 
 **zkLogin Integration**:
-- Development uses Docker services (ports 5001, 5003)
+- Salts and zkProofs both come from Enoki: `src/services/enokiZkLoginService.ts`
+  calls `/v1/zklogin` (salt) and `/v1/zklogin/zkp` (proof). There is no local
+  prover or salt service to run; every sign-in, local or deployed, needs the
+  server-only `ENOKI_API_KEY_TESTNET`/`ENOKI_API_KEY_MAINNET` for the active
+  network.
 - zkLogin session state persists across OAuth flows
 - Address generation is deterministic based on social identity
 
@@ -149,7 +144,8 @@ Frontend → zkLogin API (/api/zkLogin) → Move Contract → Event Parsing → 
 ### Testing Strategy
 - Move contracts: `sui move test` for unit tests
 - Frontend: Uses real testnet integration for development
-- zkLogin: Docker services provide isolated auth environment
+- zkLogin: there is no isolated auth stack; every sign-in, local or E2E, calls
+  Enoki with the active network's key
 - Live E2E on production testnet follows `docs/e2e-browser-runbook.md` with
   three Google-signed-in accounts (admin, MEMBER-1, MEMBER-2 on circle
   `0xa3fada18…`). Hard-won rules:
@@ -209,11 +205,12 @@ Project-specific slash commands available in `.claude/skills/`:
 - `/test-contracts` - Run Move contract test suite
 - `/build-deploy` - Build and optionally deploy contracts
 - `/verify-circle` - Check circle state on-chain
-- `/start-zklogin` - Start Docker zkLogin services
 - `/check-env` - Validate environment configuration
 - `/deploy-testnet` - Full testnet deployment workflow
 
-(The yield module and its skill were retired in the Phase 1 compliance redesign.)
+(The yield module and its skill were retired in the Phase 1 compliance redesign.
+`/start-zklogin` went with the local Docker prover: Enoki serves salts and
+zkProofs.)
 
 ## Troubleshooting Guide
 
@@ -240,9 +237,14 @@ Project-specific slash commands available in `.claude/skills/`:
 ### Frontend Issues
 
 **zkLogin Not Working**:
-- Verify Docker services are running: `docker ps`
-- Check ports 5001, 5003 are not in use
-- Restart services: `docker-compose down && docker-compose up -d`
+- There is no local service to restart; salt and proof come from Enoki.
+  "Enoki API key is required" means the active network's
+  `ENOKI_API_KEY_TESTNET`/`ENOKI_API_KEY_MAINNET` is unset
+  (`npm run validate:env` checks it). "Enoki zklogin service error" (salt) and
+  "Enoki zkp service error" (proof) carry Enoki's status and response body.
+- Never "fix" a login by changing an OAuth client id or the Enoki application:
+  either one moves users to new addresses (see "Address-affecting
+  configuration" below).
 - Clear zkLogin session state in browser
 - Check ZKLOGIN_SECRET in .env.local
 
@@ -503,10 +505,9 @@ the Vercel `/api/cron/cycle-finalized` job on the Vercel deploy above):
 
 **Daily Development**:
 1. Pull latest: `git pull`
-2. Start zkLogin: `docker-compose up -d`
-3. Run dev server: `npm run dev`
-4. Check environment: `/check-env`
-5. Run tests before committing
+2. Run dev server: `npm run dev`
+3. Check environment: `/check-env`
+4. Run tests before committing
 
 **Making Changes**:
 1. Create feature branch
