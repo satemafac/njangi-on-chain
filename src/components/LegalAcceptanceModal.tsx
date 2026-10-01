@@ -11,6 +11,8 @@
 //    FR/EN toggle, one checkbox per document (no master checkbox), inline
 //    scrollable risk disclosure whose checkbox unlocks only after the
 //    reader reaches the end, and links opening the full pages in new tabs.
+//    On a version bump, each doc the user accepted before shows its "what
+//    changed" line (LEGAL_CHANGE_NOTES in src/lib/legal-acceptance.ts).
 //
 // Versions shown in the checkbox labels come from CURRENT_LEGAL_VERSIONS —
 // the same server-resolved constant /api/legal/accept records; the client
@@ -25,9 +27,11 @@ import {
   LEGAL_DOC_LABELS,
   LEGAL_DOC_ROUTES,
   LEGAL_DRAFT_NOTICE,
+  getLegalChangeNote,
   isLegalDocId,
   isLegalGateExemptPath,
   isLegalLocale,
+  legalDocsUpdatedSinceAcceptance,
   type LegalDocId,
   type LegalDocRender,
   type LegalLocale,
@@ -55,6 +59,7 @@ const UI_STRINGS: Record<
     submitError: string;
     retry: string;
     versionBumpNote: string;
+    changedLabel: string;
   }
 > = {
   en: {
@@ -79,6 +84,7 @@ const UI_STRINGS: Record<
     submitError: 'We could not record your acceptance. Nothing was saved — please retry.',
     retry: 'Retry',
     versionBumpNote: 'An updated version of the document(s) below requires your acceptance.',
+    changedLabel: 'What changed:',
   },
   fr: {
     title: 'Avant de commencer',
@@ -112,6 +118,7 @@ const UI_STRINGS: Record<
     retry: 'Réessayer',
     versionBumpNote:
       'Une version mise à jour du ou des documents ci-dessous requiert votre acceptation.',
+    changedLabel: 'Ce qui a changé :',
   },
 };
 
@@ -145,20 +152,28 @@ const FOCUSABLE_SELECTOR =
 export interface LegalAcceptanceModalProps {
   /** Docs whose current version is unaccepted — the only docs shown. */
   missing: LegalDocId[];
+  /**
+   * Docs among `missing` that this user accepted in an earlier version (a
+   * version bump, not a first acceptance). Each shows its "what changed"
+   * line. When omitted, a partial `missing` list counts as a bump, as before.
+   */
+  updated?: LegalDocId[];
   /** Called ONLY after /api/legal/accept returns 2xx (never optimistic). */
   onAccepted: () => void;
 }
 
 type RiskRenders = Record<LegalLocale, LegalDocRender>;
 
-export function LegalAcceptanceModal({ missing, onAccepted }: LegalAcceptanceModalProps) {
+export function LegalAcceptanceModal({ missing, updated, onAccepted }: LegalAcceptanceModalProps) {
   // Stable, canonically-ordered doc list for rendering + submission.
   const docs = useMemo(
     () => LEGAL_DOC_IDS.filter((doc) => missing.includes(doc)),
     [missing],
   );
   const needsRisk = docs.includes('risk');
-  const isVersionBump = docs.length < LEGAL_DOC_IDS.length;
+  const isVersionBump = updated
+    ? docs.some((doc) => updated.includes(doc))
+    : docs.length < LEGAL_DOC_IDS.length;
 
   const [lang, setLang] = useState<LegalLocale>('en');
   const [checked, setChecked] = useState<Record<LegalDocId, boolean>>({
@@ -372,6 +387,7 @@ export function LegalAcceptanceModal({ missing, onAccepted }: LegalAcceptanceMod
               const version = CURRENT_LEGAL_VERSIONS[doc];
               const isRisk = doc === 'risk';
               const riskCheckboxLocked = isRisk && !riskReadToEnd;
+              const changeNote = updated?.includes(doc) ? getLegalChangeNote(doc, lang) : null;
               return (
                 <section
                   key={doc}
@@ -395,6 +411,12 @@ export function LegalAcceptanceModal({ missing, onAccepted }: LegalAcceptanceMod
                   <p className="mt-1 text-xs leading-relaxed text-[#6b7280]">
                     {ui.summaries[doc]}
                   </p>
+                  {changeNote ? (
+                    <p className="mt-2 rounded-lg border border-[#e6ddd1] bg-[#fbfaf7] px-3 py-2 text-xs leading-relaxed text-[#374151]">
+                      <span className="font-semibold text-[#111827]">{ui.changedLabel}</span>{' '}
+                      {changeNote}
+                    </p>
+                  ) : null}
 
                   {isRisk ? (
                     <div className="mt-3">
@@ -487,10 +509,12 @@ export interface LegalAcceptanceGateProps {
 export function LegalAcceptanceGate({ active }: LegalAcceptanceGateProps) {
   const router = useRouter();
   const [missing, setMissing] = useState<LegalDocId[]>([]);
+  const [updated, setUpdated] = useState<LegalDocId[]>([]);
 
   useEffect(() => {
     if (!active) {
       setMissing([]);
+      setUpdated([]);
       return;
     }
     let cancelled = false;
@@ -508,6 +532,7 @@ export function LegalAcceptanceGate({ active }: LegalAcceptanceGateProps) {
         if (cancelled || !data?.success || data.allAccepted) return;
         const docs = Array.isArray(data.missing) ? data.missing.filter(isLegalDocId) : [];
         setMissing(docs);
+        setUpdated(legalDocsUpdatedSinceAcceptance(docs, data.required));
       } catch {
         // Network hiccup: fail open for this read.
         //
@@ -538,11 +563,13 @@ export function LegalAcceptanceGate({ active }: LegalAcceptanceGateProps) {
   return (
     <LegalAcceptanceModal
       missing={missing}
+      updated={updated}
       onAccepted={() => {
         // Funnel measurement only; the modal itself is unchanged (its UX is
         // fixed by docs/legal-drafts/ACCEPTANCE-GATE-SPEC.md).
         trackFunnel('legal_accepted');
         setMissing([]);
+        setUpdated([]);
       }}
     />
   );
