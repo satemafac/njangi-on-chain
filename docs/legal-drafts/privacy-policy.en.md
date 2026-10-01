@@ -1,6 +1,6 @@
 ---
 title: "Njangi On-Chain — Privacy Policy"
-version: 1.1.0
+version: 1.2.0
 effective_date: "{{EFFECTIVE_DATE}}"
 language: en
 ---
@@ -12,7 +12,7 @@ language: en
 
 # Privacy Policy
 
-**Version 1.0.0 — Effective {{EFFECTIVE_DATE}}**
+**Version 1.2.0 — Effective {{EFFECTIVE_DATE}}**
 
 This Privacy Policy explains how {{COMPANY_LEGAL_NAME}}, {{COMPANY_ADDRESS}} ("Njangi On-Chain", "we", "us") processes personal data when you use Njangi On-Chain (the "Service"). The Service is built to keep personal data to a minimum: we hold no private keys, we never see your card details, and the only personally identifying routing data we store off your device is encrypted so that we can destroy access to it on request.
 

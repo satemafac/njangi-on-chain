@@ -34,7 +34,11 @@ export const CURRENT_LEGAL_VERSIONS: Record<LegalDocId, string> = {
   terms: '1.0.0',
   // 1.1.0 (2026-07-05): named Vercel + Neon explicitly in the processor
   // table (GDPR transparency — roadmap A2/A4).
-  privacy: '1.1.0',
+  // 1.2.0 (2026-10-01): named Enoki (Mysten Labs) as the zkLogin salt and
+  // proof processor, dropped the retired salt-server and recovery-code
+  // claims, and stopped describing deletion as locking the wallet. Terms
+  // and risk changed in the same release WITHOUT a bump (owner's call).
+  privacy: '1.2.0',
   risk: '1.0.0',
 };
 

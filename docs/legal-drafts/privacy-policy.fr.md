@@ -1,6 +1,6 @@
 ---
 title: "Njangi On-Chain — Politique de Confidentialité"
-version: 1.1.0
+version: 1.2.0
 effective_date: "{{EFFECTIVE_DATE}}"
 language: fr
 ---
@@ -13,7 +13,7 @@ language: fr
 
 # Politique de Confidentialité
 
-**Version 1.0.0 — Date d'entrée en vigueur : {{EFFECTIVE_DATE}}**
+**Version 1.2.0 — Date d'entrée en vigueur : {{EFFECTIVE_DATE}}**
 
 La présente Politique de Confidentialité décrit la manière dont {{COMPANY_LEGAL_NAME}}, {{COMPANY_ADDRESS}} (« Njangi On-Chain », « nous ») traite vos données à caractère personnel lorsque vous utilisez Njangi On-Chain (le « Service »). Le Service est conçu pour réduire les données personnelles au strict minimum : nous ne détenons aucune clé privée, nous ne voyons jamais vos données de carte bancaire, et les seules données d'acheminement identifiantes que nous conservons hors de votre appareil sont chiffrées de sorte que nous puissions en détruire l'accès sur demande.
 
