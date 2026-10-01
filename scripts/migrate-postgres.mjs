@@ -481,14 +481,18 @@ const STATEMENTS = [
   {
     // zkLogin identity -> address history (src/lib/zklogin-address-bindings.ts).
     //
-    // A zkLogin address derives from (iss, aud, sub, salt). Rotating the
-    // Enoki API key changes the salt — even inside the same app — and the
-    // same social login then resolves to a DIFFERENT address, leaving the
-    // user's funds at the old one with no error and no migration path.
-    // Nothing detected that, because every login wipes the prior session
-    // rows (cleanupUserSessions) and zklogin_sessions has a 24h TTL, so the
-    // previous address was gone before the next one existed. This table is
-    // the durable memory that makes detection possible.
+    // A zkLogin address derives from (iss, aud, sub, salt), so the same
+    // human resolves to a DIFFERENT address when the OAuth client id (aud)
+    // changes, when they sign in with another provider (new iss and sub), or
+    // when the Enoki application is deleted/recreated (Enoki derives salts
+    // per user per application, so that resets them all). Their funds stay
+    // at the old address with no error and no migration path. Rotating the
+    // Enoki API key is NOT a trigger: every key of an application resolves
+    // the same salt (CLAUDE.md, "Address-affecting configuration").
+    // Nothing detected the re-addressing, because every login wipes the
+    // prior session rows (cleanupUserSessions) and zklogin_sessions has a
+    // 24h TTL, so the previous address was gone before the next one existed.
+    // This table is the durable memory that makes detection possible.
     //
     // APPEND-ONLY, like legal_acceptances: a new address inserts a new row
     // rather than updating the old one, so after a drift event BOTH rows
@@ -496,8 +500,10 @@ const STATEMENTS = [
     //
     // Lookups match on (sub, iss) — NOT (sub, aud). A client-id change is
     // itself one of the drift causes, so keying on aud would make that case
-    // look like a brand-new user and miss it. `provider` is the fallback
-    // match for rows written before iss capture.
+    // look like a brand-new user and miss it. A provider switch changes iss
+    // and sub together, so it lands here as a separate identity, not as
+    // drift. `provider` is the fallback match for rows written before iss
+    // capture.
     name: 'zklogin_address_bindings',
     sql: `CREATE TABLE IF NOT EXISTS zklogin_address_bindings (
             id            BIGSERIAL PRIMARY KEY,
