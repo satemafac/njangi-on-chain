@@ -14,8 +14,6 @@ interface RawPublicEnv {
   NEXT_PUBLIC_MAINNET_WHATSAPP_PACKAGE_ID?: string;
   NEXT_PUBLIC_TESTNET_WHATSAPP_REGISTRY_ID?: string;
   NEXT_PUBLIC_MAINNET_WHATSAPP_REGISTRY_ID?: string;
-  NEXT_PUBLIC_TESTNET_DEPLOYMENT_COIN?: string;
-  NEXT_PUBLIC_MAINNET_DEPLOYMENT_COIN?: string;
   NEXT_PUBLIC_ENOKI_TESTNET?: string;
   NEXT_PUBLIC_ENOKI_MAINNET?: string;
   // Server-only Enoki private keys. The Enoki private key (enoki_private_*)
@@ -45,7 +43,6 @@ export interface ResolvedPublicNetworkEnv {
   enokiApiKey: string;
   whatsappPackageId: string;
   whatsappRegistryId: string;
-  deploymentCoin: string;
 }
 
 export interface ResolvedPublicEnv {
@@ -91,8 +88,6 @@ function readRawPublicEnv(): RawPublicEnv {
     NEXT_PUBLIC_MAINNET_WHATSAPP_PACKAGE_ID: process.env.NEXT_PUBLIC_MAINNET_WHATSAPP_PACKAGE_ID,
     NEXT_PUBLIC_TESTNET_WHATSAPP_REGISTRY_ID: process.env.NEXT_PUBLIC_TESTNET_WHATSAPP_REGISTRY_ID,
     NEXT_PUBLIC_MAINNET_WHATSAPP_REGISTRY_ID: process.env.NEXT_PUBLIC_MAINNET_WHATSAPP_REGISTRY_ID,
-    NEXT_PUBLIC_TESTNET_DEPLOYMENT_COIN: process.env.NEXT_PUBLIC_TESTNET_DEPLOYMENT_COIN,
-    NEXT_PUBLIC_MAINNET_DEPLOYMENT_COIN: process.env.NEXT_PUBLIC_MAINNET_DEPLOYMENT_COIN,
     NEXT_PUBLIC_ENOKI_TESTNET: process.env.NEXT_PUBLIC_ENOKI_TESTNET,
     NEXT_PUBLIC_ENOKI_MAINNET: process.env.NEXT_PUBLIC_ENOKI_MAINNET,
     ENOKI_API_KEY_TESTNET: process.env.ENOKI_API_KEY_TESTNET,
@@ -227,7 +222,6 @@ export function resolvePublicEnvFromRaw(raw: RawPublicEnv): ResolvedPublicEnv {
             ...currentNetworkOnly('testnet', 'SUI_WHATSAPP_LINKS_REGISTRY_ID', raw.SUI_WHATSAPP_LINKS_REGISTRY_ID),
           ],
         ),
-        deploymentCoin: raw.NEXT_PUBLIC_TESTNET_DEPLOYMENT_COIN || '',
       },
       mainnet: {
         rpcUrl: mainnetRpcUrl,
@@ -261,7 +255,6 @@ export function resolvePublicEnvFromRaw(raw: RawPublicEnv): ResolvedPublicEnv {
             ...currentNetworkOnly('mainnet', 'SUI_WHATSAPP_LINKS_REGISTRY_ID', raw.SUI_WHATSAPP_LINKS_REGISTRY_ID),
           ],
         ),
-        deploymentCoin: raw.NEXT_PUBLIC_MAINNET_DEPLOYMENT_COIN || '',
       },
     },
   };

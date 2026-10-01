@@ -4,14 +4,20 @@
  * Manages multiple WhatsApp registry versions across different package deployments.
  * Similar to circle-service, this handles backward compatibility when contracts are updated.
  * 
- * Registry Discovery:
- * For testnet/mainnet deployment coins, we can auto-discover registry IDs from init_registry transactions.
- * Instead of manually tracking, we query the transaction history of the deployment coin to find all created registries.
+ * Registry catalog:
+ * Built once, when this module loads, from public env. Each network's current entry is
+ * NEXT_PUBLIC_<NET>_WHATSAPP_PACKAGE_ID + NEXT_PUBLIC_<NET>_WHATSAPP_REGISTRY_ID, read from
+ * src/config/public-env.ts through getWhatsAppConfigForNetwork. After a publish,
+ * move/build_and_test.sh writes the package id to .env.local and scripts/bootstrap-package.mjs
+ * writes the id of the registry its init_registry call creates (only when that var is empty).
+ * Next inlines NEXT_PUBLIC_* at build time, so a deployed app sees a new id only once the env
+ * var is set on Vercel and the app is redeployed. Older pairs are hardcoded in
+ * buildRegistryCatalog() as deprecated. There is no on-chain discovery: registry ids change
+ * only through env.
  */
 
 import { getCurrentNetwork, getWhatsAppConfigForNetwork } from './network-config';
-import { getPublicEnvForNetwork, type NetworkType } from '@/config/public-env';
-import { SuiClient } from '@mysten/sui/client';
+import type { NetworkType } from '@/config/public-env';
 
 export type { NetworkType } from '@/config/public-env';
 
@@ -24,7 +30,7 @@ export interface WhatsAppRegistryConfig {
 
 /**
  * Known WhatsApp registry configurations for each network
- * Add new entries when deploying updated contracts
+ * The current entry comes from env (see the header); keep replaced pairs here as deprecated
  * Each network can have multiple registries from different package versions
  */
 function buildRegistryCatalog(): Record<NetworkType, WhatsAppRegistryConfig[]> {
@@ -58,115 +64,6 @@ function buildRegistryCatalog(): Record<NetworkType, WhatsAppRegistryConfig[]> {
 }
 
 const WHATSAPP_REGISTRIES: Record<NetworkType, WhatsAppRegistryConfig[]> = buildRegistryCatalog();
-
-/**
- * Configuration for deployment coins per network
- * These coins are used to fund all init_registry transactions
- * We query their transaction history to discover all created registries
- */
-const DEPLOYMENT_COINS: Record<NetworkType, string> = {
-  testnet: getPublicEnvForNetwork('testnet').deploymentCoin,
-  mainnet: getPublicEnvForNetwork('mainnet').deploymentCoin,
-};
-
-/**
- * Auto-discover WhatsApp registries from deployment coin transaction history
- * Queries the coin's transactions to find all init_registry calls and extract created registry IDs
- */
-export async function discoverWhatsAppRegistries(network: NetworkType): Promise<WhatsAppRegistryConfig[]> {
-  const deploymentCoin = DEPLOYMENT_COINS[network];
-  
-  if (!deploymentCoin) {
-    console.warn(`⚠️ No deployment coin configured for ${network}, skipping auto-discovery`);
-    return [];
-  }
-
-  try {
-    const suiClient = new SuiClient({ url: getPublicEnvForNetwork(network).rpcUrl });
-    
-    console.log(`🔍 Discovering WhatsApp registries for ${network} from coin ${deploymentCoin.slice(0, 10)}...`);
-    
-    // Query all transactions involving the deployment coin
-    const transactions = await suiClient.queryTransactionBlocks({
-      options: {
-        showObjectChanges: true,
-        showEvents: true,
-      },
-      limit: 100, // Adjust as needed
-    });
-
-    const discoveredRegistries: WhatsAppRegistryConfig[] = [];
-
-    // Look through transactions for init_registry calls that created WhatsAppLinksRegistry objects
-    for (const tx of transactions.data) {
-      if (tx.objectChanges) {
-        for (const change of tx.objectChanges) {
-          // Look for created WhatsAppLinksRegistry objects
-          // objectType format: "0xpackageid::module::struct"
-          if (
-            change.type === 'created' &&
-            change.objectType?.includes('WhatsAppLinksRegistry')
-          ) {
-            const registryId = change.objectId;
-            // Extract package ID (first part before ::)
-            const packageId = change.objectType?.split('::')[0];
-
-            if (registryId && packageId && packageId !== '0x2') {
-              discoveredRegistries.push({
-                packageId, // Already just the package ID
-                registryObjectId: registryId,
-                description: `Auto-discovered ${network} registry from package ${packageId.slice(0, 10)}...`,
-                deprecated: false,
-              });
-              
-              console.log(`✅ Discovered registry: ${registryId.slice(0, 10)}... from package ${packageId.slice(0, 10)}...`);
-            }
-          }
-        }
-      }
-    }
-
-    return discoveredRegistries;
-  } catch (error) {
-    console.error(`❌ Error discovering registries for ${network}:`, error);
-    return [];
-  }
-}
-
-/**
- * Refresh registries from blockchain (auto-discovery)
- * Can be called on app startup to keep registry list current
- */
-export async function refreshRegistriesFromBlockchain(): Promise<void> {
-  try {
-    console.log('🔄 Refreshing WhatsApp registries from blockchain...');
-    
-    // Discover registries for testnet
-    const testnetRegistries = await discoverWhatsAppRegistries('testnet');
-    if (testnetRegistries.length > 0) {
-      // Merge with existing, keeping manually configured ones and adding new discoveries
-      const existingTestnet = WHATSAPP_REGISTRIES.testnet;
-      const newPackageIds = testnetRegistries.map(r => r.packageId);
-      const manuallyConfigured = existingTestnet.filter(r => !newPackageIds.includes(r.packageId));
-      
-      WHATSAPP_REGISTRIES.testnet = [...manuallyConfigured, ...testnetRegistries];
-      console.log(`✅ Updated testnet registries: ${WHATSAPP_REGISTRIES.testnet.length} total`);
-    }
-    
-    // Discover registries for mainnet
-    const mainnetRegistries = await discoverWhatsAppRegistries('mainnet');
-    if (mainnetRegistries.length > 0) {
-      const existingMainnet = WHATSAPP_REGISTRIES.mainnet;
-      const newPackageIds = mainnetRegistries.map(r => r.packageId);
-      const manuallyConfigured = existingMainnet.filter(r => !newPackageIds.includes(r.packageId));
-      
-      WHATSAPP_REGISTRIES.mainnet = [...manuallyConfigured, ...mainnetRegistries];
-      console.log(`✅ Updated mainnet registries: ${WHATSAPP_REGISTRIES.mainnet.length} total`);
-    }
-  } catch (error) {
-    console.error('❌ Error refreshing registries:', error);
-  }
-}
 
 /**
  * Get the current active WhatsApp registry for the given network
@@ -335,8 +232,6 @@ const whatsappRegistryService = {
   getMigrationSuggestion,
   validateWhatsAppRegistry,
   logWhatsAppRegistry,
-  discoverWhatsAppRegistries,
-  refreshRegistriesFromBlockchain,
 };
 
 export default whatsappRegistryService;
