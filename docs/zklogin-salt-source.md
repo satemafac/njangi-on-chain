@@ -41,9 +41,16 @@ them. `scripts/process-deletion-request.mjs` still deletes the legacy rows of a
 verified identity, so keep both tables while that is true.
 
 Deleting a row there does not touch the salt Enoki holds, so it cannot lock a
-live wallet. The deletion form, the privacy policy and
-`records-of-processing.md` still call this step erasing the wallet's salt.
-That copy predates Enoki and needs owner and counsel review before it changes.
+live wallet. Until 2026-10-01 the deletion form, the privacy policy and
+`records-of-processing.md` called this step erasing the wallet's salt, and the
+terms and risk disclosure told users to keep recovery codes. That copy now
+names Enoki as the salt source and says deletion leaves wallet access alone.
+
+Before purging these rows, note that they are the only copy of the pre-Enoki
+salts. No login the app performs today reaches an address derived from one;
+that row, the old service's encryption key and a prover that accepts a custom
+salt are the only way to sign for such an address again. Check whether any of
+them holds anything first.
 
 ## Outside the repo: three Heroku apps
 

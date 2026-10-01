@@ -10,18 +10,25 @@
 // their account must still be able to request deletion), so it is honeypot-
 // and rate-limit guarded like /api/mainnet-signup.
 //
-// Identity binding: the destructive step of the pipeline
-// (scripts/process-deletion-request.mjs) erases the zkLogin salt +
-// recovery codes, which makes the wallet permanently unrecoverable. That
-// erasure must only ever run against an identity the requester has PROVEN
-// they own. `userAddress` here comes from an unauthenticated public form
-// and a Sui address is public on-chain, so it can never authorize erasure.
-// When the caller has a valid zkLogin session we capture the
-// server-verified (sub, aud, address) and mark the request identity-
-// verified; the executor keys the salt deletion off those columns only.
-// Anonymous (locked-out) requests are still recorded, but the executor
-// refuses their cryptographic-erasure step without an explicit operator
-// override that documents out-of-band ownership verification.
+// Identity binding: the destructive steps of the pipeline
+// (scripts/process-deletion-request.mjs) delete rows keyed to a wallet
+// address (join requests, sign-in sessions) and to an OAuth identity (any
+// legacy salts/recovery_codes rows). Run against the wrong identity, they
+// would wipe a stranger's data, so they must only ever run against an
+// identity the requester has PROVEN they own. `userAddress` here comes
+// from an unauthenticated public form and a Sui address is public
+// on-chain, so it can never authorize them. When the caller has a valid
+// zkLogin session we capture the server-verified (sub, aud, address) and
+// mark the request identity-verified; the executor keys its identity
+// deletes off those columns only. Anonymous (locked-out) requests are still
+// recorded, but the executor refuses their destructive steps without an
+// explicit operator override that documents out-of-band ownership
+// verification.
+//
+// None of this touches wallet access. Enoki supplies the zkLogin salt at
+// every sign-in (getUserSalt in src/services/enokiZkLoginService.ts); the
+// `salts` table is a leftover of the self-hosted salt service retired on
+// 2025-05-24 and derives no current login's address.
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { createHmac } from 'node:crypto';
