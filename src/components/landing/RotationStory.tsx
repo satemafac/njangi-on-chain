@@ -202,7 +202,7 @@ function StepCopy({
   return (
     <motion.div style={{ opacity, y }} className="col-start-1 row-start-1">
       <p className="type-eyebrow text-gold">{step.number}</p>
-      <h3 className="type-headline mt-3 text-mist">{step.title}</h3>
+      <h3 className="type-headline mt-3 text-balance text-mist">{step.title}</h3>
       <p className="type-intro mt-4 max-w-md text-mist-2">{step.body}</p>
     </motion.div>
   );
@@ -250,7 +250,7 @@ export default function RotationStory({ steps }: { steps: StoryStep[] }) {
             </div>
             <div>
               <p className="type-eyebrow text-gold">{step.number}</p>
-              <h3 className="type-headline mt-3 text-mist">{step.title}</h3>
+              <h3 className="type-headline mt-3 text-balance text-mist">{step.title}</h3>
               <p className="type-intro mt-4 max-w-md text-mist-2">{step.body}</p>
             </div>
           </li>
