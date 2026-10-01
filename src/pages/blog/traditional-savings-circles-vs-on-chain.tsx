@@ -20,7 +20,7 @@ export default function TraditionalSavingsVsBlockchainPost() {
         }}
         article={{
           publishedTime: '2025-06-05T00:00:00.000Z',
-          modifiedTime: '2026-08-02T00:00:00.000Z',
+          modifiedTime: '2026-10-01T00:00:00.000Z',
           authorName: 'Njangi On-Chain',
           section: 'Community finance',
           tags: ['rosca', 'njangi', 'tontine', 'susu'],
@@ -38,7 +38,7 @@ export default function TraditionalSavingsVsBlockchainPost() {
             path: '/blog/traditional-savings-circles-vs-on-chain',
             image: '/og/blog-traditional-savings-vs-blockchain.png',
             datePublished: '2025-06-05',
-            dateModified: '2026-08-02',
+            dateModified: '2026-10-01',
             section: 'Community finance',
             keywords: ['ROSCA', 'njangi', 'tontine', 'susu'],
           }),
@@ -56,7 +56,7 @@ export default function TraditionalSavingsVsBlockchainPost() {
             record is shared, and what deliberately does not.
           </>
         }
-        byline="Published 5 June 2025 · updated 2 August 2026"
+        byline="Published 5 June 2025 · updated 1 October 2026"
         relatedTitle="Related Articles"
         related={[
           {
@@ -158,9 +158,9 @@ export default function TraditionalSavingsVsBlockchainPost() {
         </p>
 
         <p>
-          Blockchain systems, by contrast, embed trust directly into the technology. Smart contracts
-          automatically execute agreements without human intervention, so no coordinator holds the pooled
-          cash or decides where it goes. That does not make strangers safe to save with, though: if a
+          Blockchain systems, by contrast, embed trust directly into the technology. A smart contract
+          enforces the rules everyone agreed to, so no coordinator holds the pooled cash or decides
+          where it goes. That does not make strangers safe to save with, though: if a
           member stops paying, a payout can be late or not happen at all, which is why people join by
           invite link and the organiser approves each one.
         </p>
@@ -188,7 +188,7 @@ export default function TraditionalSavingsVsBlockchainPost() {
             In a traditional circle, the pooled cash physically sits with one treasurer until
             distribution — a single point of trust and a single point of failure. In a blockchain
             circle, contributions are held by a smart-contract escrow that nobody (not even the
-            platform) can redirect, and released to the scheduled recipient automatically.
+            platform) can redirect, and only the scheduled recipient can collect the pot.
           </p>
         </Callout>
 
@@ -196,7 +196,8 @@ export default function TraditionalSavingsVsBlockchainPost() {
           This might be the most compelling practical difference. When your traditional savings circle
           pools $10,000 per month, everyone is trusting one person to hold and hand over that money.
           In a blockchain system, the same funds sit in transparent escrow the whole group can verify,
-          and the payout goes to the right member on schedule without anyone touching the cash.
+          and only the member whose turn it is can collect the payout, without anyone else touching
+          the cash.
         </p>
 
         <h2>Real-World Examples</h2>

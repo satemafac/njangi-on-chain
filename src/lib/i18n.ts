@@ -184,9 +184,9 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'landing.workflow.step2.title': 'Set the rules once, together',
     'landing.workflow.step2.body':
       "Agree on members, amounts, schedule, and payout order up front. Everyone sees the same terms, so there's nothing to renegotiate later.",
-    'landing.workflow.step3.title': 'Contribute and get paid, on schedule',
+    'landing.workflow.step3.title': 'Pay in, then collect on your turn',
     'landing.workflow.step3.body':
-      "Each turn pays out automatically to the next member's own wallet. Track who's contributed and who's next — no follow-up texts required.",
+      "When everyone has paid in, the member whose turn it is collects the pot straight to their own wallet. Track who's contributed and who's next — no follow-up texts required.",
     'landing.launch.eyebrow': 'Mainnet release',
     'landing.launch.title': 'Follow the launch without following noise.',
     'landing.launch.body':
@@ -683,9 +683,9 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'landing.workflow.step2.title': 'Fixez les règles une fois, ensemble',
     'landing.workflow.step2.body':
       "Convenez des membres, des montants, du calendrier et de l'ordre des versements dès le départ. Tout le monde voit les mêmes règles, il n'y a donc rien à renégocier ensuite.",
-    'landing.workflow.step3.title': 'Cotisez et soyez payé, selon le calendrier',
+    'landing.workflow.step3.title': 'Cotisez, puis récupérez la cagnotte à votre tour',
     'landing.workflow.step3.body':
-      "À chaque tour, le versement part automatiquement vers le portefeuille du membre suivant. Suivez qui a cotisé et qui est le prochain — sans aucun message de relance.",
+      "Quand tout le monde a cotisé, le membre dont c'est le tour récupère la cagnotte directement dans son propre portefeuille. Suivez qui a cotisé et qui est le prochain — sans aucun message de relance.",
     'landing.launch.eyebrow': 'Lancement mainnet',
     'landing.launch.title': 'Suivez le lancement sans subir le bruit.',
     'landing.launch.body':
