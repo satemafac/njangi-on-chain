@@ -357,8 +357,8 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'pricing.eyebrow': 'Pricing',
     'pricing.title': 'Simple pricing that never touches your savings',
     'pricing.subtitle':
-      'Run a circle for free, forever. Premium adds coordination conveniences for larger groups — your contributions, payouts, and recovery stay self-custodied and free on every plan.',
-    'pricing.comingSoonBanner': 'Premium is launching soon — every plan keeps your funds self-custodied and free.',
+      'Run a circle for free, forever. Premium adds coordination conveniences for larger groups — your contributions, payouts, and recovery stay non-custodial and free on every plan.',
+    'pricing.comingSoonBanner': 'Premium is launching soon — every plan keeps your funds non-custodial and free.',
     'pricing.breadcrumbHome': 'Home',
     'pricing.breadcrumbPricing': 'Pricing',
     'pricing.free': 'Free',
@@ -387,37 +387,35 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
       'Checkout was cancelled — nothing was charged. You can upgrade whenever you’re ready.',
     'pricing.assuranceTitle': 'Your money is never behind a paywall',
     'pricing.assuranceBody':
-      'Njangi On-Chain is non-custodial: contributions sit in per-circle escrow on Sui, payouts go straight to members’ own wallets, and recovery is member-initiated. Contributing, collecting a payout, recovering access, and withdrawing funds work the same on the Free and Premium plans — a subscription only adds coordination conveniences, never access to your savings.',
+      'Njangi On-Chain is non-custodial: contributions sit in per-circle escrow on Sui, payouts go straight to members’ own wallets, and stopping a circle early goes to a member vote. Contributing, collecting a payout, taking part in recovery, and withdrawing funds work the same on the Free and Premium plans — a subscription only adds coordination conveniences, never access to your savings.',
     'pricing.faqTitle': 'Common questions',
     'pricing.faq.whoPays.q': 'Who pays for Premium?',
     'pricing.faq.whoPays.a':
-      'The circle admin. One subscription covers every circle they run — members never need to pay anything.',
+      'The circle admin. One subscription covers every circle they run — members never pay for it.',
     'pricing.faq.cancel.q': 'What happens if I cancel?',
     'pricing.faq.cancel.a':
       'Your circles keep running and every member keeps full access to their funds. You simply return to the Free plan limits for new circles and features.',
     'pricing.faq.fees.q': 'Are there other fees?',
     'pricing.faq.fees.a':
-      'Only standard Sui network fees (typically a few cents), paid to the blockchain — not to us. On Premium, we cover those network fees for your members’ contributions and claims (fair use), so they never need to hold crypto for gas. On the Free plan members simply pay their own small network fee.',
-    'pricing.faq.gasFree.q': 'What is “gas-free for members”?',
-    'pricing.faq.gasFree.a':
-      'Every Sui transaction needs a tiny network fee (“gas”), normally paid in SUI. When you subscribe to Premium, your subscription covers that fee for your members’ contributions and claims — so someone can join and pay into your circle with only USDC, without first buying SUI for gas. Fair-use limits apply to prevent abuse; the money flow itself is never blocked.',
+      'Only standard Sui network fees (typically a few cents), paid to the blockchain — not to us. Members pay their own small network fee, on every plan.',
+    'pricing.faq.gas.q': 'Do members need SUI for gas?',
+    'pricing.faq.gas.a':
+      'Yes. Every Sui transaction needs a tiny network fee (“gas”), paid in SUI, so each member keeps a little SUI in their wallet — even in a circle that settles in USDC.',
     'pricing.footerDisclaimer':
       'Premium covers coordination features only. It is not financial advice, custody, or a guarantee of returns. Cryptocurrency use carries risk — check the rules that apply in your country.',
     'pricing.free.feature.circles': '{count} savings circle',
     'pricing.free.feature.members': 'Up to {count} members per circle',
     'pricing.free.feature.escrow': 'Core escrow rounds — contribute and collect on rotation',
-    'pricing.free.feature.recovery': 'Member-initiated recovery, always included',
+    'pricing.free.feature.recovery': 'Emergency stop by member vote, always included',
     'pricing.free.feature.zklogin': 'zkLogin sign-in with self-custodied wallets',
     'pricing.premium.feature.members': 'Up to {count} members per circle',
     'pricing.premium.feature.circles': 'Run up to {count} circles at once',
     'pricing.premium.feature.whatsapp': 'WhatsApp linking + turn and payout notifications',
     'pricing.premium.feature.goals': 'Smart savings goals for your circles',
-    'pricing.premium.feature.gasFree': 'Gas-free contributions for all your members (fair use)',
-    'pricing.premium.feature.analytics': 'Circle analytics and contribution insights',
     'pricing.premium.feature.everything': 'Everything in Free',
     'pricing.alwaysFreeNoteLabel': 'Always free, on every plan:',
     'pricing.alwaysFreeNoteBody':
-      'collecting your payout, member-initiated recovery, and withdrawing your funds never require a subscription.',
+      'collecting your payout, recovery, and withdrawing your funds never require a subscription.',
     // Billing upsell modal
     'billing.notNow': 'Not now',
     'billing.seePlans': 'See plans',
@@ -857,8 +855,8 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'pricing.eyebrow': 'Tarifs',
     'pricing.title': "Une tarification simple qui ne touche jamais à votre épargne",
     'pricing.subtitle':
-      "Gérez un cercle gratuitement, pour toujours. Premium ajoute des facilités de coordination pour les groupes plus importants — vos versements, vos paiements et la récupération restent en autodétention et gratuits sur tous les forfaits.",
-    'pricing.comingSoonBanner': "Premium arrive bientôt — chaque forfait garde vos fonds en autodétention et gratuits.",
+      "Gérez un cercle gratuitement, pour toujours. Premium ajoute des facilités de coordination pour les groupes plus importants — vos versements, vos paiements et la récupération restent sans dépositaire et gratuits sur tous les forfaits.",
+    'pricing.comingSoonBanner': "Premium arrive bientôt — chaque forfait garde vos fonds sans dépositaire et gratuits.",
     'pricing.breadcrumbHome': 'Accueil',
     'pricing.breadcrumbPricing': 'Tarifs',
     'pricing.free': 'Gratuit',
@@ -887,37 +885,35 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
       "Le paiement a été annulé — rien n'a été débité. Vous pouvez passer à Premium quand vous le souhaitez.",
     'pricing.assuranceTitle': "Votre argent n'est jamais derrière un péage",
     'pricing.assuranceBody':
-      "Njangi On-Chain est non dépositaire : les versements sont conservés en séquestre par cercle sur Sui, les paiements vont directement vers les portefeuilles des membres, et la récupération est initiée par les membres. Verser, recevoir un paiement, récupérer l'accès et retirer des fonds fonctionnent de la même façon sur les forfaits Gratuit et Premium — un abonnement n'ajoute que des facilités de coordination, jamais l'accès à votre épargne.",
+      "Njangi On-Chain est non dépositaire : les versements sont conservés en séquestre par cercle sur Sui, les paiements vont directement vers les portefeuilles des membres, et l'arrêt anticipé d'un cercle est soumis au vote des membres. Verser, recevoir un paiement, participer à la récupération et retirer des fonds fonctionnent de la même façon sur les forfaits Gratuit et Premium — un abonnement n'ajoute que des facilités de coordination, jamais l'accès à votre épargne.",
     'pricing.faqTitle': 'Questions fréquentes',
     'pricing.faq.whoPays.q': 'Qui paie Premium ?',
     'pricing.faq.whoPays.a':
-      "L'administrateur du cercle. Un seul abonnement couvre tous les cercles qu'il gère — les membres n'ont jamais rien à payer.",
+      "L'administrateur du cercle. Un seul abonnement couvre tous les cercles qu'il gère — les membres ne le paient jamais.",
     'pricing.faq.cancel.q': "Que se passe-t-il si j'annule ?",
     'pricing.faq.cancel.a':
       "Vos cercles continuent de fonctionner et chaque membre conserve un accès complet à ses fonds. Vous revenez simplement aux limites du forfait Gratuit pour les nouveaux cercles et fonctionnalités.",
     'pricing.faq.fees.q': "Y a-t-il d'autres frais ?",
     'pricing.faq.fees.a':
-      "Uniquement les frais de réseau Sui standard (généralement quelques centimes), versés à la blockchain — pas à nous. Avec Premium, nous prenons en charge ces frais de réseau pour les cotisations et les retraits de vos membres (usage raisonnable), afin qu'ils n'aient jamais besoin de détenir de crypto pour le gaz. Sur le forfait Gratuit, les membres paient simplement leur petit frais de réseau.",
-    'pricing.faq.gasFree.q': "Qu'est-ce que « sans frais de gaz pour les membres » ?",
-    'pricing.faq.gasFree.a':
-      "Chaque transaction Sui nécessite un petit frais de réseau (« gaz »), normalement payé en SUI. Lorsque vous souscrivez à Premium, votre abonnement couvre ce frais pour les cotisations et retraits de vos membres — ainsi une personne peut rejoindre votre cercle et y cotiser avec uniquement de l'USDC, sans avoir à acheter d'abord du SUI pour le gaz. Des limites d'usage raisonnable s'appliquent pour éviter les abus ; le flux d'argent lui-même n'est jamais bloqué.",
+      "Uniquement les frais de réseau Sui standard (généralement quelques centimes), versés à la blockchain — pas à nous. Les membres paient eux-mêmes leur petit frais de réseau, sur tous les forfaits.",
+    'pricing.faq.gas.q': 'Les membres ont-ils besoin de SUI pour le gaz ?',
+    'pricing.faq.gas.a':
+      "Oui. Chaque transaction Sui nécessite un petit frais de réseau (« gaz »), payé en SUI : chaque membre garde donc un peu de SUI dans son portefeuille — même dans un cercle réglé en USDC.",
     'pricing.footerDisclaimer':
       "Premium couvre uniquement les fonctionnalités de coordination. Ce n'est pas un conseil financier, ni de la conservation, ni une garantie de rendement. L'usage de cryptomonnaies comporte des risques — vérifiez les règles applicables dans votre pays.",
     'pricing.free.feature.circles': "{count} cercle d'épargne",
     'pricing.free.feature.members': "Jusqu'à {count} membres par cercle",
     'pricing.free.feature.escrow': 'Tours de séquestre essentiels — verser et recevoir à tour de rôle',
-    'pricing.free.feature.recovery': 'Récupération initiée par les membres, toujours incluse',
+    'pricing.free.feature.recovery': "Arrêt d'urgence par vote des membres, toujours inclus",
     'pricing.free.feature.zklogin': 'Connexion zkLogin avec portefeuilles en autodétention',
     'pricing.premium.feature.members': "Jusqu'à {count} membres par cercle",
     'pricing.premium.feature.circles': "Gérez jusqu'à {count} cercles à la fois",
     'pricing.premium.feature.whatsapp': 'Liaison WhatsApp + notifications de tour et de paiement',
     'pricing.premium.feature.goals': "Objectifs d'épargne intelligents pour vos cercles",
-    'pricing.premium.feature.gasFree': 'Cotisations sans frais de gaz pour tous vos membres (usage raisonnable)',
-    'pricing.premium.feature.analytics': 'Analyses du cercle et aperçus des versements',
     'pricing.premium.feature.everything': 'Tout ce qui est inclus dans Gratuit',
     'pricing.alwaysFreeNoteLabel': 'Toujours gratuit, sur tous les forfaits :',
     'pricing.alwaysFreeNoteBody':
-      "recevoir votre paiement, la récupération initiée par les membres et le retrait de vos fonds ne nécessitent jamais d'abonnement.",
+      "recevoir votre paiement, la récupération et le retrait de vos fonds ne nécessitent jamais d'abonnement.",
     // Fenêtre d'incitation à l'abonnement
     'billing.notNow': 'Pas maintenant',
     'billing.seePlans': 'Voir les forfaits',

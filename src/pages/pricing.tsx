@@ -197,8 +197,6 @@ export default function PricingPage({ freeTier, premiumTier }: PricingPageProps)
     t('pricing.premium.feature.circles', { count: premiumTier.maxCircles }),
     t('pricing.premium.feature.whatsapp'),
     t('pricing.premium.feature.goals'),
-    t('pricing.premium.feature.gasFree'),
-    t('pricing.premium.feature.analytics'),
     t('pricing.premium.feature.everything'),
   ];
 
@@ -268,10 +266,10 @@ export default function PricingPage({ freeTier, premiumTier }: PricingPageProps)
     <>
       <Seo
         title="Pricing"
-        description="A free plan for small circles, and Premium for bigger circles, WhatsApp notifications, smart goals, and analytics. We never take a cut of contributions or payouts."
+        description="A free plan for small circles, and Premium for bigger circles, WhatsApp notifications, and smart goals. We never take a cut of contributions or payouts."
         path="/pricing"
         ogTitle="Pricing — Njangi On-Chain"
-        ogDescription="Start free. Upgrade for bigger circles, WhatsApp notifications, smart goals, and analytics."
+        ogDescription="Start free. Upgrade for bigger circles, WhatsApp notifications, and smart goals."
         image={{
           url: '/og/pricing.png',
           alt: 'Njangi On-Chain pricing — free to run a circle, pay only for coordination',
@@ -456,7 +454,7 @@ export default function PricingPage({ freeTier, premiumTier }: PricingPageProps)
           <section className="mt-24 md:mt-32">
             <h2 className="type-section text-center text-balance text-mist">{t('pricing.faqTitle')}</h2>
             <div className="mt-12 grid gap-4 md:grid-cols-2 md:gap-5">
-              {(['whoPays', 'cancel', 'fees', 'gasFree'] as const).map((key) => (
+              {(['whoPays', 'cancel', 'fees', 'gas'] as const).map((key) => (
                 <div key={key} className="rounded-[28px] bg-ink-surface p-7 sm:p-8">
                   <h3 className="text-[19px] font-semibold tracking-[0.012em] text-mist">
                     {t(`pricing.faq.${key}.q`)}
