@@ -248,9 +248,11 @@ sees, security deposit *(the on-chain collateral only — accurate and approved)
 | Security deposit | On-chain collateral posted at join. **The one approved use of "deposit."** |
 | Circle Record | A member-held, verifiable statement of their contribution history. No score, no rating. |
 
-**One tradition, twenty-five names** — for localization and social reach:
-Chit fund, Tanda, Stokvel, Chama, Esusu, Paluwagan, Hui, Arisan, Equb, Ajo, Cundina, Gameya, Kye,
-Pandero, Committee, Pardna, Hagbad.
+**One tradition, many names** — for localization and social reach. Use only names the site
+sources (the /learn glossary and the njangi, tontine and susu guides), the same 21 the landing
+page shows: Njangi, Tontine, Susu, Sou-sou, Chit fund, Tanda, Stokvel, Chama, Esusu, Paluwagan,
+Hui, Arisan, Equb, Ajo, Cundina, Gameya, Kye, Pandero, Committee, Pardna, Hagbad. Don't put a
+number on the names: the tradition has far more than any list we keep.
 
 ## Brand Voice
 

@@ -55,7 +55,7 @@ pre-launch is the standard way to do none of them.
 | Pillar | % | What it does |
 |---|---|---|
 | **The Proof** | 30% | Show the mechanism. Explorer links, live circle state, "check it yourself." The custody wedge, demonstrated. |
-| **The Tradition** | 25% | Njangi/tontine culture, history, the twenty-five names. **The reach engine** — shareable, warm, and not about the product. This is what makes the account followable by someone not ready to sign up. |
+| **The Tradition** | 25% | Njangi/tontine culture, history, the many names. **The reach engine** — shareable, warm, and not about the product. This is what makes the account followable by someone not ready to sign up. |
 | **The Contrast** | 20% | Custodial vs non-custodial, argued on mechanism. Never name a competitor to attack. |
 | **Build in public** | 20% | 176 passing contract tests, 100+ testnet circles, what broke and got fixed. Credibility for the nephew, and honest about being pre-launch. |
 | **Product / CTA** | 5% | The mainnet release list. Rarely. |
@@ -63,7 +63,7 @@ pre-launch is the standard way to do none of them.
 **Why Tradition is 25%** — the product content has a hard ceiling pre-launch because the interesting
 claims are embargoed. Culture content has no ceiling, reaches the organizer *and* the nephew, and is
 the only pillar that earns shares from people who will never join a circle. It is also the pillar
-where the "twenty-five names" glossary already gives you 17+ posts of raw material.
+where the /learn glossary of names already gives you 17+ posts of raw material.
 
 ## 4. Example posts
 
@@ -157,7 +157,7 @@ are the demonstration rather than the claim.
 **Week 1 — establish the claim.**
 1. Pinned X post: the custody claim with the explorer link. *This is the account's thesis.*
 2. Reel: the 25-second "can they steal your money" explorer walkthrough.
-3. Tradition carousel: the twenty-five names → `/learn`.
+3. Tradition carousel: the many names → `/learn`.
 4. Build-in-public: the 176-test post.
 5. Open the TikTok account; cross-post the Reel.
 

@@ -4,7 +4,7 @@ import { useReducedMotionAfterMount } from './motion';
 
 /**
  * The tradition's many names, set large in the brand serif, lighting one
- * after another as the wall scrolls through the viewport — twenty-five
+ * after another as the wall scrolls through the viewport — many
  * communities, one practice. Unlit names rest at the tertiary gray (4.1:1,
  * well above the 3:1 large-text floor); `highlight` lands in gold.
  */

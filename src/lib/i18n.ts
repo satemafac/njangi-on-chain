@@ -220,7 +220,7 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'landing.faq.a4':
       'Your wallet address changes because each network has its own state. The app clears the current session so the selected environment stays clean and consistent.',
     'landing.tradition.eyebrow': 'A global tradition',
-    'landing.tradition.title': 'One tradition, twenty-five names.',
+    'landing.tradition.title': 'One tradition, many names.',
     'landing.tradition.body':
       'Communities across the world already understand rotating savings. Njangi On-Chain is designed to respect that history rather than flatten it into a generic fintech pattern.',
     'landing.footer.tagline':
@@ -717,7 +717,7 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'landing.faq.a4':
       "Votre adresse de portefeuille change car chaque réseau a son propre état. L'application efface la session en cours pour que l'environnement sélectionné reste propre et cohérent.",
     'landing.tradition.eyebrow': 'Une tradition mondiale',
-    'landing.tradition.title': 'Une tradition, vingt-cinq noms.',
+    'landing.tradition.title': 'Une tradition, de nombreux noms.',
     'landing.tradition.body':
       "Partout dans le monde, les communautés connaissent déjà l'épargne tournante. Njangi On-Chain est conçu pour respecter cette histoire plutôt que de l'aplatir en un schéma fintech générique.",
     'landing.footer.tagline':

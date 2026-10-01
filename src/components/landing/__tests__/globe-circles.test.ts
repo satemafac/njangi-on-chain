@@ -10,7 +10,7 @@ import { readFileSync } from 'fs';
 import { resolve } from 'path';
 
 import { ROSCA_TERMS } from '@/content/rosca-terms';
-import { GLOBE_CIRCLES } from '../globe-circles';
+import { CIRCLE_NAMES, GLOBE_CIRCLES } from '../globe-circles';
 import { LAND_GRIDS } from '../globe-land';
 import { decodeLandGrid, unitFromLatLng } from '../globe-geo';
 
@@ -82,6 +82,31 @@ describe('GLOBE_CIRCLES', () => {
         expect(dot).toBeLessThan(minCos);
       }
     }
+  });
+});
+
+// The landing page once cycled a hand-typed list of twenty-five names through
+// the hero and the tradition wall. Eight had no source, and two were wrong:
+// idir is an Ethiopian funeral society, and kikoba is a savings-and-loan group
+// that doesn't rotate. Both places now read CIRCLE_NAMES, which can't hold a
+// name the globe test above hasn't checked.
+describe('CIRCLE_NAMES', () => {
+  it('is every globe name once, in alphabetical order', () => {
+    const names = GLOBE_CIRCLES.flatMap((circle) => circle.terms.map((term) => term.name));
+    expect(new Set(CIRCLE_NAMES)).toEqual(new Set(names));
+    expect(new Set(CIRCLE_NAMES).size).toBe(CIRCLE_NAMES.length);
+    expect(CIRCLE_NAMES).toEqual([...CIRCLE_NAMES].sort());
+  });
+
+  it('is the only list the landing page passes as names, and holds the name it lands on', () => {
+    const page = readFileSync(resolve(process.cwd(), 'src/pages/index.tsx'), 'utf8');
+    const passed = page.match(/\bnames=\{[^}]*\}/g) ?? [];
+    expect(passed.length).toBeGreaterThan(0);
+    passed.forEach((prop) => expect(prop).toBe('names={CIRCLE_NAMES}'));
+
+    const landsOn = Array.from(page.matchAll(/\b(?:settleOn|highlight)="([^"]+)"/g), (match) => match[1]);
+    expect(landsOn.length).toBeGreaterThan(0);
+    landsOn.forEach((name) => expect(CIRCLE_NAMES).toContain(name));
   });
 });
 

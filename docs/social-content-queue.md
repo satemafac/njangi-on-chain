@@ -103,9 +103,11 @@ is dead text that costs reach. No fintech or crypto tags: they pull exactly the
 audience strategy &sect;5 exists to avoid.
 
 **Count discipline:** the carousel shows **sixteen** names (nine headline cards
-plus Cundina, Hui, Arisan, Chit fund, Gameya, Committee, Pandero). The bio and
-landing page say "twenty-five names". Keep any figure in copy matched to what
-the asset actually shows &mdash; a first draft of this caption said twelve.
+plus Cundina, Hui, Arisan, Chit fund, Gameya, Committee, Pandero). The landing
+page said "twenty-five names" until 2026-10-01; it now says "many names" and
+shows the 21 sourced ones. If the bio still says "twenty-five names", change
+it. Keep any figure in copy matched to what the asset actually shows &mdash; a
+first draft of this caption said twelve.
 
 ### 1.4 · X · Build-in-public
 > Ran the contract suite this morning. 176 tests, 176 passing.

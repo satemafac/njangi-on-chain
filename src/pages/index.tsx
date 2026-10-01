@@ -37,6 +37,7 @@ import RotationStory from '../components/landing/RotationStory';
 import CircleMock from '../components/landing/CircleMock';
 import FeatureBento, { type Feature } from '../components/landing/FeatureBento';
 import NamesLight from '../components/landing/NamesLight';
+import { CIRCLE_NAMES } from '../components/landing/globe-circles';
 import SiteFooter from '../components/landing/SiteFooter';
 import { sansFont, serifFont } from '../components/landing/fonts';
 import {
@@ -66,33 +67,6 @@ declare global {
   }
 }
 
-const CULTURAL_NAMES = [
-  'Adaji',
-  'Ajoh',
-  'Asue',
-  'Arisan',
-  'Cadena',
-  'Chama',
-  'Chit Funds',
-  'Cundina',
-  'Equb',
-  'Esusu',
-  'Hagbad',
-  'Hui',
-  'Idir',
-  'Kikoba',
-  'Mujin',
-  'Njangi',
-  'Paluwagan',
-  'Pandero',
-  'Gameya',
-  'Samity',
-  'Sou-sou',
-  'Stokvel',
-  'Tanda',
-  'Tontine',
-  'Xitique',
-];
 
 // Feature tiles and workflow steps reference i18n keys; the visible copy is
 // resolved at render time via the active locale (EN/FR funnel translation).
@@ -707,7 +681,7 @@ export default function Home() {
                     className={`${serifFont.className} block text-[clamp(2.25rem,1.6rem+2vw,3.25rem)] leading-[1.2] tracking-[-0.01em]`}
                   >
                     <KineticNames
-                      names={CULTURAL_NAMES}
+                      names={CIRCLE_NAMES}
                       className="text-gold-gradient text-center"
                       interval={1500}
                       settleOn="Njangi"
@@ -982,7 +956,7 @@ export default function Home() {
               </Reveal>
               <div className="mt-14 md:mt-20">
                 <NamesLight
-                  names={CULTURAL_NAMES}
+                  names={CIRCLE_NAMES}
                   highlight="Njangi"
                   serifClassName={serifFont.className}
                 />
