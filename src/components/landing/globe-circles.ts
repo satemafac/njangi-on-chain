@@ -1,4 +1,6 @@
-// globe-circles.ts — the savings circles the hero globe can name.
+// globe-circles.ts — the savings circles the hero globe can name. Their
+// names (CIRCLE_NAMES, below) also feed the hero's kinetic word and the
+// tradition wall, so the landing page names the same traditions everywhere.
 //
 // Every name, alias and place here comes from the site's own vetted content:
 // the /learn glossary (src/content/rosca-terms.ts) and the pillar guides for
@@ -175,3 +177,12 @@ export const GLOBE_CIRCLES: GlobeCircle[] = [
     terms: [{ name: 'Sou-sou', href: '/learn/susu', aka: [] }],
   },
 ];
+
+/**
+ * Every name the globe can show, once each, in alphabetical order. Sorted by
+ * plain code units rather than localeCompare, so the server and every browser
+ * produce the same order and the hero hydrates without a mismatch.
+ */
+export const CIRCLE_NAMES: string[] = Array.from(
+  new Set(GLOBE_CIRCLES.flatMap((circle) => circle.terms.map((term) => term.name)))
+).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
