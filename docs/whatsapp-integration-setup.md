@@ -1,256 +1,163 @@
-# WhatsApp Integration Setup Guide
+# WhatsApp integration
 
-This document provides step-by-step instructions for setting up the WhatsApp Business API integration for Njangi Circle Management.
+WhatsApp is a notification channel for circles. A circle admin links a
+WhatsApp number to the circle in the web app, and the app sends that number
+updates about the circle. Creating a circle, joining, contributing and signing
+in all happen in the web app, never in WhatsApp.
 
-## Overview
+An earlier version of this page described a WhatsApp command bot that did
+those things through chat commands. Its command and sign-in code was deleted
+in November 2025. The standalone `whatsapp-bot-backend/` notification service
+that followed was retired in June 2026, and
+[`whatsapp-bot-backend/DEPRECATED.md`](../whatsapp-bot-backend/DEPRECATED.md)
+maps each of its features to its replacement.
 
-The WhatsApp integration allows users to:
-- Create savings circles via WhatsApp commands
-- Join existing circles
-- Make contributions
-- Check circle status and balances
-- Receive automated notifications
-- Authenticate securely with zkLogin
+## What gets sent
 
-## Prerequisites
+Two Vercel crons send the circle notifications. Both run every 15 minutes (see
+[`vercel.json`](../vercel.json)) and skip events older than 24 hours, so a
+long outage doesn't replay stale messages.
 
-1. **Business Verification**: You need a verified business for WhatsApp Business API
-2. **Meta Developer Account**: Required for API access
-3. **Phone Number**: A dedicated phone number for the WhatsApp Business account
-4. **SSL Certificate**: HTTPS endpoint for webhook URL
-5. **Domain**: Public domain for webhook endpoints
+- **Circle updates**, from `/api/cron/whatsapp-circle-events`, go to the
+  number linked to the circle: link and unlink confirmations, members joining
+  and being removed, security deposits paid and returned, payout-order
+  changes and circle activation. The event streams are defined in
+  [`src/lib/whatsapp-bot/circle-events.ts`](../src/lib/whatsapp-bot/circle-events.ts).
+  The cron also has contribution and payout streams, but they never fire
+  today; see [Known gaps](#known-gaps).
+- **"It's your turn"**, from `/api/cron/cycle-finalized`, tells a round's
+  recipient that the payout is ready to collect. It is triggered by the
+  escrow's `CycleFinalized` event and goes to a number the recipient linked
+  as a circle admin. Only circle admins can link a number, so a recipient who
+  never linked one gets no nudge.
 
-## Step 1: Meta Developer Account Setup
+The same dispatcher also sends stale-attestation reminders
+([`src/lib/attestation-stale.ts`](../src/lib/attestation-stale.ts)) and ramp
+KYC confirmations ([`src/lib/ramp-kyc-bridge.ts`](../src/lib/ramp-kyc-bridge.ts)).
 
-### 1.1 Create Meta Developer Account
-1. Go to [developers.facebook.com](https://developers.facebook.com)
-2. Click "Get Started" and log in with your Facebook account
-3. Complete the developer account verification process
-4. Enable two-factor authentication (2FA) - **Required**
+## Replies to incoming messages
 
-### 1.2 Create Meta App
-1. In the Meta Developer Console, click "Create App"
-2. Select "Business" as the app type
-3. Fill in app details:
-   - **App Name**: "Njangi WhatsApp Integration"
-   - **App Contact Email**: Your business email
-   - **Business Manager Account**: Select or create one
+[`src/pages/api/whatsapp/webhook.ts`](../src/pages/api/whatsapp/webhook.ts)
+answers every text message sent to the business number:
 
-### 1.3 Add WhatsApp Product
-1. In your Meta App dashboard, click "Add Product"
-2. Find "WhatsApp" and click "Set Up"
-3. Choose "WhatsApp Cloud API" (recommended)
+| Message | Reply |
+| --- | --- |
+| `help` or `?` | What the channel sends, and these commands |
+| `/status <circle-id>` | That circle's live status, read from the chain |
+| `/status` | The status of every circle linked to the sender's number |
+| Anything else | A short acknowledgment that points to `/status` and `/help` |
 
-## Step 2: WhatsApp Business API Configuration
+Matching is loose: any message that contains `help` gets the help reply, and
+any other message that contains `status` counts as `/status`.
 
-### 2.1 Get Phone Number
-1. In WhatsApp settings, go to "Phone Numbers"
-2. Add a new phone number or use the test number provided
-3. Verify the phone number via SMS
+## How it works
 
-### 2.2 Generate Access Token
-1. Go to WhatsApp > Getting Started
-2. Copy the temporary access token (24 hours)
-3. For production, create a permanent token:
-   - Go to App Settings > Basic
-   - Generate a permanent access token
-   - **Store securely** - this is your `WHATSAPP_ACCESS_TOKEN`
+- **Linking.** On the circle's manage page,
+  [`WhatsAppCircleIntegration`](../src/components/WhatsAppCircleIntegration.tsx)
+  calls `POST /api/whatsapp/admin-link-circle`. The route checks that the
+  caller is the circle's on-chain admin and runs the sanctions, address-drift
+  and plan checks. It then encrypts the number with AES-256-GCM
+  ([`src/lib/walrus-pii.ts`](../src/lib/walrus-pii.ts)) and stores the
+  ciphertext on Walrus. The admin's browser signs
+  `whatsapp_integration::link_circle`, which anchors the Walrus blob id and a
+  random nonce on chain, never the number itself. A confirm call then adds
+  the link to the `whatsapp_phone_index` table, keyed by an HMAC of the
+  number. `POST /api/whatsapp/admin-unlink-circle` removes a link.
+- **Sending.** Every notification goes through `sendMemberNotification` in
+  [`src/lib/whatsapp-notifier.ts`](../src/lib/whatsapp-notifier.ts). It claims
+  a dedupe slot, sends through the WhatsApp Cloud API, and records the
+  attempt, sent or not, in the `whatsapp_notifications` table. The webhook's
+  replies call the Cloud API directly.
+- **Blob renewal.** Walrus keeps a blob for `WALRUS_STORAGE_EPOCHS` epochs,
+  but the on-chain anchor never expires. Before a blob's storage runs out,
+  the daily `/api/cron/walrus-renewal` stores the number again as a new blob
+  and records the new blob id in `whatsapp_phone_index`. The on-chain anchor
+  keeps the original blob id.
 
-### 2.3 Get Phone Number ID
-1. In WhatsApp settings, find your phone number
-2. Copy the Phone Number ID
-3. This is your `WHATSAPP_PHONE_NUMBER_ID`
+## Known gaps
 
-## Step 3: Webhook Configuration
+- **Contribution and payout updates never go out.** Their streams listen for
+  `ContributionMade`, `StablecoinContributionMade` and `PayoutProcessed`.
+  Those events come from the retired payment rail, and no circle on the
+  per-round escrow emits them. PR #43 repoints the streams to the escrow's
+  own events.
+- **The "your turn" nudge arrives after the payout is collected.** The app
+  finalizes a round only inside the recipient's collect transaction
+  (`finalize_and_redeem`), so `CycleFinalized` fires as the payout is
+  collected, and the nudge follows at the next cron run. It arrives first
+  only when someone finalizes the round outside the app, for example with
+  `finalize_to_recipient`.
+- **Group links receive nothing.** The link form also accepts a WhatsApp
+  group id (`…@g.us`), and the link is stored, but every sender reads only a
+  phone number.
+- **Member messages stop when the first blob expires.** Messages addressed to
+  a member rather than a circle, such as the "your turn" nudge and the
+  stale-attestation reminders, find the member's number through the blob id
+  anchored on chain, not through `whatsapp_phone_index`. Renewal doesn't
+  change that anchor, so these lookups fail once the original blob's storage
+  ends. Circle updates and `/status` read the index, so they keep working.
+- **The help reply promises more than is sent.** It lists deadline reminders
+  and circle insights, which nothing sends, along with the contribution and
+  payout updates above.
 
-### 3.1 Configure Webhook URL
-1. In WhatsApp settings, go to "Configuration"
-2. Click "Edit" next to Webhook
-3. Enter your webhook URL:
-   ```
-   https://yourdomain.com/api/whatsapp/webhook
-   ```
-4. Enter verify token (create a secure random string)
-5. This is your `WHATSAPP_VERIFY_TOKEN`
+## Setting it up
 
-### 3.2 Subscribe to Webhook Fields
-Subscribe to the `messages` field. It carries incoming messages, button and
-list replies, and the sent, delivered and read statuses of the messages the
-app sends. `message_deliveries`, `message_reads` and `messaging_postbacks` are
-Messenger webhook fields for Facebook Pages and don't exist for WhatsApp; see
-[WhatsApp API setup](whatsapp-api-setup.md#step-2-configure-webhook-in-meta-console).
+1. **Meta app, webhook and credentials.** Follow
+   [WhatsApp API setup](whatsapp-api-setup.md). It covers the Meta app, the
+   business phone number, the server-only `WHATSAPP_*` variables in Vercel,
+   and the webhook, which subscribes to the `messages` field only.
+2. **Registry ids.** The Move publish writes the
+   `NEXT_PUBLIC_<NETWORK>_WHATSAPP_PACKAGE_ID` and
+   `NEXT_PUBLIC_<NETWORK>_WHATSAPP_REGISTRY_ID` pair to `.env.local`. The same
+   guide explains how to copy it to Vercel.
+3. **Postgres.** `npm run migrate:postgres` creates `whatsapp_phone_index`,
+   `whatsapp_notifications`, `cycle_finalized_cursor` and
+   `walrus_renewal_audit`.
+4. **PII keys.** `WALRUS_PII_MASTER_KEY` encrypts linked numbers, and
+   `WALRUS_LOOKUP_SALT` keys the lookup index. `npm run generate:secrets`
+   fills both. Don't change the master key once numbers are linked: the app
+   decrypts with the current key only, so every existing link would become
+   unreadable.
+5. **Crons.** Set `CRON_SECRET`. Vercel sends it with each cron call, and the
+   cron routes reject calls without it.
+6. **Templates.** Read the next section before you rely on notifications in
+   production.
 
-### 3.3 Get App Secret
-1. Go to App Settings > Basic
-2. Copy the "App Secret"
-3. This is your `WHATSAPP_APP_SECRET`
+## Templates and the 24-hour window
 
-## Step 4: Environment Configuration
+Every notification is business-initiated. WhatsApp delivers free-form text
+only inside the 24-hour window that opens when the recipient last messaged
+the business number. Outside that window, Meta delivers only approved
+templates and rejects anything else with error 131047. The webhook's replies
+are always inside a window, because they answer a message.
 
-Create or update your `.env` file with the following variables:
+While `WHATSAPP_TEMPLATES_ENABLED` is `false` (the default), the notifier sends
+free-form text. That works for testing, but it doesn't reach anyone outside
+the window. To switch to templates (the header comment of
+`src/lib/whatsapp-notifier.ts` has the same steps):
 
-```env
-# WhatsApp Business API Configuration
-WHATSAPP_PHONE_NUMBER_ID=your_phone_number_id_here
-WHATSAPP_ACCESS_TOKEN=your_access_token_here
-WHATSAPP_VERIFY_TOKEN=your_verify_token_here
-WHATSAPP_APP_SECRET=your_app_secret_here
-WHATSAPP_WEBHOOK_URL=https://yourdomain.com/api/whatsapp/webhook
-WHATSAPP_API_VERSION=v21.0
-```
+1. Create each template in WhatsApp Manager, category Utility. The code sends
+   `circle_link`, `circle_unlink`, `member_joins`, `deposit_returned`,
+   `member_removed`, `order_changed` and `payout_processed`. Their bodies are
+   in [`WHATSAPP_TEMPLATES.md`](../WHATSAPP_TEMPLATES.md).
+2. Check the language code. The crons send every template as `en`, but
+   `WHATSAPP_TEMPLATES.md` says to create them as `en_US`. Meta treats those
+   as different languages and fails a send whose language has no approved
+   version (error 132001), so make the two agree before you switch.
+3. Match each template's placeholders to the parameters the code passes (see
+   `src/lib/whatsapp-bot/circle-events.ts` and
+   `src/lib/your-turn-notification.ts`). A mismatch fails with error 132000.
+4. Once every template is approved, set `WHATSAPP_TEMPLATES_ENABLED=true` in
+   Vercel and redeploy.
 
-For MCP/Cursor integration, add these to `.cursor/mcp.json`:
+Security deposits, contributions and circle activation have no template wired
+yet. They stay free-form text even with the flag on, so they reach only
+people inside the window.
 
-```json
-{
-  "env": {
-    "WHATSAPP_PHONE_NUMBER_ID": "your_phone_number_id_here",
-    "WHATSAPP_ACCESS_TOKEN": "your_access_token_here",
-    "WHATSAPP_VERIFY_TOKEN": "your_verify_token_here",
-    "WHATSAPP_APP_SECRET": "your_app_secret_here",
-    "WHATSAPP_WEBHOOK_URL": "https://yourdomain.com/api/whatsapp/webhook",
-    "WHATSAPP_API_VERSION": "v21.0"
-  }
-}
-```
+## Checking it works
 
-## Step 5: Testing Setup
-
-### 5.1 Test Webhook Verification
-1. Deploy your application with the webhook endpoint
-2. Test webhook verification:
-   ```bash
-   curl -X GET "https://yourdomain.com/api/whatsapp/webhook?hub.mode=subscribe&hub.challenge=test&hub.verify_token=your_verify_token"
-   ```
-3. Should return the challenge value
-
-### 5.2 Test Message Sending
-Use the send API endpoint:
-```bash
-curl -X POST https://yourdomain.com/api/whatsapp/send \
-  -H "Content-Type: application/json" \
-  -d '{
-    "phoneNumber": "+1234567890",
-    "type": "text",
-    "content": {
-      "text": "Hello from Njangi! 🎉"
-    }
-  }'
-```
-
-### 5.3 Health Check
-Monitor service health:
-```bash
-curl https://yourdomain.com/api/whatsapp/health
-```
-
-## Step 6: Business Verification (Production)
-
-### 6.1 Business Verification Requirements
-- **Business Manager**: Verified Facebook Business Manager account
-- **Business Information**: Legal business name, address, website
-- **Business Documents**: Business license, tax ID, etc.
-- **Use Case**: Clear description of how WhatsApp will be used
-
-### 6.2 Message Templates
-For production, create pre-approved message templates:
-
-1. Go to WhatsApp > Message Templates
-2. Create templates for:
-   - Welcome messages
-   - Payment reminders
-   - Circle notifications
-   - Authentication prompts
-
-Example template:
-```
-Template Name: welcome_message
-Category: UTILITY
-Language: English
-Content: Welcome to Njangi, {{1}}! Your savings circle journey starts here.
-```
-
-## Step 7: Rate Limiting & Compliance
-
-### 7.1 Rate Limits
-WhatsApp has strict rate limits:
-- **Conversations**: 1,000 per 24 hours (initially)
-- **Messages per second**: 20 for Cloud API
-- **Template messages**: Limited based on quality rating
-
-### 7.2 Compliance Requirements
-- **Opt-in required**: Users must opt-in to receive messages
-- **24-hour window**: Can only send free-form messages within 24 hours of user's last message
-- **Template messages**: Use for notifications outside 24-hour window
-- **Quality rating**: Maintain high quality to avoid restrictions
-
-## Step 8: Monitoring & Maintenance
-
-### 8.1 Monitoring Endpoints
-- Health check: `GET /api/whatsapp/health`
-- Service stats: Included in health check response
-- Webhook logs: Check application logs
-
-### 8.2 Error Handling
-Common issues and solutions:
-- **Webhook verification fails**: Check verify token
-- **Message sending fails**: Verify access token and phone number ID
-- **Rate limit exceeded**: Implement proper rate limiting
-- **Template rejected**: Follow WhatsApp template guidelines
-
-## Step 9: Security Best Practices
-
-### 9.1 Webhook Security
-- Always verify webhook signatures
-- Use HTTPS for all endpoints
-- Validate all incoming data
-- Rate limit webhook requests
-
-### 9.2 Token Management
-- Rotate access tokens regularly
-- Store tokens securely (environment variables)
-- Monitor token usage and expiry
-- Use least privilege access
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Webhook verification fails**
-   - Check that webhook URL is accessible
-   - Verify the verify token matches
-   - Ensure HTTPS is properly configured
-
-2. **Messages not sending**
-   - Verify access token is valid
-   - Check phone number ID is correct
-   - Ensure recipient number is in correct format (+1234567890)
-
-3. **Rate limiting errors**
-   - Implement exponential backoff
-   - Monitor rate limit headers
-   - Consider upgrading API limits
-
-4. **Template messages rejected**
-   - Follow WhatsApp template guidelines
-   - Avoid promotional content
-   - Include clear opt-out instructions
-
-### Support Resources
-
-- [WhatsApp Business API Documentation](https://developers.facebook.com/docs/whatsapp)
-- [Meta Business Help Center](https://www.facebook.com/business/help)
-- [WhatsApp Business API Rate Limits](https://developers.facebook.com/docs/whatsapp/pricing)
-
-## Next Steps
-
-After completing this setup:
-1. Test all endpoints thoroughly
-2. Implement command parsing (subtask 34.3)
-3. Set up authentication bridge with zkLogin (subtask 34.2)
-4. Deploy to production environment
-5. Submit for business verification if required
-
----
-
-*Last updated: 2025-06-23* 
+- Send `help` to the business number. The reply should arrive within
+  seconds, and the logs show `Incoming WhatsApp message`.
+- After a notification should have gone out, look for its row in
+  `whatsapp_notifications`. `success` says whether it was sent, and `error`
+  says why not; `no_link` means no linked number was found.
