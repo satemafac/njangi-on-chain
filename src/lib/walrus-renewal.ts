@@ -20,9 +20,12 @@
 //
 // WHY THE INDEX IS AUTHORITATIVE: the webhook resolves a circle via the
 // `whatsapp_phone_index` table FIRST (O(1) HMAC lookup), only falling back
-// to the on-chain registry scan when the index misses. So updating the
-// index row's walrus_blob_id is sufficient to keep routing alive — the
-// on-chain anchor keeps the OLD (now-expired) blob id. Re-anchoring on
+// to the on-chain registry scan when the index misses. Outbound sends read
+// it first too — circle-addressed ones in whatsapp-bot/circle-phone.ts,
+// member-addressed ones in whatsapp-notifier.ts (resolveMemberPhone). So
+// updating the index row's walrus_blob_id is sufficient to keep routing
+// alive — the on-chain anchor keeps the OLD (now-expired) blob id. Any new
+// reader of a link's blob must likewise prefer the index. Re-anchoring on
 // chain is a future admin-signed step (it needs the circle admin's
 // signature; the cron has no signing authority and must stay non-custodial).
 //

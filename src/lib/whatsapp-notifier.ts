@@ -14,7 +14,7 @@
 import type { Pool } from 'pg';
 import { getSharedPgPool, isPostgresConfigured } from './pg-pool';
 import { computeLookupHash, fetchAndDecryptPII } from './walrus-pii';
-import { lookupCirclesForPhone } from './whatsapp-link-index';
+import { lookupBlobsForCircle, lookupCirclesForPhone } from './whatsapp-link-index';
 import { getActiveWhatsAppRegistries } from '../services/whatsapp-registry-service';
 import type { NetworkType } from '../services/whatsapp-registry-service';
 import { getNetworkConfig } from '../services/network-config';
@@ -129,7 +129,7 @@ export interface SendMemberNotificationInput {
    */
   dedupeKey?: string;
   dedupeWindowMs?: number;
-  /** Optional pre-resolved E.164 phone, skipping the on-chain lookup. */
+  /** Optional pre-resolved E.164 phone, skipping the phone lookup. */
   phoneOverride?: string;
 }
 
@@ -282,15 +282,47 @@ async function claimNotificationSlot(
   }
 }
 
+function decodeBlobId(raw: unknown): string {
+  if (typeof raw === 'string') return raw;
+  if (Array.isArray(raw)) return new TextDecoder().decode(new Uint8Array(raw as number[]));
+  return '';
+}
+
+async function decryptPhone(blobId: string, memberAddress: string): Promise<string | null> {
+  try {
+    const payload = await fetchAndDecryptPII(blobId);
+    return payload.phone_e164 ?? null;
+  } catch (err) {
+    appLogger.warn('[whatsapp-notifier] failed to decrypt PII envelope', {
+      memberAddress,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
+}
+
+/**
+ * Resolves the phone of a member who linked a circle to WhatsApp, or null
+ * when none of their enabled links resolves to one.
+ *
+ * The Postgres HMAC index is keyed by phone, so the member's links come
+ * from the on-chain registry (`linked_by`). Each link's blob then comes
+ * from the index by circle id: /api/cron/walrus-renewal re-stores every
+ * blob before its lease ends and records the new id ONLY in the index, so
+ * the blob id anchored on chain stops resolving once its original lease
+ * lapses. The anchored blob is used only when the index has no row for the
+ * circle (a link it never recorded, or no Postgres in dev).
+ *
+ * THROW contract: infra failures propagate so the caller halts or retries
+ * instead of recording a false `no_link` — a registry read error always,
+ * an index read error whenever no phone was found without it (the anchored
+ * blob is still tried, since it resolves until its lease ends). Per-blob
+ * decrypt failures are warned and skipped.
+ */
 async function resolveMemberPhone(
   memberAddress: string,
   network: NetworkType,
 ): Promise<string | null> {
-  // The Postgres HMAC index is keyed by phone, so we can't query it by
-  // address. We fall through to the on-chain link registry, find every
-  // link for this member's circles, fetch + decrypt the Walrus blob, and
-  // return the first phone we land on. For most members this is one RPC
-  // call + one Walrus fetch.
   const registries = getActiveWhatsAppRegistries(network);
   if (!registries || registries.length === 0) return null;
   const registry = registries[0];
@@ -310,32 +342,38 @@ async function resolveMemberPhone(
   const fields = (obj.data.content as { fields: { links?: unknown[] } }).fields;
   const links = Array.isArray(fields.links) ? fields.links : [];
   const target = normalizeAddress(memberAddress);
+  let indexError: unknown = null;
   for (const link of links) {
     const raw =
       (link as { fields?: Record<string, unknown> }).fields ??
       (link as Record<string, unknown>);
     if (!raw || raw.enabled !== true) continue;
     const linkedBy = raw.linked_by;
-    if (typeof linkedBy === 'string' && normalizeAddress(linkedBy) !== target) continue;
-    const blobBytes = raw.walrus_blob_id;
-    if (!blobBytes) continue;
-    const blobId =
-      typeof blobBytes === 'string'
-        ? blobBytes
-        : Array.isArray(blobBytes)
-          ? new TextDecoder().decode(new Uint8Array(blobBytes as number[]))
-          : '';
-    if (!blobId) continue;
-    try {
-      const payload = await fetchAndDecryptPII(blobId);
-      if (payload.phone_e164) return payload.phone_e164;
-    } catch (err) {
-      appLogger.warn('[whatsapp-notifier] failed to decrypt PII envelope', {
-        memberAddress: target,
-        error: err instanceof Error ? err.message : String(err),
-      });
+    if (typeof linkedBy !== 'string' || normalizeAddress(linkedBy) !== target) continue;
+
+    const anchoredBlobId = decodeBlobId(raw.walrus_blob_id);
+    let blobIds = anchoredBlobId ? [anchoredBlobId] : [];
+    const circleId = raw.circle_id;
+    if (typeof circleId === 'string' && circleId) {
+      try {
+        const indexed = await lookupBlobsForCircle(circleId);
+        if (indexed.length > 0) blobIds = indexed;
+      } catch (err) {
+        indexError ??= err;
+        appLogger.warn('[whatsapp-notifier] link index lookup failed; trying the anchored blob', {
+          memberAddress: target,
+          circleId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    for (const blobId of blobIds) {
+      const phone = await decryptPhone(blobId, target);
+      if (phone) return phone;
     }
   }
+  if (indexError) throw indexError;
   return null;
 }
 
@@ -397,13 +435,13 @@ async function sendWhatsAppMessage(
  * (the member opted out of WhatsApp), not an error.
  *
  * THROW contract: this function throws only on infra failures during the
- * on-chain phone lookup (e.g. the RPC failover transport exhausted its
- * candidates). The claim row is settled (`lookup_failed: …`) BEFORE the
- * rethrow, so the tuple is immediately reclaimable — callers treat the
- * throw as "infra problem, retry me" (the cycle-finalized cron halts
- * without advancing its cursor; webhook callers answer non-2xx so the
- * provider retries) and the retry actually re-sends instead of losing the
- * claim race against a phantom in-flight row.
+ * phone lookup (e.g. the RPC failover transport exhausted its candidates,
+ * or the link index could not be read). The claim row is settled
+ * (`lookup_failed: …`) BEFORE the rethrow, so the tuple is immediately
+ * reclaimable — callers treat the throw as "infra problem, retry me" (the
+ * cycle-finalized cron halts without advancing its cursor; webhook callers
+ * answer non-2xx so the provider retries) and the retry actually re-sends
+ * instead of losing the claim race against a phantom in-flight row.
  */
 export async function sendMemberNotification(
   input: SendMemberNotificationInput,
@@ -430,10 +468,11 @@ export async function sendMemberNotification(
       phone = await resolveMemberPhone(target, input.network);
     } catch (err) {
       // Infra failure reading the on-chain link registry (RPC degradation
-      // can throw here while queryEvents still works). Settle the claim
-      // FIRST so the tuple is reclaimable the moment the caller retries,
-      // then rethrow — a lookup failure affects every recipient, so the
-      // caller must halt/retry rather than advance past the event.
+      // can throw here while queryEvents still works) or the Postgres link
+      // index. Settle the claim FIRST so the tuple is reclaimable the
+      // moment the caller retries, then rethrow — a lookup failure affects
+      // every recipient, so the caller must halt/retry rather than advance
+      // past the event.
       const message = err instanceof Error ? err.message : String(err);
       await recordNotification(
         input.kind,

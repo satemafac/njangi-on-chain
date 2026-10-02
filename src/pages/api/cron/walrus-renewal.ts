@@ -18,10 +18,11 @@
  * set + audit row in one transaction.
  *
  * The on-chain anchor keeps the OLD blob id — the index is authoritative
- * for webhook routing (it resolves the index FIRST, falling back to the
- * registry scan), so updating the index keeps links alive without a
- * signature. On-chain re-anchoring is a future admin-signed step (the cron
- * is non-custodial and has no signing authority).
+ * for webhook routing and outbound sends (each resolves the index FIRST,
+ * falling back to the on-chain blob), so updating the index keeps links
+ * alive without a signature. On-chain re-anchoring is a future
+ * admin-signed step (the cron is non-custodial and has no signing
+ * authority).
  *
  * Auth: `Authorization: Bearer ${CRON_SECRET}` (timing-safe compare), same
  * as the other crons. Overlap protection reuses the cycle-finalized fenced
