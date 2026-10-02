@@ -133,8 +133,8 @@ that equals the master key or doesn't decode to 32 bytes.
      day on testnet and two weeks on mainnet). Every blob sealed with the old
      key was stored for at most that long, so by then none of them is served.
      That includes the original blobs the on-chain link anchors point at:
-     renewal updates only `whatsapp_phone_index`, while member lookups and the
-     webhook's fallback scan read the anchors.
+     renewal updates only `whatsapp_phone_index`, and the app's on-chain
+     fallbacks still read the anchors.
    - This query, run against the production database with your timestamp,
      returns no rows. It lists the index rows with no renewal since that cron
      run, each recorded in `walrus_renewal_audit`:
