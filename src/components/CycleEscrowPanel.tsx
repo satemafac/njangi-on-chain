@@ -49,6 +49,10 @@ import {
   preflightSanctionsCheck,
   SANCTIONS_BLOCKED_MESSAGE,
 } from '@/lib/sanctions-preflight';
+import {
+  loadWhatsAppLinkNotice,
+  type WhatsAppLinkNotice,
+} from '@/lib/whatsapp-link-notice';
 
 interface CycleEscrowPanelProps {
   circleId: string;
@@ -177,11 +181,11 @@ export function CycleEscrowPanel({
   // Gated round + no attestation on the caller's wallet: explain the
   // verification requirement instead of a dead-end error toast.
   const [showVerificationRequired, setShowVerificationRequired] = useState(false);
-  // Phase 12: when the central WhatsApp dispatcher reports `no_link`
-  // (member hasn't paired their phone yet), surface a friendly prompt so
-  // they can ask the admin to add them. We check this lazily after a
-  // successful action so it doesn't slow down the initial render.
-  const [whatsAppLinked, setWhatsAppLinked] = useState<boolean | null>(null);
+  // Admin-only: set when the circle has no WhatsApp number linked, or only a
+  // group that nothing can message. Members never get a notice, because
+  // nothing they can do changes what WhatsApp sends them; see
+  // src/lib/whatsapp-link-notice.ts.
+  const [whatsAppNotice, setWhatsAppNotice] = useState<WhatsAppLinkNotice | null>(null);
   // Where the circle's rotation pointer stands. Only read once a round has
   // been claimed, because that is the only stage whose next action depends
   // on it — see `nextRound` below. Null covers both "not needed yet" and
@@ -246,28 +250,17 @@ export function CycleEscrowPanel({
     void refresh();
   }, [refresh]);
 
-  // Best-effort link probe — uses the existing admin-link-circle GET
-  // path. If the member's circle isn't linked, we surface a CTA below
-  // the round status. We don't block the panel on this; failures are
-  // silent and just leave the prompt hidden.
+  // Best-effort and off the hot path: the panel never waits on the probe,
+  // and a failed one just leaves the notice hidden.
   useEffect(() => {
     let cancelled = false;
-    fetch(
-      `/api/whatsapp/admin-link-circle?circleId=${encodeURIComponent(circleId)}&network=${network}`,
-    )
-      .then((resp) => (resp.ok ? resp.json() : null))
-      .then((body) => {
-        if (cancelled || !body) return;
-        const linked = Boolean(body?.data?.isLinked);
-        setWhatsAppLinked(linked);
-      })
-      .catch(() => {
-        /* ignore — we'll just hide the prompt */
-      });
+    void loadWhatsAppLinkNotice({ circleId, network, isAdmin }).then((notice) => {
+      if (!cancelled) setWhatsAppNotice(notice);
+    });
     return () => {
       cancelled = true;
     };
-  }, [circleId, network]);
+  }, [circleId, network, isAdmin]);
 
   const recipient = liveState?.recipient ?? summary?.recipient ?? null;
   const contributionAmountBase = liveState?.contributionAmount ?? summary?.contributionAmount ?? '0';
@@ -783,11 +776,23 @@ export function CycleEscrowPanel({
         </div>
       ) : null}
 
-      {whatsAppLinked === false ? (
+      {whatsAppNotice ? (
+        // Admin-only, so raw English like the activation note below. It names
+        // no updates: the manage page's WhatsApp section owns that list.
         <div className="mt-4 rounded-lg border border-yellow-200 bg-yellow-50 p-3 text-sm text-yellow-900">
-          📱 We couldn&rsquo;t find a WhatsApp number for this circle. Ask your admin
-          to link it on the manage page so you get round reminders, payout
-          alerts, and KYC confirmations on WhatsApp.
+          {whatsAppNotice === 'group-link' ? (
+            <>
+              📱 This circle is linked to a WhatsApp group, which gets no updates:
+              WhatsApp only lets a business number message groups it created itself.
+              Unlink it in the WhatsApp section of the manage page, then link a phone
+              number.
+            </>
+          ) : (
+            <>
+              📱 No WhatsApp number is linked to this circle. To get circle updates on
+              WhatsApp, link a phone number in the WhatsApp section of the manage page.
+            </>
+          )}
         </div>
       ) : null}
 
