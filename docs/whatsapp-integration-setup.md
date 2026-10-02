@@ -115,9 +115,10 @@ any other message that contains `status` counts as `/status`.
    `walrus_renewal_audit`.
 4. **PII keys.** `WALRUS_PII_MASTER_KEY` encrypts linked numbers, and
    `WALRUS_LOOKUP_SALT` keys the lookup index. `npm run generate:secrets`
-   fills both. Don't change the master key once numbers are linked: the app
-   decrypts with the current key only, so every existing link would become
-   unreadable.
+   fills both. Once numbers are linked, never just replace the master key:
+   each stored number opens only with the key that sealed it. Rotate it as
+   [Rotating the WhatsApp PII keys](environment.md#rotating-the-whatsapp-pii-keys)
+   describes. The salt can't be rotated yet; that section explains why.
 5. **Crons.** Set `CRON_SECRET`. Vercel sends it with each cron call, and the
    cron routes reject calls without it.
 6. **Templates.** Read the next section before you rely on notifications in
