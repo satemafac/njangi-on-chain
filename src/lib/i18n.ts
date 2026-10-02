@@ -228,11 +228,8 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'landing.footer.rights': '© {year} Njangi On-Chain. All rights reserved.',
     // Auth page
     'auth.title': 'Account Authentication',
-    'auth.whatsappTitle': 'WhatsApp Authentication',
     'auth.checking': 'Checking authentication status...',
     'auth.pleaseAuthenticate': 'Please authenticate your account',
-    'auth.pleaseAuthenticateWhatsapp':
-      'Please authenticate your account for WhatsApp ({phone})',
     'auth.alreadyAuthenticated': 'You are already authenticated!',
     'auth.successTitle': 'Authentication Successful!',
     'auth.redirecting': 'Authentication successful! Redirecting...',
@@ -725,11 +722,8 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'landing.footer.rights': '© {year} Njangi On-Chain. Tous droits réservés.',
     // Page d'authentification
     'auth.title': 'Authentification du compte',
-    'auth.whatsappTitle': 'Authentification WhatsApp',
     'auth.checking': "Vérification du statut d'authentification...",
     'auth.pleaseAuthenticate': 'Veuillez authentifier votre compte',
-    'auth.pleaseAuthenticateWhatsapp':
-      'Veuillez authentifier votre compte pour WhatsApp ({phone})',
     'auth.alreadyAuthenticated': 'Vous êtes déjà authentifié !',
     'auth.successTitle': 'Authentification réussie !',
     'auth.redirecting': 'Authentification réussie ! Redirection...',
