@@ -12,6 +12,7 @@ import { getActiveWhatsAppRegistries } from '../../../services/whatsapp-registry
 import { getCircleStatus, formatCircleStatusForWhatsAppWithNames } from '../../../services/circle-status.service';
 import { getPooledSuiClient } from '../../../services/sui-rpc-failover';
 import { fetchAndDecryptPII } from '../../../lib/walrus-pii';
+import { WHATSAPP_GRAPH_API_VERSION } from '../../../lib/whatsapp-graph-api';
 import { lookupCirclesForPhone } from '../../../lib/whatsapp-link-index';
 import { timingSafeEqualStrings } from '../../../lib/timing-safe';
 
@@ -378,7 +379,7 @@ async function handler(
 
                     try {
                       const whatsappResponse = await fetch(
-                        `https://graph.facebook.com/v23.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
+                        `https://graph.facebook.com/${WHATSAPP_GRAPH_API_VERSION}/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
                         {
                           method: 'POST',
                           headers: {
@@ -432,7 +433,7 @@ async function handler(
                         }
 
                         const whatsappResponse = await fetch(
-                          `https://graph.facebook.com/v23.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
+                          `https://graph.facebook.com/${WHATSAPP_GRAPH_API_VERSION}/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
                           {
                             method: 'POST',
                             headers: {
@@ -475,7 +476,7 @@ async function handler(
 
                         try {
                           await fetch(
-                            `https://graph.facebook.com/v23.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
+                            `https://graph.facebook.com/${WHATSAPP_GRAPH_API_VERSION}/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
                             {
                               method: 'POST',
                               headers: {
@@ -515,7 +516,7 @@ async function handler(
                             }
 
                             await fetch(
-                              `https://graph.facebook.com/v23.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
+                              `https://graph.facebook.com/${WHATSAPP_GRAPH_API_VERSION}/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
                               {
                                 method: 'POST',
                                 headers: {
@@ -553,7 +554,7 @@ async function handler(
 
                     try {
                       const whatsappResponse = await fetch(
-                        `https://graph.facebook.com/v23.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
+                        `https://graph.facebook.com/${WHATSAPP_GRAPH_API_VERSION}/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
                         {
                           method: 'POST',
                           headers: {

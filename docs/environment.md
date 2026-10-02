@@ -52,6 +52,13 @@ code reads them; `npm run validate:env` warns when one is set in `.env.local`.
 Delete any that are still set, locally or in Vercel. `.env.example` lists the
 other variables that were removed with the bot.
 
+`WHATSAPP_API_VERSION` and `WHATSAPP_WEBHOOK_URL` were removed in October
+2026. No code read either one; `npm run validate:env` warns when one is set.
+The Graph API version is the `WHATSAPP_GRAPH_API_VERSION` constant in
+[`src/lib/whatsapp-graph-api.ts`](../src/lib/whatsapp-graph-api.ts), and the
+webhook callback URL is set in Meta's App Dashboard. Delete both, locally and
+in Vercel. `WHATSAPP_BUSINESS_ACCOUNT_ID` is optional: no code reads it.
+
 ## Deprecated aliases
 
 The app still tolerates these as one-release shims and warns when it uses them:
