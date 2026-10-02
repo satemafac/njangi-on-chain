@@ -13,6 +13,7 @@
 
 import type { Pool } from 'pg';
 import { getSharedPgPool, isPostgresConfigured } from './pg-pool';
+import { WHATSAPP_GRAPH_API_VERSION } from './whatsapp-graph-api';
 import { computeLookupHash, fetchAndDecryptPII } from './walrus-pii';
 import { lookupBlobsForCircle, lookupCirclesForPhone } from './whatsapp-link-index';
 import { getActiveWhatsAppRegistries } from '../services/whatsapp-registry-service';
@@ -405,7 +406,7 @@ async function sendWhatsAppMessage(
           text: { body: message.body },
         };
   const response = await fetch(
-    `https://graph.facebook.com/v23.0/${phoneNumberId}/messages`,
+    `https://graph.facebook.com/${WHATSAPP_GRAPH_API_VERSION}/${phoneNumberId}/messages`,
     {
       method: 'POST',
       headers: {
