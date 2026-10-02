@@ -12,8 +12,9 @@
  * One invocation: enumerate every active link from the authoritative
  * Postgres index, learn the current Sui epoch, and re-store any blob within
  * RENEWAL_THRESHOLD_EPOCHS (default 2) of its recorded end epoch. Re-storing
- * fetches + decrypts with the CURRENT master key and re-encrypts before
- * upload, so a renewal doubles as key-rotation-by-renewal. The renewed
+ * decrypts with the current master key (or WALRUS_PII_PREVIOUS_MASTER_KEY
+ * while a key rotation is in progress) and re-encrypts under the current key
+ * before upload, so renewals are what move blobs onto a new key. The renewed
  * (blob id, end epoch) is written back to the index row via a compare-and-
  * set + audit row in one transaction.
  *
