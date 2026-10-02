@@ -2,18 +2,21 @@
 
 The repo now uses one canonical local env file:
 
-- local source of truth: [`/.env.local`](/Volumes/Developing/njangi-on-chain/.env.local)
-- template: [`/.env.example`](/Volumes/Developing/njangi-on-chain/.env.example)
+- local source of truth: `.env.local` in the repo root (git-ignored)
+- template: [`.env.example`](../.env.example)
 
 ## Local development
 
-1. Copy [`/.env.example`](/Volumes/Developing/njangi-on-chain/.env.example) to `/.env.local`.
+1. Copy [`.env.example`](../.env.example) to `.env.local` in the repo root.
 2. Fill in the canonical keys only.
 3. Run `npm run validate:env`.
 
-The WhatsApp bot backend auto-loads the repo root `/.env.local`. `whatsapp-bot-backend/.env.local` is no longer the default source and can be removed after you migrate.
-
-If you explicitly need a different file for the bot, set `NJANGI_ENV_FILE=/abs/path/to/file`.
+The standalone WhatsApp bot backend (`whatsapp-bot-backend/`) is retired. The
+app itself now serves the WhatsApp webhook and runs the WhatsApp notification
+crons; see [`whatsapp-bot-backend/DEPRECATED.md`](../whatsapp-bot-backend/DEPRECATED.md).
+The app never reads `whatsapp-bot-backend/.env.local`, and
+`npm run validate:env` warns while that file exists. Move any value you still
+need into the root `.env.local`, then delete the file.
 
 ## Canonical naming
 
@@ -40,11 +43,14 @@ Keep server/runtime keys unprefixed:
   Next.js inlines those values into the browser bundle.
 - `WHATSAPP_*`
 - `DATABASE_URL`
-- `BACKEND_AUTH_TOKEN`
-- `FRONTEND_URL`
-- `WHATSAPP_BACKEND_URL`
-- `CIRCLE_BACKEND_URL`
-- `ANALYTICS_URL`
+- `FRONTEND_URL`: the base URL for links in WhatsApp circle-event messages
+  (defaults to `https://njangionchain.com`).
+
+`BACKEND_AUTH_TOKEN`, `WHATSAPP_BACKEND_URL`, `CIRCLE_BACKEND_URL` and
+`ANALYTICS_URL` were removed in June 2026 along with the bot backend. No app
+code reads them; `npm run validate:env` warns when one is set in `.env.local`.
+Delete any that are still set, locally or in Vercel. `.env.example` lists the
+other variables that were removed with the bot.
 
 ## Deprecated aliases
 
@@ -83,7 +89,7 @@ project dashboard (Project → Settings → Environment Variables).
   bundle.
 - `NEXT_PUBLIC_*` values must be present at build time, before `next build`.
 - Cron jobs (your-turn nudges, circle-event relays, Walrus renewal) are
-  declared in [`vercel.json`](/Volumes/Developing/njangi-on-chain/vercel.json)
+  declared in [`vercel.json`](../vercel.json)
   and authenticate with `CRON_SECRET`.
 
 Validate the local env before deploying:
