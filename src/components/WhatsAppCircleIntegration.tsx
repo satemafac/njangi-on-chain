@@ -9,7 +9,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { MessageCircle, Link as LinkIcon, Unlink, Loader } from 'lucide-react';
+import { MessageCircle, Link as LinkIcon, Unlink, Loader, RefreshCw } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { AccountData } from '@/services/zkLoginService';
 import { ZkLoginClient } from '@/services/zkLoginClient';
@@ -69,7 +69,13 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
   onLinked
 }) => {
   const [linkedStatus, setLinkedStatus] = useState<LinkedStatus>({ isLinked: false });
-  const [loading, setLoading] = useState(false);
+  // Starts true: until the first read answers, the status is unknown and the
+  // card shows the spinner, not the "Link to WhatsApp" button.
+  const [loading, setLoading] = useState(true);
+  // Distinguishes "couldn't check" from "not linked". A failed read used to
+  // set isLinked: false, so a 500 from the status route offered to link a
+  // circle that may already be linked on chain.
+  const [loadError, setLoadError] = useState(false);
   const [linking, setLinking] = useState(false);
   const [showLinkForm, setShowLinkForm] = useState(false);
   const [showUnlinkConfirm, setShowUnlinkConfirm] = useState(false);
@@ -87,6 +93,7 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
   }, [circleId]);
 
   const checkLinkStatus = async () => {
+    setLoadError(false);
     try {
       setLoading(true);
       
@@ -101,26 +108,30 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
         }
       });
 
-      if (response.ok) {
-        const data = await response.json();
-        if (data.data?.isLinked) {
-          setLinkedStatus({
-            isLinked: true,
-            linkType: data.data.linkType,
-            recipient: data.data.recipient,
-            linkedAt: data.data.linkedAt
-          });
-        } else {
-          setLinkedStatus({ isLinked: false });
-        }
+      // Only the route's answer is a status. A failed request, or a reply
+      // without an isLinked flag, throws to the catch below.
+      if (!response.ok) {
+        throw new Error(`Link status request failed (${response.status})`);
+      }
+      const data = await response.json();
+      if (typeof data?.data?.isLinked !== 'boolean') {
+        throw new Error('Link status reply has no isLinked flag');
+      }
+      if (data.data.isLinked) {
+        setLinkedStatus({
+          isLinked: true,
+          linkType: data.data.linkType,
+          recipient: data.data.recipient,
+          linkedAt: data.data.linkedAt
+        });
       } else {
-        // Assume not linked if query fails
-      setLinkedStatus({ isLinked: false });
+        setLinkedStatus({ isLinked: false });
       }
     } catch (error) {
       console.error('Error checking link status:', error);
-      // Default to not linked on error
-      setLinkedStatus({ isLinked: false });
+      // Not "not linked": the circle may already be linked on chain. Leave
+      // linkedStatus alone; the card shows "Couldn't check" and Retry instead.
+      setLoadError(true);
     } finally {
       setLoading(false);
     }
@@ -336,6 +347,33 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
       setLinking(false);
     }
   };
+
+  // Returns before the views below: while the status is unknown the card
+  // offers no link form, no Link button and no Unlink, only Retry.
+  if (loadError) {
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center space-x-2">
+          <MessageCircle className="w-5 h-5 text-green-600" />
+          <h3 className="font-semibold text-gray-900">WhatsApp Integration</h3>
+        </div>
+        <div role="alert" className="rounded-[18px] border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+          <p className="font-semibold">{"Couldn't check WhatsApp status"}</p>
+          <p className="mt-2">
+            {"This circle may already be linked, so we're not offering to link or unlink it until a check succeeds."}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => checkLinkStatus()}
+          className="w-full px-4 py-2 bg-white text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50 transition flex items-center justify-center text-sm font-medium"
+        >
+          <RefreshCw className="w-4 h-4 mr-2" />
+          Retry
+        </button>
+      </div>
+    );
+  }
 
   if (loading) {
     return (

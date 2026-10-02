@@ -79,7 +79,7 @@ export default function YourPage() {
    [Loading spinner] Checking WhatsApp status...
    ```
 
-2. **Not Linked** (Default)
+2. **Not Linked** (the status route answered that the circle has no link)
    ```
    [Link to WhatsApp] button
    ```
@@ -106,6 +106,17 @@ export default function YourPage() {
    Why the group gets no updates, and to link a phone number instead
    [Unlink from WhatsApp] button
    ```
+
+6. **Couldn't Check Status** (the status read in state 1 failed)
+   ```
+   Couldn't check WhatsApp status
+   This circle may already be linked, so we're not offering to link or unlink it until a check succeeds.
+   [Retry] button
+   ```
+   An error from `GET /api/whatsapp/admin-link-circle`, a network error or a
+   reply without an `isLinked` flag lands here, never in state 2: the circle
+   may already be linked on chain. The card offers no link form, Link button
+   or Unlink until a check succeeds. Retry runs the check again.
 
 ## API Integration
 
@@ -172,7 +183,8 @@ The component handles:
 - ✅ API errors
 - ✅ User cancellation
 
-All errors display user-friendly toast messages.
+Link and unlink errors display toast messages. A failed status check shows in
+the card instead, with Retry (UI state 6).
 
 ## Security
 
