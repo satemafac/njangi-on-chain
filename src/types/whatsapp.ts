@@ -1,12 +1,4 @@
 // WhatsApp Business API Types
-export interface WhatsAppConfig {
-  phoneNumberId: string;
-  accessToken: string;
-  verifyToken: string;
-  appSecret: string;
-  webhookUrl: string;
-  apiVersion: string;
-}
 
 // Webhook Message Types
 export interface WhatsAppWebhookMessage {
@@ -230,13 +222,6 @@ export interface WhatsAppError {
 }
 
 // Rate Limiting Types
-export interface RateLimitConfig {
-  windowMs: number;
-  maxRequests: number;
-  skipSuccessfulRequests: boolean;
-  skipFailedRequests: boolean;
-}
-
 export interface RateLimitInfo {
   limit: number;
   current: number;

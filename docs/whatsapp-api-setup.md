@@ -48,13 +48,24 @@ WHATSAPP_VERIFY_TOKEN="your_secure_verify_token_123"
 # 4. APP SECRET
 # Location: App Settings > Basic > App Secret (click "Show")
 WHATSAPP_APP_SECRET="abcd1234..."
-
-# 5. WEBHOOK URL (your deployed domain)
-WHATSAPP_WEBHOOK_URL="https://yourdomain.com/api/whatsapp/webhook"
-
-# 6. API VERSION (current version)
-WHATSAPP_API_VERSION="v21.0"
 ```
+
+Two settings are not variables:
+
+- **The webhook callback URL** goes into Meta's App Dashboard (step 2 of
+  [Webhook Configuration](#-webhook-configuration)). The app never reads it.
+- **The Graph API version** is the `WHATSAPP_GRAPH_API_VERSION` constant in
+  [`src/lib/whatsapp-graph-api.ts`](../src/lib/whatsapp-graph-api.ts),
+  currently `v23.0`. A new version can change request and response shapes, so
+  a bump ships as a reviewed code change.
+
+Earlier versions of this guide also listed `WHATSAPP_WEBHOOK_URL` and
+`WHATSAPP_API_VERSION`. Nothing reads them, so delete both from `.env.local`
+and Vercel. `npm run validate:env` warns while either is set.
+
+`WHATSAPP_BUSINESS_ACCOUNT_ID`, which `.env.example` also lists, is optional:
+no code reads it. It identifies the WhatsApp Business Account whose message
+templates you manage in WhatsApp Manager.
 
 ---
 
@@ -73,8 +84,6 @@ WHATSAPP_PHONE_NUMBER_ID=your_phone_number_id_here
 WHATSAPP_ACCESS_TOKEN=your_access_token_here
 WHATSAPP_VERIFY_TOKEN=your_secure_verify_token_here
 WHATSAPP_APP_SECRET=your_app_secret_here
-WHATSAPP_WEBHOOK_URL=https://yourdomain.com/api/whatsapp/webhook
-WHATSAPP_API_VERSION=v21.0
 ```
 
 ### For Production (Vercel)
@@ -87,8 +96,6 @@ WHATSAPP_PHONE_NUMBER_ID=your_phone_number_id
 WHATSAPP_ACCESS_TOKEN=your_access_token
 WHATSAPP_VERIFY_TOKEN=your_verify_token
 WHATSAPP_APP_SECRET=your_app_secret
-WHATSAPP_WEBHOOK_URL=https://njangionchain.com/api/whatsapp/webhook
-WHATSAPP_API_VERSION=v21.0
 ```
 
 The CLI works too. It prompts for the value, so a secret never lands in your
@@ -184,8 +191,9 @@ page for the full field list.
 ### Test Message Sending
 
 ```bash
-# Test API endpoint (replace with your keys)
-curl -X POST "https://graph.facebook.com/v21.0/YOUR_PHONE_NUMBER_ID/messages" \
+# Test API endpoint (replace with your keys). v23.0 is the version the app
+# sends with (WHATSAPP_GRAPH_API_VERSION).
+curl -X POST "https://graph.facebook.com/v23.0/YOUR_PHONE_NUMBER_ID/messages" \
   -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -270,7 +278,8 @@ git status
 - [ ] Created Meta Developer account
 - [ ] Created Facebook app with WhatsApp product
 - [ ] Added and verified phone number
-- [ ] Got all 6 API credentials
+- [ ] Got the 4 values from Step 4 (phone number ID, access token, verify
+  token, app secret)
 - [ ] Added credentials to .env file
 - [ ] Set the production variables in Vercel and redeployed
 - [ ] Deployed app with public webhook URL

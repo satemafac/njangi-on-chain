@@ -6,6 +6,7 @@
 // the SDK does not require a fixed location for server/edge configs —
 // only the explicit import from the instrumentation hook loads them.
 import * as Sentry from '@sentry/nextjs';
+import { scrubSentryEvent } from './lib/sentry-filters';
 
 const dsn = process.env.SENTRY_DSN || process.env.NEXT_PUBLIC_SENTRY_DSN;
 
@@ -16,6 +17,10 @@ if (dsn) {
     release: process.env.NEXT_PUBLIC_APP_VERSION,
     tracesSampleRate: Number(process.env.SENTRY_TRACES_SAMPLE_RATE ?? '0.1'),
     // zkLogin/PII hygiene: never attach request bodies, cookies, or user IP.
+    // sendDefaultPii: false alone does not do that on the server; the
+    // scrubber does (see src/lib/sentry-filters.ts).
     sendDefaultPii: false,
+    beforeSend: scrubSentryEvent,
+    beforeSendTransaction: scrubSentryEvent,
   });
 }
