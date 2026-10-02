@@ -60,7 +60,6 @@ The app still tolerates these as one-release shims and warns when it uses them:
 - `NEXT_PUBLIC_WHATSAPP_PACKAGE_ID`
 - `NEXT_PUBLIC_WHATSAPP_REGISTRY_ID`
 - `SUI_WHATSAPP_LINKS_REGISTRY_ID`
-- `NEXT_PUBLIC_ENOKI_TESTNET`, `NEXT_PUBLIC_ENOKI_MAINNET`, `NEXT_PUBLIC_ENOKI`
 - `NEXT_PUBLIC_SUI_RPC_URL`
 - `NEXT_PUBLIC_SUI_GRAPHQL_URL`
 - `SUI_GRAPHQL_URL`
@@ -69,11 +68,19 @@ The app still tolerates these as one-release shims and warns when it uses them:
 
 If a canonical key and a legacy alias are both set with different values, startup fails.
 
-The three `NEXT_PUBLIC_ENOKI*` aliases are more than old names. Next.js
-inlines their values into the browser bundle, so a key stored in one is public.
-`npm run validate:env` fails while any of them holds an `enoki_private_*` key.
-Move the key to `ENOKI_API_KEY_*`, rotate it in the Enoki portal (a new key in
-the same Enoki app keeps every address), then delete the alias.
+## Removed: `NEXT_PUBLIC_ENOKI*`
+
+`NEXT_PUBLIC_ENOKI_TESTNET`, `NEXT_PUBLIC_ENOKI_MAINNET` and `NEXT_PUBLIC_ENOKI`
+were removed, not deprecated. Next.js inlines every `NEXT_PUBLIC_*` variable the
+code reads into the browser bundle, so a key stored in one was public; that is
+how the Enoki key leaked before its 2026-07-04 rotation. The app no longer reads
+them, so they configure nothing: zkLogin gets its key only from
+`ENOKI_API_KEY_*`. `npm run validate:env` fails while any of them is set.
+
+If one ever held a key, move it to `ENOKI_API_KEY_*`, rotate it in the Enoki
+portal (a new key in the same Enoki app keeps every address), then delete the
+alias everywhere, including every Vercel environment (`vercel env ls` shows
+Production, Preview and Development).
 
 ## Hosted environment (Vercel)
 
