@@ -16,6 +16,10 @@
  *   from the body) is rejected before any side effect, and the on-chain
  *   anchor / Postgres index always target the verified circle. Same for
  *   admin-unlink-circle.
+ *
+ * Group links (October 2026): POST refuses linkType 2. A WhatsApp Cloud API
+ * number can message only groups it created through Meta's Groups API, so a
+ * group id copied from the WhatsApp app (…@g.us) never received anything.
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
@@ -411,6 +415,70 @@ describe('admin-link-circle POST authorization ordering', () => {
     // The confirm call must not re-upload the blob it was handed.
     expect(encryptAndStorePII).not.toHaveBeenCalled();
     expect(enokiZkLoginService.sendTransaction).not.toHaveBeenCalled();
+  });
+});
+
+describe('admin-link-circle POST group links', () => {
+  beforeEach(() => {
+    getZkLoginSessionStore().clear();
+    jest.clearAllMocks();
+    (getActiveWhatsAppRegistries as jest.Mock).mockReturnValue([
+      { packageId: '0xpkg', registryObjectId: '0xreg' },
+    ]);
+  });
+
+  it.each([
+    ['prepare', {}],
+    ['confirm', { anchoredDigest: '0xdigest', walrusBlobId: 'blob-1' }],
+  ])('refuses a group link at the %s step before any side effect', async (_step, extra) => {
+    getZkLoginSessionStore().set(SESSION_ID, buildSessionRecord(ADMIN_ADDRESS));
+    (fetchCircleAdminAddress as jest.Mock).mockResolvedValue(ADMIN_ADDRESS);
+    const res = createMockRes();
+
+    await handler(
+      createPostReq(
+        '/api/whatsapp/admin-link-circle',
+        {
+          circleId: CIRCLE_ID,
+          linkType: 2,
+          phoneOrGroup: '120363043968066561@g.us',
+          network: 'testnet',
+          ...extra,
+        },
+        {},
+        { 'session-id': SESSION_ID },
+      ),
+      res,
+    );
+
+    expect(res.statusCode).toBe(400);
+    expect(res.jsonBody).toMatchObject({
+      success: false,
+      code: 'WHATSAPP_GROUP_LINKS_UNSUPPORTED',
+      error: expect.stringContaining('Link a phone number instead'),
+    });
+    expect(encryptAndStorePII).not.toHaveBeenCalled();
+    expect(indexWhatsAppLink).not.toHaveBeenCalled();
+  });
+
+  it('still rejects a linkType that is neither a phone nor a group', async () => {
+    getZkLoginSessionStore().set(SESSION_ID, buildSessionRecord(ADMIN_ADDRESS));
+    (fetchCircleAdminAddress as jest.Mock).mockResolvedValue(ADMIN_ADDRESS);
+    const res = createMockRes();
+
+    await handler(
+      createPostReq(
+        '/api/whatsapp/admin-link-circle',
+        { circleId: CIRCLE_ID, linkType: 3, phoneOrGroup: PHONE, network: 'testnet' },
+        {},
+        { 'session-id': SESSION_ID },
+      ),
+      res,
+    );
+
+    expect(res.statusCode).toBe(400);
+    expect(res.jsonBody).toEqual({ success: false, error: 'Invalid linkType (must be 1)' });
+    expect(encryptAndStorePII).not.toHaveBeenCalled();
   });
 });
 
