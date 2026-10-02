@@ -18,6 +18,18 @@
 // move onto a new key as they cycle. The new (blob id, end epoch) is written
 // back to the authoritative Postgres index row.
 //
+// EPOCHS: end epochs and the current epoch are WALRUS epochs (a day on
+// testnet, two weeks on mainnet), read from the Walrus System object by
+// walrus-epoch.ts. They are not Sui epochs: compared with the Sui epoch
+// (testnet 2026-10-02: Sui 1240, Walrus 538) every lease looked expired and
+// every blob was re-stored on every run.
+//
+// ORDER: a run renews the leases closest to running out first, and stops at
+// the per-run cap or the time budget. A renewed row's end epoch moves ahead,
+// so the rows a run didn't reach lead the next one. Rows with an unknown end
+// epoch come next and lapsed rows last, so blobs that fail every day can't
+// use up a run before the live ones get a turn.
+//
 // WHY THE INDEX IS AUTHORITATIVE: the webhook resolves a circle via the
 // `whatsapp_phone_index` table FIRST (O(1) HMAC lookup), only falling back
 // to the on-chain registry scan when the index misses. So updating the
@@ -51,15 +63,19 @@ export interface RenewableLink {
 
 export type RenewalDecision =
   | { action: 'skip'; reason: 'fresh' }
-  | { action: 'renew'; reason: 'within_threshold' | 'expiry_unknown' };
+  | { action: 'renew'; reason: 'within_threshold' | 'expiry_unknown' | 'lapsed' };
 
 /**
  * Decides whether a blob needs renewal. Pure — the only inputs are the
- * recorded end epoch, the current Sui epoch, and the threshold.
+ * recorded end epoch, the current Walrus epoch, and the threshold. Both
+ * epochs must be Walrus epochs (see EPOCHS above).
  *
  *   * end epoch unknown (null) → renew, so we learn + record the real
  *     expiry from the re-store response.
- *   * remaining = endEpoch - currentEpoch <= threshold → renew.
+ *   * remaining = endEpoch - currentEpoch <= 0 → renew ('lapsed'). The end
+ *     epoch is exclusive, so the lease is already over and the blob is
+ *     probably gone; the attempt is made anyway in case it is still served.
+ *   * remaining <= threshold → renew.
  *   * otherwise → skip (still fresh).
  *
  * `remaining <= threshold` (not `<`) so a blob with exactly `threshold`
@@ -75,10 +91,44 @@ export function decideRenewal(
     return { action: 'renew', reason: 'expiry_unknown' };
   }
   const remaining = link.walrusEndEpoch - currentEpoch;
+  if (remaining <= 0) {
+    return { action: 'renew', reason: 'lapsed' };
+  }
   if (remaining <= thresholdEpochs) {
     return { action: 'renew', reason: 'within_threshold' };
   }
   return { action: 'skip', reason: 'fresh' };
+}
+
+type RenewDecision = Extract<RenewalDecision, { action: 'renew' }>;
+
+interface DueLink {
+  link: RenewableLink;
+  decision: RenewDecision;
+}
+
+const RENEWAL_TIER: Record<RenewDecision['reason'], number> = {
+  within_threshold: 0,
+  expiry_unknown: 1,
+  lapsed: 2,
+};
+
+/**
+ * Renewal order for the due links (see ORDER above): live leases by end
+ * epoch, soonest first; then unknown end epochs; then lapsed leases, most
+ * recently lapsed first, since those are the likeliest to still be served.
+ * Ties go to the lower row id, so the order never depends on list order.
+ */
+function compareDueLinks(a: DueLink, b: DueLink): number {
+  const tier = RENEWAL_TIER[a.decision.reason] - RENEWAL_TIER[b.decision.reason];
+  if (tier !== 0) return tier;
+  // Only within_threshold and lapsed rows carry a finite end epoch.
+  const aEnd = a.link.walrusEndEpoch ?? 0;
+  const bEnd = b.link.walrusEndEpoch ?? 0;
+  let byEnd = 0;
+  if (a.decision.reason === 'within_threshold') byEnd = aEnd - bEnd;
+  else if (a.decision.reason === 'lapsed') byEnd = bEnd - aEnd;
+  return byEnd !== 0 ? byEnd : a.link.id - b.link.id;
 }
 
 /** Outcome of re-storing one blob. */
@@ -92,8 +142,12 @@ export interface RestoreResult {
 export interface RenewalDeps {
   /** Active links to consider, from the authoritative Postgres index. */
   listActiveLinks(): Promise<RenewableLink[]>;
-  /** Current Sui epoch (whole number). */
-  getCurrentEpoch(): Promise<number>;
+  /**
+   * Current epoch of the Walrus deployment the publisher stores on (a whole
+   * number; walrus-epoch.ts). Never the Sui epoch. Throwing fails the run
+   * before anything is listed or renewed.
+   */
+  getCurrentWalrusEpoch(): Promise<number>;
   /**
    * Fetches blob `blobId`, decrypts it (current master key, else the previous
    * one during a rotation), re-encrypts under the current key, uploads a fresh
@@ -118,30 +172,52 @@ export interface RenewalDeps {
   thresholdEpochs?: number;
   /** Safety cap on blobs re-stored per run (default 200). */
   maxRenewalsPerRun?: number;
+  /**
+   * Wall-clock time (ms since 1970) after which no new renewal starts. The
+   * cron derives it from its function time limit, so a run with more work
+   * than time ends cleanly (summary logged, lease released) instead of being
+   * killed mid-renewal. Unset: no time limit.
+   */
+  deadlineMs?: number;
+  /** Clock for deadlineMs (default Date.now); tests inject one. */
+  now?: () => number;
 }
 
 export interface RenewalRunResult {
+  /** The Walrus epoch every end epoch was compared against. */
+  walrusEpoch: number;
   considered: number;
   skipped: number;
   renewed: number;
   failed: number;
   /** Renewals that lost the compare-and-set to an overlapping run. */
   raced: number;
-  /** True when the per-run cap stopped the run before draining every link. */
+  /** Due links this run left for a later one (cap or time budget). */
+  deferred: number;
+  /**
+   * Renewals whose new end epoch is within the threshold of walrusEpoch, so
+   * the row comes due again on the next run. The publisher stores
+   * WALRUS_STORAGE_EPOCHS ahead of its own epoch, so this means the epoch
+   * source and the publisher disagree (different Walrus deployments, or a
+   * clock that isn't the Walrus epoch at all), or WALRUS_STORAGE_EPOCHS is
+   * not above the threshold. The cron reports such a run as failed.
+   */
+  leaseMismatches: number;
+  /** True when the per-run cap or the time budget stopped the run early. */
   capped: boolean;
 }
 
 const DEFAULT_MAX_RENEWALS_PER_RUN = 200;
 
 /**
- * Drains the active-link list, renewing every blob within the threshold.
+ * Renews every due blob, most urgent first, until the list, the per-run
+ * cap or the time budget runs out.
  *
- * Idempotency under overlap: two daily ticks (or a retried tick) that both
- * decide to renew the same row each re-store independently — re-storing is
- * naturally idempotent on Walrus (content-addressed; the publisher returns
- * the same blob id and refreshes the lease) — but only one applyRenewal
- * compare-and-set wins. The loser is counted as `raced`, not `renewed`, and
- * does not regress the row. A per-link failure is recorded and the run
+ * Idempotency under overlap: two runs that both decide to renew the same row
+ * each upload their own copy (re-encryption uses a fresh IV, so every copy
+ * is a new blob), but only one applyRenewal compare-and-set wins. The loser
+ * is counted as `raced`, not `renewed`, does not regress the row, and its
+ * copy is never referenced. A per-link failure is recorded and the run
  * continues so one bad blob can never wedge the whole renewal pass.
  */
 export async function runWalrusRenewal(
@@ -149,33 +225,56 @@ export async function runWalrusRenewal(
 ): Promise<RenewalRunResult> {
   const threshold = deps.thresholdEpochs ?? DEFAULT_RENEWAL_THRESHOLD_EPOCHS;
   const maxRenewals = deps.maxRenewalsPerRun ?? DEFAULT_MAX_RENEWALS_PER_RUN;
+  const now = deps.now ?? Date.now;
+
+  // The epoch decides which leases get renewed, so it is read first and a
+  // value that isn't a whole epoch number stops the run. A failed read must
+  // not become "every lease is fresh" (NaN compares false) or "every lease
+  // lapsed".
+  const walrusEpoch = await deps.getCurrentWalrusEpoch();
+  if (!Number.isSafeInteger(walrusEpoch) || walrusEpoch < 0) {
+    throw new Error(
+      `The current Walrus epoch must be a whole number, got ${String(walrusEpoch)}. Nothing was renewed.`,
+    );
+  }
 
   const links = await deps.listActiveLinks();
-  const currentEpoch = await deps.getCurrentEpoch();
 
   const result: RenewalRunResult = {
+    walrusEpoch,
     considered: links.length,
     skipped: 0,
     renewed: 0,
     failed: 0,
     raced: 0,
+    deferred: 0,
+    leaseMismatches: 0,
     capped: false,
   };
 
+  const due: DueLink[] = [];
   for (const link of links) {
-    const decision = decideRenewal(link, currentEpoch, threshold);
+    const decision = decideRenewal(link, walrusEpoch, threshold);
     if (decision.action === 'skip') {
       result.skipped += 1;
-      continue;
+    } else {
+      due.push({ link, decision });
     }
+  }
+  due.sort(compareDueLinks);
 
-    if (result.renewed + result.failed + result.raced >= maxRenewals) {
-      // Defer the rest to the next daily tick rather than blow the lease
-      // TTL / function timeout re-storing thousands of blobs in one run.
+  for (let i = 0; i < due.length; i += 1) {
+    const outOfTime = deps.deadlineMs !== undefined && now() >= deps.deadlineMs;
+    if (outOfTime || result.renewed + result.failed + result.raced >= maxRenewals) {
+      // Leave the rest for the next daily tick rather than run past the
+      // function's time limit. They are still due tomorrow, and the rows
+      // renewed today no longer are.
       result.capped = true;
+      result.deferred = due.length - i;
       break;
     }
 
+    const { link, decision } = due[i];
     try {
       const restored = await deps.restoreBlob(link.walrusBlobId);
       const applied = await deps.applyRenewal({
@@ -192,6 +291,18 @@ export async function runWalrusRenewal(
         appLogger.info('[walrus-renewal] renewal raced (row already updated)', {
           id: link.id,
           circleId: link.circleId,
+        });
+      }
+      if (restored.newEndEpoch - walrusEpoch <= threshold) {
+        // The renewal stands, so the link stays alive, but the epochs don't
+        // line up (see leaseMismatches).
+        result.leaseMismatches += 1;
+        appLogger.warn('[walrus-renewal] renewed lease ends within the renewal threshold', {
+          id: link.id,
+          circleId: link.circleId,
+          walrusEpoch,
+          newEndEpoch: restored.newEndEpoch,
+          thresholdEpochs: threshold,
         });
       }
     } catch (err) {

@@ -214,6 +214,18 @@ if (piiPreviousKey && !piiMasterKey) {
   );
 }
 
+// Walrus System object overrides (src/lib/walrus-epoch.ts). Optional: the
+// renewal cron reads the current Walrus epoch from each network's documented
+// System object unless one is set, and a malformed value fails every run.
+for (const key of ['WALRUS_SYSTEM_OBJECT_ID_TESTNET', 'WALRUS_SYSTEM_OBJECT_ID_MAINNET']) {
+  const value = read(key);
+  if (value && (!/^0x[0-9a-fA-F]{1,64}$/.test(value) || /^0x0+$/.test(value))) {
+    errors.push(
+      `${key} is "${value}", not a Sui object id. Leave it empty to use the documented Walrus System object.`,
+    );
+  }
+}
+
 if (read('NEXT_PUBLIC_FACEBOOK_CLIENT_SECRET')) {
   warnings.push('NEXT_PUBLIC_FACEBOOK_CLIENT_SECRET should not exist. Use a server-only variable if a secret is required.');
 }

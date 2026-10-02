@@ -9,9 +9,11 @@
  * a lapsed lease silently breaks a circle's WhatsApp link on a timer (June
  * 2026 GTM audit, HIGH).
  *
- * One invocation: enumerate every active link from the authoritative
- * Postgres index, learn the current Sui epoch, and re-store any blob within
- * RENEWAL_THRESHOLD_EPOCHS (default 2) of its recorded end epoch. Re-storing
+ * One invocation: read the current WALRUS epoch (walrus-epoch.ts reads the
+ * Walrus System object on chain; never the Sui epoch), enumerate every
+ * active link from the authoritative Postgres index, and re-store any blob
+ * within RENEWAL_THRESHOLD_EPOCHS (default 2) of its recorded end epoch,
+ * the leases closest to running out first. Re-storing
  * decrypts with the current master key (or WALRUS_PII_PREVIOUS_MASTER_KEY
  * while a key rotation is in progress) and re-encrypts under the current key
  * before upload, so renewals are what move blobs onto a new key. The renewed
@@ -32,6 +34,12 @@
  * lambda is hard-killed it self-expires (90s TTL). Renewal is additionally
  * idempotent at the row level via applyWalrusRenewal's compare-and-set, so
  * even concurrent runs cannot double-advance a row.
+ *
+ * Failures: an unreadable Walrus epoch fails the run (500) before anything
+ * is listed or renewed. A run that renews a blob whose new lease ends within
+ * the threshold also answers 500, after its renewals: the publisher and the
+ * epoch source disagree, so those rows would be re-stored every day. No new
+ * renewal starts after RUN_TIME_BUDGET_MS; what is left counts as `deferred`.
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
@@ -46,6 +54,7 @@ import {
   listActiveLinksForRenewal,
 } from '../../../lib/whatsapp-link-index';
 import { restorePiiBlob } from '../../../lib/walrus-pii';
+import { readCurrentWalrusEpoch } from '../../../lib/walrus-epoch';
 import {
   DEFAULT_RENEWAL_THRESHOLD_EPOCHS,
   runWalrusRenewal,
@@ -54,7 +63,14 @@ import { getCurrentNetwork, getNetworkConfig } from '../../../services/network-c
 import { getPooledSuiClient } from '../../../services/sui-rpc-failover';
 import { appLogger } from '../../../utils/logger';
 
+// vercel.json gives this function 60s. Each renewal is a Walrus download
+// plus an upload, seconds apiece, so none starts after 45s: the run then
+// logs its summary and releases its lease instead of being killed mid-way.
+const RUN_TIME_BUDGET_MS = 45_000;
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  const startedAt = Date.now();
+
   // Vercel invokes crons with GET.
   if (req.method !== 'GET') {
     res.setHeader('Allow', ['GET']);
@@ -84,8 +100,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const threshold = Number(
     process.env.RENEWAL_THRESHOLD_EPOCHS ?? DEFAULT_RENEWAL_THRESHOLD_EPOCHS,
   );
+  // At least 1: a lease's end epoch is exclusive, so a threshold of 0 would
+  // only ever try blobs that are already gone.
   const thresholdEpochs =
-    Number.isFinite(threshold) && threshold >= 0
+    Number.isFinite(threshold) && threshold >= 1
       ? threshold
       : DEFAULT_RENEWAL_THRESHOLD_EPOCHS;
 
@@ -109,11 +127,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       const result = await runWalrusRenewal({
         thresholdEpochs,
+        deadlineMs: startedAt + RUN_TIME_BUDGET_MS,
         listActiveLinks: listActiveLinksForRenewal,
-        getCurrentEpoch: async () => {
-          const state = await client.getLatestSuiSystemState();
-          return Number(state.epoch);
-        },
+        getCurrentWalrusEpoch: () => readCurrentWalrusEpoch(client, network),
         restoreBlob: async (blobId: string) => {
           const { newBlobId, newEndEpoch } = await restorePiiBlob(blobId);
           if (newEndEpoch === null) {
@@ -130,6 +146,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
 
       const summary = { network, thresholdEpochs, ...result };
+      if (result.leaseMismatches > 0) {
+        // The renewals stand, so the links stay alive, but a 200 would hide
+        // broken epoch math the way daily "renewed == considered" summaries
+        // hid the old Sui-epoch comparison.
+        const error =
+          `${result.leaseMismatches} renewed blob(s) got a lease ending within ${thresholdEpochs} ` +
+          `epoch(s) of Walrus epoch ${result.walrusEpoch}, so the next run re-stores them again. ` +
+          'Either the publisher stores on another Walrus deployment than the System object ' +
+          'this cron reads, or WALRUS_STORAGE_EPOCHS is not above RENEWAL_THRESHOLD_EPOCHS.';
+        appLogger.error(`[cron/walrus-renewal] ${error}`, summary);
+        return res.status(500).json({ error, ...summary });
+      }
       appLogger.info('[cron/walrus-renewal] run complete', summary);
       return res.status(200).json(summary);
     } finally {
