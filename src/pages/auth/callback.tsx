@@ -165,40 +165,6 @@ export default function AuthCallback() {
         setIsError(false);
         setStatus('Authentication successful! Redirecting...');
 
-        // Check if this is a WhatsApp authentication
-        const whatsappToken = localStorage.getItem('whatsappAuthToken');
-        const whatsappPhone = localStorage.getItem('whatsappAuthPhone');
-        
-        if (whatsappToken && whatsappPhone) {
-          // This is a WhatsApp authentication - notify WhatsApp of success
-          try {
-            // Ensure phone number has + prefix for international format
-            const formattedPhone = whatsappPhone.startsWith('+') ? whatsappPhone : `+${whatsappPhone}`;
-            
-            await fetch('/api/whatsapp/auth/notify', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ 
-                token: whatsappToken, 
-                phone: formattedPhone, 
-                success: true,
-                message: 'Authentication completed successfully! You can now use all Njangi On-Chain commands.'
-              }),
-            });
-            
-            // Clear WhatsApp auth data
-            localStorage.removeItem('whatsappAuthToken');
-            localStorage.removeItem('whatsappAuthPhone');
-            
-            setStatus('Success! You can now return to WhatsApp.');
-            
-            // Don't auto-redirect for WhatsApp users - let them manually return
-            return;
-          } catch (error) {
-            console.warn('Failed to notify WhatsApp of auth success:', error);
-          }
-        }
-        
         trackFunnel('signin_completed');
 
         // Where to next: the landing page's "Start a circle" stores
@@ -252,36 +218,7 @@ export default function AuthCallback() {
         setIsError(true);
         setStatus('Authentication failed');
         setError(errorMessage);
-        
-        // Check if this is a WhatsApp authentication failure
-        const whatsappToken = localStorage.getItem('whatsappAuthToken');
-        const whatsappPhone = localStorage.getItem('whatsappAuthPhone');
-        
-        if (whatsappToken && whatsappPhone) {
-          // Notify WhatsApp of failure
-          try {
-            // Ensure phone number has + prefix for international format
-            const formattedPhone = whatsappPhone.startsWith('+') ? whatsappPhone : `+${whatsappPhone}`;
-            
-            await fetch('/api/whatsapp/auth/notify', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ 
-                token: whatsappToken, 
-                phone: formattedPhone, 
-                success: false,
-                message: errorMessage 
-              }),
-            });
-          } catch (notifyError) {
-            console.warn('Failed to notify WhatsApp of auth failure:', notifyError);
-          }
-          
-          // Clear WhatsApp auth data
-          localStorage.removeItem('whatsappAuthToken');
-          localStorage.removeItem('whatsappAuthPhone');
-        }
-        
+
         // Short delay before redirecting on error
         redirectAfterFailure();
       }
@@ -291,25 +228,18 @@ export default function AuthCallback() {
   }, [handleCallback, router, router.isReady, setError]);
 
   const tone = isError ? 'error' : progress >= 100 ? 'success' : 'processing';
-  const isWhatsAppReady = !isError && status.includes('return to WhatsApp');
   const pageTitle = isError
     ? 'Sign-in failed - Njangi On-Chain'
     : 'Completing sign in - Njangi On-Chain';
   const lead = isError
     ? 'We could not complete the secure sign-in handoff. The app is keeping the session clean and will send you back to the starting point shortly.'
-    : isWhatsAppReady
-      ? 'Your wallet session is ready. Return to WhatsApp and continue using Njangi On-Chain commands there.'
-      : 'We’re validating the provider response, generating your zero-knowledge proof, and restoring the correct destination before returning you to the app.';
+    : 'We’re validating the provider response, generating your zero-knowledge proof, and restoring the correct destination before returning you to the app.';
   const helperText = isError
     ? 'Redirecting you back to the sign-in entry point.'
-    : isWhatsAppReady
-      ? 'You can switch back to WhatsApp once you are ready.'
-      : tone === 'success'
-        ? 'Your wallet session is ready. Redirecting you now.'
-        : 'Keep this tab open while the secure handoff completes.';
-  const chips = isWhatsAppReady
-    ? ['WhatsApp handoff', 'zkLogin proof', 'Wallet ready']
-    : ['OAuth callback', 'zkLogin proof', 'Secure redirect'];
+    : tone === 'success'
+      ? 'Your wallet session is ready. Redirecting you now.'
+      : 'Keep this tab open while the secure handoff completes.';
+  const chips = ['OAuth callback', 'zkLogin proof', 'Secure redirect'];
 
   return (
     <>

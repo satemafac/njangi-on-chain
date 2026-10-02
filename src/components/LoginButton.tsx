@@ -66,28 +66,7 @@ export function LoginButton({
 }: LoginButtonProps) {
   const { login } = useAuth();
 
-  const handleLogin = async (provider: OAuthProvider) => {
-    // Check if we're in a WhatsApp auth flow and need to preserve phone number
-    const currentUrl = new URL(window.location.href);
-    const whatsAppPhone = currentUrl.searchParams.get('whatsapp_phone');
-
-    console.log('🔑 LoginButton: handleLogin called');
-    console.log('🌐 LoginButton: Current URL:', currentUrl.href);
-    console.log('📱 LoginButton: WhatsApp phone from URL:', whatsAppPhone);
-    console.log('📍 LoginButton: Current pathname:', currentUrl.pathname);
-
-    if (whatsAppPhone && currentUrl.pathname === '/auth') {
-      // Store WhatsApp phone number for the OAuth flow
-      sessionStorage.setItem('whatsapp_phone', whatsAppPhone);
-      console.log('💾 LoginButton: Stored WhatsApp phone in sessionStorage:', whatsAppPhone);
-    } else {
-      console.log('ℹ️ LoginButton: No WhatsApp phone to store or not on auth page');
-    }
-
-    // Verify storage
-    const storedPhone = sessionStorage.getItem('whatsapp_phone');
-    console.log('🔍 LoginButton: Verified stored phone:', storedPhone);
-
+  const handleLogin = (provider: OAuthProvider) => {
     // Remove in-app browser check - allow direct login for all browsers including Instagram
     login(provider);
   };

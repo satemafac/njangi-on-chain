@@ -12,10 +12,10 @@
 // silently dies on a timer.
 //
 // THE FIX: a daily cron re-stores (re-uploads) any blob within
-// RENEWAL_THRESHOLD_EPOCHS of expiry. Re-storing fetches + decrypts the
-// envelope with the CURRENT master key and re-encrypts before upload, so a
-// renewal doubles as key-rotation-by-renewal: blobs naturally migrate onto
-// the active key as they cycle. The new (blob id, end epoch) is written
+// RENEWAL_THRESHOLD_EPOCHS of expiry. Re-storing decrypts the envelope (with
+// the current master key, or WALRUS_PII_PREVIOUS_MASTER_KEY during a key
+// rotation) and re-encrypts it under the current key before upload, so blobs
+// move onto a new key as they cycle. The new (blob id, end epoch) is written
 // back to the authoritative Postgres index row.
 //
 // WHY THE INDEX IS AUTHORITATIVE: the webhook resolves a circle via the
@@ -98,9 +98,10 @@ export interface RenewalDeps {
   /** Current Sui epoch (whole number). */
   getCurrentEpoch(): Promise<number>;
   /**
-   * Fetches blob `blobId`, decrypts with the current master key, re-encrypts,
-   * uploads a fresh copy, and returns the new blob id + end epoch. Throwing
-   * is treated as a per-link failure (recorded, the run continues).
+   * Fetches blob `blobId`, decrypts it (current master key, else the previous
+   * one during a rotation), re-encrypts under the current key, uploads a fresh
+   * copy, and returns the new blob id + end epoch. Throwing is treated as a
+   * per-link failure (recorded, the run continues).
    */
   restoreBlob(blobId: string): Promise<RestoreResult>;
   /**

@@ -84,32 +84,27 @@ const currentWhatsAppRegistryId =
         'SUI_WHATSAPP_LINKS_REGISTRY_ID',
       ]);
 
-// Enoki private key: server-only ENOKI_API_KEY_* is canonical; the bundled
-// NEXT_PUBLIC_ENOKI_* variants are deprecated (they inline the private key
-// into the client bundle + build logs). Resolve each network from the
-// server var first, then the deprecated public var.
-const testnetEnokiKey = canonicalOrLegacy('ENOKI_API_KEY_TESTNET', read('ENOKI_API_KEY_TESTNET'), [
-  'NEXT_PUBLIC_ENOKI_TESTNET',
-  'NEXT_PUBLIC_ENOKI',
-  'ZKLOGIN_TESTNET_ENOKI_KEY',
-]);
-const mainnetEnokiKey = canonicalOrLegacy('ENOKI_API_KEY_MAINNET', read('ENOKI_API_KEY_MAINNET'), [
-  'NEXT_PUBLIC_ENOKI_MAINNET',
-  'NEXT_PUBLIC_ENOKI',
-  'ZKLOGIN_MAINNET_ENOKI_KEY',
-]);
-
-// SECURITY: an enoki_private_* value in ANY NEXT_PUBLIC_ slot is bundled
-// into the browser JS and printed in build logs. Flag it as an error so a
-// publish never ships the private key client-side — it must be moved to the
-// server-only ENOKI_API_KEY_* var AND rotated (the old value is compromised
-// the moment it lands in a client bundle).
-for (const key of ['NEXT_PUBLIC_ENOKI_TESTNET', 'NEXT_PUBLIC_ENOKI_MAINNET', 'NEXT_PUBLIC_ENOKI']) {
-  if (/^enoki_private_/.test(read(key))) {
-    const serverKey = key.includes('MAINNET') ? 'ENOKI_API_KEY_MAINNET' : 'ENOKI_API_KEY_TESTNET';
+// SECURITY: the app reads the Enoki private key only from the server-only
+// ENOKI_API_KEY_* (src/config/public-env.ts). The NEXT_PUBLIC_ENOKI* aliases
+// were removed: Next.js inlines every NEXT_PUBLIC_* variable the code reads
+// into the client bundle, which is how the key leaked before its 2026-07-04
+// rotation. Setting one is an error, not a deprecation. The app ignores it, so it configures
+// nothing, and a build of an older commit that still reads it would ship the
+// value to every browser.
+const removedEnokiAliases = {
+  NEXT_PUBLIC_ENOKI_TESTNET: 'ENOKI_API_KEY_TESTNET',
+  NEXT_PUBLIC_ENOKI_MAINNET: 'ENOKI_API_KEY_MAINNET',
+  NEXT_PUBLIC_ENOKI: currentNetwork === 'mainnet' ? 'ENOKI_API_KEY_MAINNET' : 'ENOKI_API_KEY_TESTNET',
+};
+for (const [key, serverKey] of Object.entries(removedEnokiAliases)) {
+  const value = read(key);
+  if (value) {
     errors.push(
-      `${key} holds an enoki_private_* key — this is inlined into the client bundle and build logs. ` +
-        `Move it to the server-only ${serverKey} and ROTATE the key in the Enoki dashboard (the old one is compromised).`,
+      `${key} is no longer read and must not be set: a NEXT_PUBLIC_* value can be inlined into the browser bundle. ` +
+        `Put the key in the server-only ${serverKey} and delete ${key}.` +
+        (/^enoki_private_/.test(value)
+          ? ' It holds an enoki_private_* key: rotate it in the Enoki portal (a new key in the same Enoki app keeps every address).'
+          : ''),
     );
   }
 }
@@ -132,12 +127,12 @@ const attestorCapKey = `NEXT_PUBLIC_${networkUpper}_NJANGI_ATTESTOR_CAP_ID`;
 const assetRegistryKey = `NEXT_PUBLIC_${networkUpper}_NJANGI_ASSET_REGISTRY_ID`;
 requireValue(attestorCapKey, read(attestorCapKey));
 requireValue(assetRegistryKey, read(assetRegistryKey));
-// Require the Enoki key only for the ACTIVE network (resolved from the
-// server var or, transitionally, the deprecated public var). Testnet pilots
-// shouldn't have to populate a mainnet Enoki key before they need it.
+// Require the Enoki key only for the ACTIVE network, under the one name the
+// app reads. Testnet pilots shouldn't have to populate a mainnet Enoki key
+// before they need it.
 requireValue(
   `current ${currentNetwork} Enoki API key (ENOKI_API_KEY_${networkUpper})`,
-  currentNetwork === 'mainnet' ? mainnetEnokiKey : testnetEnokiKey,
+  read(`ENOKI_API_KEY_${networkUpper}`),
 );
 
 for (const key of [
@@ -181,6 +176,39 @@ if (read('DATABASE_URL') && !read('ZKLOGIN_SESSION_ENC_KEY')) {
   errors.push(
     'DATABASE_URL is set but ZKLOGIN_SESSION_ENC_KEY is empty. zkLogin sessions are ' +
       'encrypted at rest before hitting Postgres; run `npm run generate:secrets`.',
+  );
+}
+
+// WhatsApp PII keys (src/lib/walrus-pii.ts), decoded the way the app decodes
+// them: exactly 64 hex digits, else base64. A key that is not 32 bytes makes
+// every encrypt or decrypt throw. WALRUS_PII_PREVIOUS_MASTER_KEY is set only
+// during a key rotation (docs/environment.md): it holds the OLD key while
+// WALRUS_PII_MASTER_KEY holds the new one. Never echo either value.
+function decodePiiKey(value) {
+  return /^[0-9a-fA-F]+$/.test(value) && value.length === 64
+    ? Buffer.from(value, 'hex')
+    : Buffer.from(value, 'base64');
+}
+const piiMasterKey = read('WALRUS_PII_MASTER_KEY');
+const piiPreviousKey = read('WALRUS_PII_PREVIOUS_MASTER_KEY');
+for (const [key, value] of [
+  ['WALRUS_PII_MASTER_KEY', piiMasterKey],
+  ['WALRUS_PII_PREVIOUS_MASTER_KEY', piiPreviousKey],
+]) {
+  const length = value ? decodePiiKey(value).length : 32;
+  if (length !== 32) {
+    errors.push(`${key} must decode to exactly 32 bytes (64 hex digits, or base64), not ${length}.`);
+  }
+}
+if (piiPreviousKey && !piiMasterKey) {
+  errors.push(
+    'WALRUS_PII_PREVIOUS_MASTER_KEY is set but WALRUS_PII_MASTER_KEY is empty. During a key rotation the master key ' +
+      'holds the NEW key; see docs/environment.md.',
+  );
+} else if (piiPreviousKey && decodePiiKey(piiPreviousKey).equals(decodePiiKey(piiMasterKey))) {
+  errors.push(
+    'WALRUS_PII_PREVIOUS_MASTER_KEY is the same key as WALRUS_PII_MASTER_KEY. During a key rotation the previous key ' +
+      'is the OLD key and the master key the NEW one; see docs/environment.md.',
   );
 }
 
@@ -292,6 +320,10 @@ for (const key of [
   'ENABLE_EVENT_LISTENER',
   'ENABLE_MESSAGE_SENDER',
   'ENABLE_ON_CHAIN_LOGGING',
+  // The bot's names for the Enoki key. The app never read them; it reads
+  // ENOKI_API_KEY_*.
+  'ZKLOGIN_TESTNET_ENOKI_KEY',
+  'ZKLOGIN_MAINNET_ENOKI_KEY',
 ]) {
   if (read(key)) {
     warnings.push(

@@ -141,23 +141,41 @@ Your webhook endpoint must be publicly accessible:
 
 ### Step 2: Configure Webhook in Meta Console
 
-1. **Go to WhatsApp > Configuration**
+1. **Go to App Dashboard > WhatsApp > Configuration.** If the app was created
+   with the "Connect with customers through WhatsApp" use case, the panel is
+   under **Use cases > Customize > Configuration** instead.
 2. **Click "Edit" next to Webhook**
-3. **Enter your webhook URL**: `https://yourdomain.com/api/whatsapp/webhook`
-4. **Enter your verify token** (same as WHATSAPP_VERIFY_TOKEN)
-5. **Subscribe to these webhook fields**:
-   - `messages`
-   - `message_deliveries` 
-   - `message_reads`
-   - `messaging_optins`
+3. **Enter the Callback URL**: `https://njangionchain.com/api/whatsapp/webhook`.
+   The callback URL applies to the whole Meta app, so pointing it at an ngrok
+   tunnel takes webhooks away from production. For local testing, use a
+   separate Meta app and set its callback URL to your ngrok URL plus
+   `/api/whatsapp/webhook`.
+4. **Enter the Verify token** (the same value as `WHATSAPP_VERIFY_TOKEN`)
+5. **Click "Verify and save".** Meta sends a GET request to the callback URL
+   and saves only if the app answers with the `hub.challenge` value. The list
+   of webhook fields appears after that.
+6. **Subscribe to the `messages` field.** It is the only field the app needs.
+   It carries the messages people send to the business number (a `messages`
+   array, including button and list replies) and the sent, delivered and read
+   statuses of the messages the app sends (a `statuses` array).
+   [`src/pages/api/whatsapp/webhook.ts`](../src/pages/api/whatsapp/webhook.ts)
+   replies to incoming messages. It logs statuses only in development, so
+   they don't show up in production logs.
+
+`message_deliveries`, `message_reads`, `messaging_optins` and
+`messaging_postbacks` are Messenger webhook fields for Facebook Pages. They
+don't exist for WhatsApp, where delivery and read receipts arrive through
+`messages`. See Meta's
+[WhatsApp webhooks](https://developers.facebook.com/documentation/business-messaging/whatsapp/webhooks/overview)
+page for the full field list.
 
 ### Step 3: Test Webhook
 
-1. **Click "Verify and Save"** in Meta Console
-2. **Check your app logs** to see webhook verification (on Vercel: the
-   project's **Logs** tab, filtered to `/api/whatsapp/webhook`)
-3. **Send a test message** to your WhatsApp number
-4. **Verify message appears** in your logs
+1. **Check your app logs** for the verification request (on Vercel: the
+   project's **Logs** tab, filtered to `/api/whatsapp/webhook`). A passing
+   check logs `Webhook verified successfully`.
+2. **Send a test message** to your WhatsApp number
+3. **Verify message appears** in your logs as `Incoming WhatsApp message`
 
 ---
 
@@ -230,8 +248,9 @@ git status
 ### Issue: Webhook Not Receiving Messages
 **Solutions**:
 - Verify webhook URL is publicly accessible
-- Check webhook subscription fields are enabled
-- Ensure app is not in development mode restrictions
+- Check that the `messages` field is subscribed (WhatsApp > Configuration)
+- Make sure the Meta app is in Live mode: Meta doesn't send some webhooks to
+  apps in Development mode
 
 ### Issue: 403 Forbidden Errors
 **Solution**: Check if your app has proper permissions and phone number is verified
