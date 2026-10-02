@@ -6,6 +6,8 @@ This guide explains how to manage WhatsApp registry versions when deploying upda
 
 The WhatsApp registry service (`src/services/whatsapp-registry-service.ts`) manages multiple registry versions across different package deployments, similar to how `circle-service.ts` handles multiple package IDs.
 
+Each network's current entry comes only from env: `NEXT_PUBLIC_<NET>_WHATSAPP_PACKAGE_ID` and `NEXT_PUBLIC_<NET>_WHATSAPP_REGISTRY_ID`. Nothing discovers registries on chain, so a new registry reaches the app only through those two vars. Older pairs are hardcoded in `buildRegistryCatalog()` with `deprecated: true`.
+
 ## Key Concepts
 
 ### Registry vs Package
@@ -106,13 +108,15 @@ Add a new registry entry when:
      --gas-budget 10000000
    # → New registry ID: 0x[NEW_REGISTRY_ID]
    
-   # 3. Update whatsapp-registry-service.ts
-   # Mark old entry as deprecated
-   # Add new entry to WHATSAPP_REGISTRIES[testnet]
+   # 3. Optional: keep the old pair in whatsapp-registry-service.ts
+   # Add it to buildRegistryCatalog() with deprecated: true. Don't add the
+   # new pair there: the current entry is built from the env vars in step 4.
    
    # 4. Update environment variables
    # .env.local
    # /whatsapp-bot-backend/.env.local
+   # Vercel env (Production and Preview), then redeploy: NEXT_PUBLIC_* is
+   # inlined at build time
    
    # 5. Restart services
    pkill -f "npm run dev"
