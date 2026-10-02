@@ -135,13 +135,15 @@ requireValue(
   read(`ENOKI_API_KEY_${networkUpper}`),
 );
 
+// The WhatsApp values the webhook and the notifier read. The webhook callback
+// URL is set in Meta's App Dashboard, not here. WHATSAPP_BUSINESS_ACCOUNT_ID
+// is optional: no code reads it, and only template management in WhatsApp
+// Manager uses the account id.
 for (const key of [
   'WHATSAPP_PHONE_NUMBER_ID',
   'WHATSAPP_ACCESS_TOKEN',
   'WHATSAPP_VERIFY_TOKEN',
   'WHATSAPP_APP_SECRET',
-  'WHATSAPP_WEBHOOK_URL',
-  'WHATSAPP_BUSINESS_ACCOUNT_ID',
 ]) {
   requireValue(key, read(key));
 }
@@ -329,6 +331,17 @@ for (const key of [
     warnings.push(
       `${key} is set but unused — it belonged to the retired whatsapp-bot-backend service. Remove it from .env.local.`,
     );
+  }
+}
+
+// October 2026: no code ever read these two, and an env var must not choose
+// the Graph API version (see src/lib/whatsapp-graph-api.ts).
+for (const [key, reason] of [
+  ['WHATSAPP_API_VERSION', 'the Graph API version is the WHATSAPP_GRAPH_API_VERSION constant in src/lib/whatsapp-graph-api.ts'],
+  ['WHATSAPP_WEBHOOK_URL', "the webhook callback URL is set in Meta's App Dashboard"],
+]) {
+  if (read(key)) {
+    warnings.push(`${key} is set but unused — ${reason}. Remove it from .env.local and the Vercel project.`);
   }
 }
 
