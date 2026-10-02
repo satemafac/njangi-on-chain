@@ -151,6 +151,26 @@ for (const key of [
   requireValue(key, read(key));
 }
 
+// .env.example ships `0xyour_…` placeholders for these ids. They pass the
+// presence checks above and fail only at the first Move call that uses
+// them, so the active network's ids must be object ids: `0x` and 1 to 64 hex
+// digits, the rule scripts/lib/registry-bootstrap.ts applies. The other
+// network keeps its placeholders until it is published.
+for (const [key, value] of [
+  [`NEXT_PUBLIC_${networkUpper}_PACKAGE_ID`, currentPackageId],
+  [`NEXT_PUBLIC_${networkUpper}_WHATSAPP_PACKAGE_ID`, currentWhatsAppPackageId],
+  [`NEXT_PUBLIC_${networkUpper}_WHATSAPP_REGISTRY_ID`, currentWhatsAppRegistryId],
+  [attestorCapKey, read(attestorCapKey)],
+  [assetRegistryKey, read(assetRegistryKey)],
+]) {
+  if (value && !/^0x[0-9a-fA-F]{1,64}$/.test(value)) {
+    errors.push(
+      `${key} is "${value}", not an object id. Replace the .env.example placeholder: move/build_and_test.sh ` +
+        'writes the package ids, scripts/bootstrap-package.mjs the registry and AttestorCap ids.',
+    );
+  }
+}
+
 // Vercel serverless migration (June 2026): per-process state (zkLogin
 // sessions, rate limits, webhook dedupe) lives in Postgres. A deployment
 // without DATABASE_URL silently degrades to per-instance memory/SQLite,

@@ -146,10 +146,12 @@ After a fresh publish, which needs a new registry:
 1. `move/build_and_test.sh` writes the new package id to
    `NEXT_PUBLIC_<NET>_WHATSAPP_PACKAGE_ID` in `.env.local`.
 2. `scripts/bootstrap-package.mjs` calls `init_registry` and writes the new
-   registry id to `NEXT_PUBLIC_<NET>_WHATSAPP_REGISTRY_ID`, but only when that
-   var is empty: it skips the call for any value starting with `0x`. Blank the
-   old id first, or the new package is paired with the old registry, which is
-   the mismatch above.
+   registry id to `NEXT_PUBLIC_<NET>_WHATSAPP_REGISTRY_ID`. It keeps the
+   current value only if that value is a live shared registry of the new
+   package's lineage. The old registry's type comes from the old lineage, so
+   it is replaced: nothing to blank by hand. (Until 2026-10 the script skipped
+   the call for any value starting with `0x`, which paired the new package with
+   the old registry, the mismatch above.)
 3. Set both ids in the Vercel env (Production and Preview) and redeploy.
    Next.js inlines `NEXT_PUBLIC_*` at build time, so a running deployment
    keeps the old pair until it is rebuilt.

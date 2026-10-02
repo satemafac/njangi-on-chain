@@ -409,8 +409,16 @@ the deployer key and rewrites `Published.toml` itself.
 
 **Re-running the bootstrap manually**:
 `node scripts/bootstrap-package.mjs <packageId>` — re-issues the registry
-inits if the env file got out of sync. Skips inits for any registry env
-var that's already populated, so it's safe to re-run.
+inits if the env file got out of sync. It keeps a registry env var only if
+it points at a live shared registry of `<packageId>`'s lineage. The expected
+type comes from the package's type origin table, so passing the latest
+upgraded id keeps the live registries. A `0xyour_…` placeholder, an id
+missing on that network, or a previous lineage's registry (the `link_circle`
+TypeMismatch) gets a fresh `init_registry` and is overwritten. Every check
+runs before the first signed call; when a read fails, the script stops with
+nothing signed or written. Reads go to `NEXT_PUBLIC_<NET>_RPC_URL` (override:
+`NJANGI_BOOTSTRAP_RPC_URL`). `npm run validate:env` rejects placeholder ids
+on the active network.
 
 **Cycle-finalized WhatsApp notifier** (deprecated local-dev poller; production
 runs the same logic as the Vercel `/api/cron/cycle-finalized` job above):
