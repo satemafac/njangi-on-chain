@@ -27,9 +27,13 @@ long outage doesn't replay stale messages.
   today; see [Known gaps](#known-gaps).
 - **"It's your turn"**, from `/api/cron/cycle-finalized`, tells a round's
   recipient that the payout is ready to collect. It is triggered by the
-  escrow's `CycleFinalized` event and goes to a number the recipient linked
-  as a circle admin. Only circle admins can link a number, so a recipient who
-  never linked one gets no nudge.
+  contribution that fills the round's pot (the escrow's `ContributionRecorded`
+  event that brings it to the required number of payers), states the payout
+  in the round's own coin, and is dropped if the recipient has already
+  collected it or the round was refunded by the time the cron runs (every 15
+  minutes). It goes to a number the recipient linked as a circle admin. Only
+  circle admins can link a number, so a recipient who never linked one gets
+  no nudge.
 
 The same dispatcher also sends stale-attestation reminders
 ([`src/lib/attestation-stale.ts`](../src/lib/attestation-stale.ts)) and ramp
@@ -81,12 +85,6 @@ any other message that contains `status` counts as `/status`.
   Those events come from the retired payment rail, and no circle on the
   per-round escrow emits them. PR #43 repoints the streams to the escrow's
   own events.
-- **The "your turn" nudge arrives after the payout is collected.** The app
-  finalizes a round only inside the recipient's collect transaction
-  (`finalize_and_redeem`), so `CycleFinalized` fires as the payout is
-  collected, and the nudge follows at the next cron run. It arrives first
-  only when someone finalizes the round outside the app, for example with
-  `finalize_to_recipient`.
 - **Group links receive nothing.** The link form also accepts a WhatsApp
   group id (`…@g.us`), and the link is stored, but every sender reads only a
   phone number.
@@ -146,14 +144,17 @@ the window. To switch to templates (the header comment of
    as different languages and fails a send whose language has no approved
    version (error 132001), so make the two agree before you switch.
 3. Match each template's placeholders to the parameters the code passes (see
-   `src/lib/whatsapp-bot/circle-events.ts` and
-   `src/lib/your-turn-notification.ts`). A mismatch fails with error 132000.
+   `src/lib/whatsapp-bot/circle-events.ts`). A mismatch fails with error
+   132000.
 4. Once every template is approved, set `WHATSAPP_TEMPLATES_ENABLED=true` in
    Vercel and redeploy.
 
-Security deposits, contributions and circle activation have no template wired
-yet. They stay free-form text even with the flag on, so they reach only
-people inside the window.
+Security deposits, contributions, circle activation and the "your turn" nudge
+have no template wired yet. They stay free-form text even with the flag on,
+so they reach only people inside the window. The nudge used to borrow
+`payout_processed`, but that template's approved copy says the payout was
+already sent, which is false while the pot waits to be collected, so it needs
+an approved template of its own.
 
 ## Checking it works
 

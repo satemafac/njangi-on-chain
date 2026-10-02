@@ -5,7 +5,7 @@
 // available so ops can answer "did Aminata get the nudge for round 4?"
 //
 // Phase 11 routes every notification through this module, so:
-//   * "your turn" CycleFinalized nudges
+//   * "your turn" nudges (a round's pot just filled)
 //   * Ramp partner KYC outcomes ("you can now contribute")
 //   * Stale-attestation admin nudges
 //   * Future custom messages
@@ -62,9 +62,10 @@ export type NotificationKind =
 //      cold business-initiated sends).
 //
 // Template parameter LAYOUTS are part of the approval: the arrays built by
-// buildYourTurnTemplate / each stream's buildTemplate must match the
-// approved body placeholder count ({{1}}, {{2}}, …) exactly or Meta
-// rejects the send with error 132000.
+// each stream's buildTemplate must match the approved body placeholder
+// count ({{1}}, {{2}}, …) exactly or Meta rejects the send with error
+// 132000. The "your turn" nudge sends no template (see
+// your-turn-notification.ts).
 // ---------------------------------------------------------------------------
 
 export interface WhatsAppTemplateParameter {
