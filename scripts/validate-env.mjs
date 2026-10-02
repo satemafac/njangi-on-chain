@@ -184,6 +184,39 @@ if (read('DATABASE_URL') && !read('ZKLOGIN_SESSION_ENC_KEY')) {
   );
 }
 
+// WhatsApp PII keys (src/lib/walrus-pii.ts), decoded the way the app decodes
+// them: exactly 64 hex digits, else base64. A key that is not 32 bytes makes
+// every encrypt or decrypt throw. WALRUS_PII_PREVIOUS_MASTER_KEY is set only
+// during a key rotation (docs/environment.md): it holds the OLD key while
+// WALRUS_PII_MASTER_KEY holds the new one. Never echo either value.
+function decodePiiKey(value) {
+  return /^[0-9a-fA-F]+$/.test(value) && value.length === 64
+    ? Buffer.from(value, 'hex')
+    : Buffer.from(value, 'base64');
+}
+const piiMasterKey = read('WALRUS_PII_MASTER_KEY');
+const piiPreviousKey = read('WALRUS_PII_PREVIOUS_MASTER_KEY');
+for (const [key, value] of [
+  ['WALRUS_PII_MASTER_KEY', piiMasterKey],
+  ['WALRUS_PII_PREVIOUS_MASTER_KEY', piiPreviousKey],
+]) {
+  const length = value ? decodePiiKey(value).length : 32;
+  if (length !== 32) {
+    errors.push(`${key} must decode to exactly 32 bytes (64 hex digits, or base64), not ${length}.`);
+  }
+}
+if (piiPreviousKey && !piiMasterKey) {
+  errors.push(
+    'WALRUS_PII_PREVIOUS_MASTER_KEY is set but WALRUS_PII_MASTER_KEY is empty. During a key rotation the master key ' +
+      'holds the NEW key; see docs/environment.md.',
+  );
+} else if (piiPreviousKey && decodePiiKey(piiPreviousKey).equals(decodePiiKey(piiMasterKey))) {
+  errors.push(
+    'WALRUS_PII_PREVIOUS_MASTER_KEY is the same key as WALRUS_PII_MASTER_KEY. During a key rotation the previous key ' +
+      'is the OLD key and the master key the NEW one; see docs/environment.md.',
+  );
+}
+
 if (read('NEXT_PUBLIC_FACEBOOK_CLIENT_SECRET')) {
   warnings.push('NEXT_PUBLIC_FACEBOOK_CLIENT_SECRET should not exist. Use a server-only variable if a secret is required.');
 }

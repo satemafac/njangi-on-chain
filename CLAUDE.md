@@ -351,7 +351,10 @@ publish runbook below is separate (it ships contracts, not the web app).
    `CRON_SECRET`, `ENOKI_API_KEY_TESTNET`/`ENOKI_API_KEY_MAINNET`, ramp secrets)
    must NOT carry the `NEXT_PUBLIC_` prefix so Next.js keeps them off the client
    bundle. `RENEWAL_THRESHOLD_EPOCHS` (default 2) is an optional knob for the
-   Walrus renewal cron.
+   Walrus renewal cron. Never replace `WALRUS_PII_MASTER_KEY` in place: every
+   stored WhatsApp link opens only with the key that sealed it. Rotate it with
+   `WALRUS_PII_PREVIOUS_MASTER_KEY` (`docs/environment.md`, "Rotating the
+   WhatsApp PII keys"). `WALRUS_LOOKUP_SALT` has no rotation path at all.
 3. Cron jobs are declared in `vercel.json` and run on Vercel's scheduler; each
    authenticates with `CRON_SECRET` via a timing-safe bearer check and uses the
    fenced-lease machinery in `src/lib/cycle-finalized-cron.ts`:

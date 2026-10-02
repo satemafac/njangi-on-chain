@@ -5,9 +5,10 @@
 // HMAC of the normalized phone number.
 //
 // The HMAC is computed with `WALRUS_LOOKUP_SALT` (server-only secret) so
-// the raw phone number never leaves the encrypted Walrus envelope. The
-// salt is rotated independently of the AES master key; rotating the salt
-// requires re-running an indexing job over existing on-chain links.
+// the raw phone number never leaves the encrypted Walrus envelope. The salt
+// has no rotation path: nothing re-keys existing rows (there is no
+// re-indexing job), so a new salt leaves every row unmatchable by phone.
+// See docs/environment.md, "Rotating the WhatsApp PII keys".
 
 import type { Pool } from 'pg';
 import { computeLookupHash } from './walrus-pii';

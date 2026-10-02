@@ -6,10 +6,11 @@
  * mainnet is published.
  *
  * Runs the script itself (it makes no network calls) on copies of
- * .env.example, and asserts only on the object-id errors: a template copy
- * fails other checks too.
+ * .env.example, and asserts only on the errors each test is about: a
+ * template copy fails other checks too.
  */
 import { spawnSync } from 'child_process';
+import { randomBytes } from 'crypto';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import os from 'os';
 import path from 'path';
@@ -75,5 +76,54 @@ describe('validate-env object ids', () => {
     env = setVar(env, 'NEXT_PUBLIC_TESTNET_NJANGI_ATTESTOR_CAP_ID', '0x6');
 
     expect(objectIdErrors(validate(env))).toEqual([]);
+  });
+});
+
+// WALRUS_PII_PREVIOUS_MASTER_KEY is set only while WALRUS_PII_MASTER_KEY is
+// being rotated (docs/environment.md). The script must catch the mistakes
+// that would leave stored WhatsApp links unreadable, and never print a key.
+describe('validate-env WhatsApp PII keys', () => {
+  const OLD_KEY = randomBytes(32).toString('hex');
+  const NEW_KEY = randomBytes(32).toString('hex');
+  const piiKeyErrors = (stderr: string) => stderr.split('\n').filter((line) => line.includes('WALRUS_PII'));
+  const withKeys = (master: string, previous: string) =>
+    setVar(setVar(template, 'WALRUS_PII_MASTER_KEY', master), 'WALRUS_PII_PREVIOUS_MASTER_KEY', previous);
+
+  it('accepts a master key with no previous key', () => {
+    expect(piiKeyErrors(validate(withKeys(NEW_KEY, '')))).toEqual([]);
+  });
+
+  it('accepts a rotation: the old key as previous, the new one as master', () => {
+    expect(piiKeyErrors(validate(withKeys(NEW_KEY, OLD_KEY)))).toEqual([]);
+  });
+
+  it('rejects a master key that is not 32 bytes, such as the template placeholder', () => {
+    expect(piiKeyErrors(validate(template))).toEqual([
+      expect.stringContaining('WALRUS_PII_MASTER_KEY must decode to exactly 32 bytes'),
+    ]);
+  });
+
+  it('rejects a previous key that is not 32 bytes, without printing it', () => {
+    const shortKey = randomBytes(16).toString('hex');
+    const errors = piiKeyErrors(validate(withKeys(NEW_KEY, shortKey)));
+
+    expect(errors).toEqual([
+      expect.stringContaining('WALRUS_PII_PREVIOUS_MASTER_KEY must decode to exactly 32 bytes'),
+    ]);
+    expect(errors.join('\n')).not.toContain(shortKey);
+  });
+
+  it('rejects a previous key that is the master key, even in another encoding', () => {
+    const sameKeyBase64 = Buffer.from(NEW_KEY, 'hex').toString('base64');
+    const errors = piiKeyErrors(validate(withKeys(NEW_KEY, sameKeyBase64)));
+
+    expect(errors).toEqual([expect.stringContaining('is the same key as WALRUS_PII_MASTER_KEY')]);
+    expect(errors.join('\n')).not.toContain(NEW_KEY);
+  });
+
+  it('rejects a previous key without a master key', () => {
+    expect(piiKeyErrors(validate(withKeys('', OLD_KEY)))).toEqual([
+      expect.stringContaining('WALRUS_PII_MASTER_KEY is empty'),
+    ]);
   });
 });
