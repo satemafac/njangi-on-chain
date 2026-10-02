@@ -57,7 +57,9 @@ export default function YourPage() {
 ## Features
 
 ### Link Circle
-- Choose between individual phone number or group chat
+- Link a phone number. WhatsApp group links are not supported: the Cloud API
+  can only message groups our business number created through Meta's Groups API,
+  so a group ID copied from the WhatsApp app (`…@g.us`) never receives anything
 - Validate input before submission
 - Show loading state during submission
 - Display success/error notifications
@@ -84,8 +86,7 @@ export default function YourPage() {
 
 3. **Link Form Open**
    ```
-   Chat Type: [Individual / Group dropdown]
-   Phone/Group: [Text input field]
+   Phone Number: [Phone input with country picker]
    [Link Circle] [Cancel] buttons
    ```
 
@@ -95,7 +96,14 @@ export default function YourPage() {
    Link Type: ...
    Recipient: ...
    Linked on: ...
-   [Benefits list]
+   [What the linked number gets — WHATSAPP_UPDATE_LINES in src/content/whatsapp-updates.ts]
+   [Unlink from WhatsApp] button
+   ```
+
+5. **Linked to a group** (made before group links were refused)
+   ```
+   ⚠️ Not supported badge
+   Why the group gets no updates, and to link a phone number instead
    [Unlink from WhatsApp] button
    ```
 
@@ -110,8 +118,8 @@ Authorization: Bearer <token>
 Body:
 {
   "circleId": "0x123...",
-  "linkType": 1 | 2,  // 1 = individual, 2 = group
-  "phoneOrGroup": "+1234567890" | "group-id@g.us"
+  "linkType": 1,  // 2 (a group) is refused: 400 WHATSAPP_GROUP_LINKS_UNSUPPORTED
+  "phoneOrGroup": "+1234567890"
 }
 
 Response:
@@ -158,7 +166,7 @@ The component uses Tailwind CSS and includes:
 
 The component handles:
 - ✅ Missing circle ID
-- ✅ Invalid phone number/group ID
+- ✅ Invalid phone number
 - ✅ Network errors
 - ✅ Authentication failures
 - ✅ API errors
@@ -221,7 +229,7 @@ Manual testing checklist:
 - [ ] Component renders with circle data
 - [ ] Can click "Link to WhatsApp"
 - [ ] Form expands/collapses correctly
-- [ ] Phone/Group dropdown works
+- [ ] Phone input works
 - [ ] Input validation works
 - [ ] Submit button works
 - [ ] Loading states display
@@ -273,7 +281,7 @@ Potential improvements:
 
 ### Link not working
 - Verify phone number format (include country code)
-- Check group ID format (must end with @g.us)
+- Group IDs (`…@g.us`) are refused; link a phone number
 - Ensure admin has required permissions
 
 ### Token expired error

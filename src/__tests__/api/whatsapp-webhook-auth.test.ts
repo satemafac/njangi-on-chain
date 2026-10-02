@@ -14,6 +14,10 @@
  * handler used to verify, and it hides exactly the deliveries that failed.
  *
  * Log hygiene: no phone number or message text may reach the logs.
+ *
+ * Help reply (October 2026): it lists only what the channel sends, from
+ * src/content/whatsapp-updates.ts. It used to promise deadline reminders and
+ * circle insights, which nothing sends.
  */
 
 import crypto from 'crypto';
@@ -30,6 +34,7 @@ import { lookupCirclesForPhone } from '@/lib/whatsapp-link-index';
 import { getActiveWhatsAppRegistries } from '@/services/whatsapp-registry-service';
 import { getPooledSuiClient } from '@/services/sui-rpc-failover';
 import { fetchAndDecryptPII } from '@/lib/walrus-pii';
+import { WHATSAPP_HELP_REPLY } from '@/content/whatsapp-updates';
 
 jest.mock('@/services/circle-status.service', () => ({
   getCircleStatus: jest.fn(),
@@ -358,6 +363,17 @@ describe('WhatsApp webhook', () => {
       expect(forged.statusCode).toBe(403);
       expect(signed.statusCode).toBe(400);
       expect(signed.jsonBody).toMatchObject({ success: false });
+    });
+  });
+
+  describe('help reply', () => {
+    it('answers "help" with the shared list of what the channel sends', async () => {
+      const res = await deliver(inboundMessage('help'));
+
+      expect(res.statusCode).toBe(200);
+      expect(sentReplies()).toEqual([
+        expect.objectContaining({ to: SENDER, text: { body: WHATSAPP_HELP_REPLY } }),
+      ]);
     });
   });
 
