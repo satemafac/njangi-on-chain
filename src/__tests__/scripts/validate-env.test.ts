@@ -127,3 +127,19 @@ describe('validate-env WhatsApp PII keys', () => {
     ]);
   });
 });
+
+describe('validate-env Walrus System object overrides', () => {
+  const overrideErrors = (stderr: string) =>
+    stderr.split('\n').filter((line) => line.includes('WALRUS_SYSTEM_OBJECT_ID_'));
+
+  it('accepts the empty template values and a real object id', () => {
+    expect(overrideErrors(validate(template))).toEqual([]);
+    expect(overrideErrors(validate(setVar(template, 'WALRUS_SYSTEM_OBJECT_ID_MAINNET', REAL_ID)))).toEqual([]);
+  });
+
+  it.each(['system', '0x0', `0x${'z'.repeat(64)}`])('rejects a malformed override (%s)', (value) => {
+    expect(overrideErrors(validate(setVar(template, 'WALRUS_SYSTEM_OBJECT_ID_TESTNET', value)))).toEqual([
+      expect.stringContaining(`WALRUS_SYSTEM_OBJECT_ID_TESTNET is "${value}", not a Sui object id`),
+    ]);
+  });
+});
