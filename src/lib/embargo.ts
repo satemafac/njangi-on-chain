@@ -9,9 +9,10 @@
 // these helpers so the page-level and API-level blocks can never drift.
 
 /**
- * Comprehensively embargoed jurisdictions (US OFAC): Iran, North Korea,
- * Syria, Cuba. Russia/Belarus are sectoral programs, not comprehensive
- * embargoes — they are deliberately NOT blocked here.
+ * Njangi's blocked-jurisdiction list, drawn from US OFAC embargo programs:
+ * Iran, North Korea, Syria, Cuba. Syria stays on the list; counsel to
+ * confirm the current legal basis. Russia/Belarus are sectoral programs,
+ * not comprehensive embargoes — they are deliberately NOT blocked here.
  */
 export const EMBARGOED_COUNTRIES = new Set(['IR', 'KP', 'SY', 'CU']);
 

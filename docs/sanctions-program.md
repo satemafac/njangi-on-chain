@@ -12,9 +12,10 @@ non-custodial software provider of our size to have.
 
 **Wallet addresses** against the OFAC SDN digital-currency address set
 (every ticker OFAC publishes, ~400-500 addresses today), plus **IP geolocation**
-against comprehensively embargoed jurisdictions (Iran, North Korea, Syria,
-Cuba, and embargoed Ukrainian regions: Crimea, Sevastopol, Donetsk,
-Luhansk). We do not screen names — we do not collect any.
+against Njangi's blocked-jurisdiction list (Iran, North Korea, Syria, Cuba,
+and embargoed Ukrainian regions: Crimea, Sevastopol, Donetsk, Luhansk).
+Syria stays on the list; counsel to confirm the current legal basis. We do
+not screen names — we do not collect any.
 
 ## Where (choke points)
 

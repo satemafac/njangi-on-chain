@@ -63,9 +63,11 @@ export function isCemacCountry(country: string | null | undefined): boolean {
 }
 
 /**
- * Comprehensively OFAC-sanctioned jurisdictions (US sanctions programs the
- * ramp partners themselves are bound by): Iran, North Korea, Cuba, Syria,
- * plus Russia/Belarus (broad 2022+ programs the ramps block anyway).
+ * Jurisdictions the ramp flow is blocked in, drawn from the US OFAC
+ * sanctions programs the ramp partners themselves are bound by: Iran, North
+ * Korea, Cuba, Syria, plus Russia/Belarus (broad 2022+ programs the ramps
+ * block anyway). Syria stays on the list; counsel to confirm the current
+ * legal basis.
  * Crimea/Donetsk/Luhansk are region-level within UA and cannot be expressed
  * as ISO-3166 alpha-2 — the ramps' own KYC handles those; we block at the
  * country level only.
