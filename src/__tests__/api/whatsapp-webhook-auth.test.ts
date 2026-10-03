@@ -18,6 +18,12 @@
  * Help reply (October 2026): it lists only what the channel sends, from
  * src/content/whatsapp-updates.ts. It used to promise deadline reminders and
  * circle insights, which nothing sends.
+ *
+ * "/status" without a circle id (October 2026): when the link index, the
+ * registry read or a Walrus read failed, the reply used to tell a member
+ * with a linked circle "No circles linked to your number". It now says the
+ * check could not run, and keeps "No circles linked" for an answer every
+ * lookup gave.
  */
 
 import crypto from 'crypto';
@@ -34,7 +40,12 @@ import { lookupCirclesForPhone } from '@/lib/whatsapp-link-index';
 import { getActiveWhatsAppRegistries } from '@/services/whatsapp-registry-service';
 import { getPooledSuiClient } from '@/services/sui-rpc-failover';
 import { fetchAndDecryptPII } from '@/lib/walrus-pii';
+import { WalrusReadError } from '@/lib/walrus-read-error';
 import { WHATSAPP_HELP_REPLY } from '@/content/whatsapp-updates';
+import {
+  LINKED_CIRCLES_UNCHECKED_REPLY,
+  NO_LINKED_CIRCLES_REPLY,
+} from '@/content/whatsapp-status-replies';
 
 jest.mock('@/services/circle-status.service', () => ({
   getCircleStatus: jest.fn(),
@@ -463,6 +474,7 @@ describe('WhatsApp webhook', () => {
         'Resolved linked circles via HMAC index',
         'Found linked circles',
         'Error querying WhatsApp registry for all circles',
+        'Could not check which circles are linked',
         'Status messages sent for all circles',
         'Acknowledgment sent',
       ]) {
@@ -474,6 +486,156 @@ describe('WhatsApp webhook', () => {
       expect(logs).not.toContain('find my circle');
       expect(logs).not.toContain('next meeting');
       expect(logs).not.toContain('/status');
+    });
+  });
+
+  describe('"/status" without a circle id', () => {
+    const OTHER_CIRCLE_ID = `0x${'cd'.repeat(32)}`;
+    const OTHER_PHONE = '+12025550188';
+
+    beforeEach(() => {
+      // The multi-circle reply waits 1s between sends; skip only that wait.
+      const realSetTimeout = global.setTimeout;
+      jest.spyOn(global, 'setTimeout').mockImplementation(((callback: () => void, ms?: number) => {
+        if (ms === 1000) {
+          callback();
+          return 0;
+        }
+        return realSetTimeout(callback, ms);
+      }) as unknown as typeof setTimeout);
+    });
+
+    /** The registry holds one enabled link per entry. */
+    function registryLinks(...links: Array<{ circleId: string; blobId: string }>) {
+      mockedGetRegistries.mockReturnValue([{ packageId: '0x1', registryObjectId: '0x2' }]);
+      mockedGetSuiClient.mockReturnValue({
+        getObject: async () => ({
+          data: {
+            content: {
+              dataType: 'moveObject',
+              fields: {
+                links: links.map((link) => ({
+                  fields: {
+                    circle_id: link.circleId,
+                    enabled: true,
+                    walrus_blob_id: Array.from(Buffer.from(link.blobId)),
+                  },
+                })),
+              },
+            },
+          },
+        }),
+      } as never);
+    }
+
+    function registryUnreadable() {
+      mockedGetRegistries.mockReturnValue([{ packageId: '0x1', registryObjectId: '0x2' }]);
+      mockedGetSuiClient.mockReturnValue({
+        getObject: async () => {
+          throw new Error('all RPC candidates failed');
+        },
+      } as never);
+    }
+
+    /** Walrus stand-in: each blob holds a phone, or fails its read. */
+    function walrusHolds(blobs: Record<string, string | WalrusReadError>) {
+      mockedDecryptPII.mockImplementation(async (blobId: string) => {
+        const held = blobs[blobId];
+        if (held instanceof WalrusReadError) throw held;
+        return { phone_e164: held } as never;
+      });
+    }
+
+    const unavailable = () =>
+      new WalrusReadError('Walrus aggregator returned 503: busy', { status: 503, transient: true });
+    const expired = () =>
+      new WalrusReadError('Walrus aggregator returned 404: not found', {
+        status: 404,
+        transient: false,
+      });
+    const indexDown = () =>
+      mockedLookupCircles.mockRejectedValue(new Error('Connection terminated unexpectedly'));
+
+    /** Sends a bare "/status" and returns the reply bodies. */
+    async function askForStatus(): Promise<string[]> {
+      const res = await deliver(inboundMessage('\\/status'));
+      expect(res.statusCode).toBe(200);
+      return sentReplies().map((reply) => reply.text.body);
+    }
+
+    it('answers from the index without reading the registry or Walrus', async () => {
+      mockedLookupCircles.mockResolvedValue([
+        { circleId: CIRCLE_ID, walrusBlobId: 'blob-1', linkType: 1 },
+      ]);
+
+      await expect(askForStatus()).resolves.toEqual([STATUS_REPLY]);
+      expect(mockedGetSuiClient).not.toHaveBeenCalled();
+      expect(mockedDecryptPII).not.toHaveBeenCalled();
+    });
+
+    it('says no circle is linked when every lookup answered', async () => {
+      registryLinks({ circleId: CIRCLE_ID, blobId: 'blob-1' });
+      walrusHolds({ 'blob-1': OTHER_PHONE });
+
+      await expect(askForStatus()).resolves.toEqual([NO_LINKED_CIRCLES_REPLY]);
+    });
+
+    it("still says no circle is linked when the only link's blob is gone (404)", async () => {
+      registryLinks({ circleId: CIRCLE_ID, blobId: 'blob-1' });
+      walrusHolds({ 'blob-1': expired() });
+
+      await expect(askForStatus()).resolves.toEqual([NO_LINKED_CIRCLES_REPLY]);
+    });
+
+    it.each([
+      [
+        'the index and the registry reads fail',
+        () => {
+          indexDown();
+          registryUnreadable();
+        },
+      ],
+      ['the registry read fails', registryUnreadable],
+      [
+        "Walrus cannot serve the only link's blob",
+        () => {
+          registryLinks({ circleId: CIRCLE_ID, blobId: 'blob-1' });
+          walrusHolds({ 'blob-1': unavailable() });
+        },
+      ],
+      [
+        "the index is down and the only link's blob has expired",
+        () => {
+          // Its renewed copy, if any, is recorded only in the index.
+          indexDown();
+          registryLinks({ circleId: CIRCLE_ID, blobId: 'blob-1' });
+          walrusHolds({ 'blob-1': expired() });
+        },
+      ],
+    ])('says it could not check, not "no circles", when %s', async (_case, arrange) => {
+      arrange();
+
+      await expect(askForStatus()).resolves.toEqual([LINKED_CIRCLES_UNCHECKED_REPLY]);
+      expect(loggedText()).toContain('Could not check which circles are linked');
+    });
+
+    it("says no circle is linked while the index is down if every link's blob was read", async () => {
+      indexDown();
+      registryLinks({ circleId: CIRCLE_ID, blobId: 'blob-1' });
+      walrusHolds({ 'blob-1': OTHER_PHONE });
+
+      await expect(askForStatus()).resolves.toEqual([NO_LINKED_CIRCLES_REPLY]);
+    });
+
+    it('still sends the circles it found when another link cannot be read', async () => {
+      registryLinks(
+        { circleId: CIRCLE_ID, blobId: 'blob-mine' },
+        { circleId: OTHER_CIRCLE_ID, blobId: 'blob-busy' },
+      );
+      walrusHolds({ 'blob-mine': `+${SENDER}`, 'blob-busy': unavailable() });
+
+      await expect(askForStatus()).resolves.toEqual([STATUS_REPLY]);
+      expect(mockedGetCircleStatus).toHaveBeenCalledWith(CIRCLE_ID, 'testnet');
     });
   });
 

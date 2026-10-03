@@ -12,10 +12,15 @@ import { getActiveWhatsAppRegistries } from '../../../services/whatsapp-registry
 import { getCircleStatus, formatCircleStatusForWhatsAppWithNames } from '../../../services/circle-status.service';
 import { getPooledSuiClient } from '../../../services/sui-rpc-failover';
 import { fetchAndDecryptPII } from '../../../lib/walrus-pii';
+import { isTransientWalrusReadError } from '../../../lib/walrus-read-error';
 import { WHATSAPP_GRAPH_API_VERSION } from '../../../lib/whatsapp-graph-api';
 import { lookupCirclesForPhone } from '../../../lib/whatsapp-link-index';
 import { timingSafeEqualStrings } from '../../../lib/timing-safe';
 import { WHATSAPP_HELP_REPLY } from '../../../content/whatsapp-updates';
+import {
+  LINKED_CIRCLES_UNCHECKED_REPLY,
+  NO_LINKED_CIRCLES_REPLY,
+} from '../../../content/whatsapp-status-replies';
 
 // Meta signs the exact bytes it POSTs: X-Hub-Signature-256 is an HMAC-SHA256
 // of the raw body. Next.js' default bodyParser would hand the handler a
@@ -83,14 +88,25 @@ function decodeBytesField(raw: unknown): Uint8Array {
 }
 
 /**
+ * The circles linked to a phone number, and whether every lookup behind the
+ * list answered. When `complete` is false a read failed, so the list may be
+ * missing circles and an empty one does not mean "none".
+ */
+interface LinkedCircles {
+  circleIds: string[];
+  complete: boolean;
+}
+
+/**
  * Resolves which circles are linked to the supplied phone number. The
  * Phase 2 Postgres HMAC index (`lookupCirclesForPhone`) gives O(1) lookup
  * for any link recorded since indexing was enabled. We still fall back to
- * the legacy O(N) on-chain scan + Walrus decrypt when the index is empty
- * (e.g. early dev environments or after a salt rotation), which keeps the
- * webhook functional even if Postgres is unavailable.
+ * the legacy O(N) on-chain scan + Walrus decrypt when the index has no row
+ * (e.g. early dev environments or after a salt rotation) or cannot be read,
+ * which keeps the webhook functional even if Postgres is unavailable.
  */
-async function getAllLinkedCirclesFromRegistry(phoneNumber: string): Promise<string[]> {
+async function getAllLinkedCirclesFromRegistry(phoneNumber: string): Promise<LinkedCircles> {
+  let indexAnswered = true;
   try {
     const indexed = await lookupCirclesForPhone(phoneNumber);
     if (indexed.length > 0) {
@@ -98,23 +114,38 @@ async function getAllLinkedCirclesFromRegistry(phoneNumber: string): Promise<str
         phoneNumber: redactPhone(phoneNumber),
         count: indexed.length,
       });
-      return indexed.map((row) => row.circleId);
+      return { circleIds: indexed.map((row) => row.circleId), complete: true };
     }
   } catch (error) {
+    indexAnswered = false;
     appLogger.warn('HMAC index lookup failed, falling back to on-chain scan', {
       error: error instanceof Error ? error.message : String(error),
     });
   }
-  return scanRegistryAndDecryptForPhone(phoneNumber);
+  return scanRegistryAndDecryptForPhone(phoneNumber, indexAnswered);
 }
 
-async function scanRegistryAndDecryptForPhone(phoneNumber: string): Promise<string[]> {
+/**
+ * The on-chain half of getAllLinkedCirclesFromRegistry: decrypts every
+ * enabled link's blob and keeps the circles whose phone matches. The answer
+ * is incomplete when the registry read fails, when Walrus cannot serve a
+ * blob right now (it may hold this number), and, while the index is down,
+ * when any blob cannot be read: the renewal cron records a renewed blob's id
+ * only in the index, so an expired anchored blob may still be this number's
+ * live link. With the index answering, an expired blob is a dead link.
+ */
+async function scanRegistryAndDecryptForPhone(
+  phoneNumber: string,
+  indexAnswered: boolean,
+): Promise<LinkedCircles> {
+  const linkedCircles: string[] = [];
+  let complete = true;
   try {
     const network = getWhatsAppNetwork();
     const registries = getActiveWhatsAppRegistries(network);
     if (!registries || registries.length === 0) {
       appLogger.warn('No active WhatsApp registries configured', { network });
-      return [];
+      return { circleIds: [], complete: indexAnswered };
     }
 
     const registry = registries[0];
@@ -131,7 +162,7 @@ async function scanRegistryAndDecryptForPhone(phoneNumber: string): Promise<stri
     });
 
     if (!registryObject.data?.content || registryObject.data.content.dataType !== 'moveObject') {
-      return [];
+      return { circleIds: [], complete: indexAnswered };
     }
 
     const registryFields = (registryObject.data.content as { fields: { links?: unknown[] } }).fields;
@@ -143,8 +174,6 @@ async function scanRegistryAndDecryptForPhone(phoneNumber: string): Promise<stri
       enabled?: boolean;
     };
     type LinkEntry = { fields?: LinkFields } & LinkFields;
-
-    const linkedCircles: string[] = [];
 
     for (const linkItem of links) {
       const link = linkItem as LinkEntry;
@@ -164,9 +193,12 @@ async function scanRegistryAndDecryptForPhone(phoneNumber: string): Promise<stri
           linkedCircles.push(circleId);
         }
       } catch (err) {
+        const transient = isTransientWalrusReadError(err);
+        if (transient || !indexAnswered) complete = false;
         appLogger.warn('Failed to decrypt WhatsApp PII envelope during webhook lookup', {
           error: err instanceof Error ? err.message : String(err),
           circleId,
+          transient,
         });
       }
     }
@@ -174,15 +206,16 @@ async function scanRegistryAndDecryptForPhone(phoneNumber: string): Promise<stri
     appLogger.info('Found linked circles', {
       phoneNumber: redactPhone(normalizedPhone),
       count: linkedCircles.length,
+      complete,
     });
 
-    return linkedCircles;
+    return { circleIds: linkedCircles, complete };
   } catch (error) {
     appLogger.error('Error querying WhatsApp registry for all circles', {
       error: error instanceof Error ? error.message : String(error),
       phoneNumber: redactPhone(phoneNumber),
     });
-    return [];
+    return { circleIds: linkedCircles, complete: false };
   }
 }
 
@@ -470,10 +503,21 @@ async function handler(
                       }
                     } else {
                       // No specific circle ID - show all linked circles
-                      const linkedCircles = await getAllLinkedCirclesFromRegistry(sender);
+                      const { circleIds: linkedCircles, complete } =
+                        await getAllLinkedCirclesFromRegistry(sender);
 
                       if (linkedCircles.length === 0) {
-                        const noCircleMessage = `❌ No circles linked to your number.\n\nPlease link a circle via the Njangi app first.\n\nOr use: /status <circle-id>`;
+                        // "No circles linked" only when every lookup answered:
+                        // after a failed index, registry or Walrus read the
+                        // sender may well have one.
+                        const noCircleMessage = complete
+                          ? NO_LINKED_CIRCLES_REPLY
+                          : LINKED_CIRCLES_UNCHECKED_REPLY;
+                        if (!complete) {
+                          appLogger.warn('Could not check which circles are linked; asked the sender to retry', {
+                            to: redactPhone(sender),
+                          });
+                        }
 
                         try {
                           await fetch(
