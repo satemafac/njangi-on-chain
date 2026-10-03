@@ -17,6 +17,11 @@
 // finalized escrow finds the Claim in the recipient's wallet and redeems it,
 // chaining `advance_circle_after_claim` exactly as the one-step collect does.
 //
+// The package version behind `isFinalizedEscrowCollectEnabled` makes
+// `finalize_and_redeem*` pay out a finalized escrow from the escrow itself,
+// with no Claim object. Once that flag is on, Collect is the one-step call in
+// every collectable state, and the Claim lookup below is not used.
+//
 // Doctrine (shared with cycle-escrow-discovery.ts): a lookup that FAILED is
 // unknown, never "no claim". The two get different words in the panel —
 // "try again" versus "it isn't in this wallet".
@@ -69,11 +74,16 @@ export function resolveEscrowStage(params: {
 // ---------------------------------------------------------------------------
 
 export type CollectRoute =
-  /** Not finalized yet: one PTB mints the claim, redeems it and advances the rotation. */
+  /**
+   * One PTB collects and advances the rotation: `finalize_and_redeem*`
+   * finalizes first if nobody has (and, with the finalized-collect package,
+   * pays out an already-finalized escrow without its claim).
+   */
   | { kind: 'finalize-and-redeem' }
   /**
-   * Finalized by someone else: the `Claim<T>` already sits in the
-   * recipient's wallet, so Collect redeems it (`redeem_claim`).
+   * Finalized by someone else, on a package without the finalized collect:
+   * the `Claim<T>` sits in the recipient's wallet, so Collect redeems it
+   * (`redeem_claim`).
    */
   | { kind: 'redeem-claim' }
   /** Nothing the recipient could sign would collect this escrow. */
@@ -104,13 +114,24 @@ export type CollectRouteState = Pick<
   'finalized' | 'claimed' | 'refunded' | 'requiresAttestation'
 >;
 
-export function resolveCollectRoute(state: CollectRouteState): CollectRoute {
+export function resolveCollectRoute(
+  state: CollectRouteState,
+  options: {
+    /**
+     * `isFinalizedEscrowCollectEnabled()`: the published package's
+     * `finalize_and_redeem*` also pays out a finalized escrow.
+     */
+    finalizedCollect?: boolean;
+  } = {},
+): CollectRoute {
   // Terminal states first, in the stage's order.
   if (state.refunded) return { kind: 'none', reason: 'refunded' };
   if (state.claimed) return { kind: 'none', reason: 'claimed' };
-  // `finalize_and_redeem*` re-mints the claim, so it only works while the
-  // escrow is unfinalized; on a finalized one it aborts 205.
-  if (!state.finalized) return { kind: 'finalize-and-redeem' };
+  // Before the finalized-collect package, `finalize_and_redeem*` re-mints
+  // the claim, so it only works while the escrow is unfinalized; on a
+  // finalized one it aborts 205. With it, the one call serves both states,
+  // and a gated escrow keeps its attestation check (the gated variant).
+  if (!state.finalized || options.finalizedCollect) return { kind: 'finalize-and-redeem' };
   if (state.requiresAttestation) return { kind: 'none', reason: 'gated-claim' };
   return { kind: 'redeem-claim' };
 }

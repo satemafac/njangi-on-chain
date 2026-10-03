@@ -155,6 +155,37 @@ describe('resolveCollectRoute', () => {
       reason: 'refunded',
     });
   });
+
+  describe('once the package that collects a finalized escrow is live (flag on)', () => {
+    const on = { finalizedCollect: true };
+
+    it('collects a third-party-finalized escrow with the one-step call, no Claim lookup', () => {
+      expect(resolveCollectRoute(state({ finalized: true }), on)).toEqual({
+        kind: 'finalize-and-redeem',
+      });
+    });
+
+    it('sends a gated finalized escrow through the attested one-step call instead of refusing it', () => {
+      expect(
+        resolveCollectRoute(state({ finalized: true, requiresAttestation: true }), on),
+      ).toEqual({ kind: 'finalize-and-redeem' });
+    });
+
+    it('leaves the unfinalized path as it was', () => {
+      expect(resolveCollectRoute(state(), on)).toEqual({ kind: 'finalize-and-redeem' });
+    });
+
+    it('still offers nothing for a claimed or refunded escrow', () => {
+      expect(resolveCollectRoute(state({ finalized: true, claimed: true }), on)).toEqual({
+        kind: 'none',
+        reason: 'claimed',
+      });
+      expect(resolveCollectRoute(state({ finalized: true, refunded: true }), on)).toEqual({
+        kind: 'none',
+        reason: 'refunded',
+      });
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
