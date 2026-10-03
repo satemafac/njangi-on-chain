@@ -117,4 +117,23 @@ describe('readInvitePreview', () => {
     const failing = { getObject: jest.fn().mockRejectedValue(new Error('429')), getDynamicFields: jest.fn() } as never;
     await expect(readInvitePreview(CIRCLE, 'testnet', failing)).resolves.toBeNull();
   });
+
+  describe('timeout', () => {
+    beforeEach(() => jest.useFakeTimers());
+    afterEach(() => jest.useRealTimers());
+
+    it('gives up with null when the RPC never answers', async () => {
+      const hanging = { getObject: jest.fn(() => new Promise(() => {})), getDynamicFields: jest.fn() } as never;
+      const preview = readInvitePreview(CIRCLE, 'testnet', hanging);
+      await jest.advanceTimersByTimeAsync(4_000);
+      await expect(preview).resolves.toBeNull();
+    });
+
+    it('leaves no timer pending once the read has answered', async () => {
+      // A leftover timer held the process open for the full timeout after
+      // every read (jest "did not exit one second after the test run").
+      await readInvitePreview(CIRCLE, 'testnet', client({ name: 'Cadena' }));
+      expect(jest.getTimerCount()).toBe(0);
+    });
+  });
 });

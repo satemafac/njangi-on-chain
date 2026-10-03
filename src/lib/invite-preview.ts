@@ -111,7 +111,10 @@ export async function readInvitePreview(
   client?: PreviewClient,
 ): Promise<InvitePreview | null> {
   const rpc: PreviewClient = client ?? new SuiClient({ url: getNetworkConfig(network).rpcUrl });
-  const timeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), READ_TIMEOUT_MS));
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), READ_TIMEOUT_MS);
+  });
 
   const read = (async (): Promise<InvitePreview | null> => {
     const obj = await rpc.getObject({ id: circleId, options: { showContent: true } });
@@ -145,5 +148,12 @@ export async function readInvitePreview(
     };
   })().catch(() => null);
 
-  return Promise.race([read, timeout]);
+  try {
+    return await Promise.race([read, timeout]);
+  } finally {
+    // A read that wins the race must not leave the timer pending: it would
+    // hold the event loop open for the full timeout after the answer is
+    // already known (it kept jest from exiting).
+    clearTimeout(timer);
+  }
 }
