@@ -3,7 +3,24 @@ import { useState } from 'react';
 import { SUPPORT_MAILTO } from '../lib/constants';
 import { Seo } from '../components/Seo';
 import { breadcrumbs, faqPage } from '../lib/structured-data';
-import { MarketingShell } from '../components/marketing/ArticleLayout';
+import { Breadcrumbs, MarketingShell } from '../components/marketing/ArticleLayout';
+import {
+  ChevronLink,
+  FaqList,
+  focusRing,
+  goldButtonClass,
+  quietButtonClass,
+} from '../components/landing/ui';
+
+/** Stable in-page anchor for a category ("Security & Trust" → "security-&-trust"). */
+const categoryAnchor = (title: string) => title.toLowerCase().replace(/\s+/g, '-');
+
+const RELATED = [
+  { href: '/learn/what-is-njangi', title: 'What is Njangi?', body: 'Learn about Cameroon\u2019s traditional savings circles.' },
+  { href: '/learn/rosca', title: 'What is a ROSCA?', body: 'Discover the future of community savings.' },
+  { href: '/learn/tontine', title: 'What is a Tontine?', body: 'The rotating savings circle across West and Central Africa.' },
+  { href: '/learn/susu', title: 'What is a Susu?', body: 'Caribbean savings circles go digital.' },
+];
 
 export default function FAQPage() {
   const [openFaqItems, setOpenFaqItems] = useState<{[key: string]: boolean}>({});
@@ -27,12 +44,12 @@ export default function FAQPage() {
         {
           id: "how-to-start",
           question: "How do I get started with Njangi On-Chain?",
-          answer: "Getting started is simple: 1) Click 'Login' and authenticate with your Google, Facebook, or other social account using zkLogin, 2) Create a new savings circle or join an existing one, 3) Agree the contribution amount and rotation order with your group, 4) Post your security deposit and start contributing. There is no seed phrase to write down and no token to buy first."
+          answer: "Getting started is simple: 1) Click 'Login' and sign in with your Google, Facebook or Apple account using zkLogin, 2) Create a new savings circle, or join one from the invite link its organiser sends you, 3) Agree the contribution amount and rotation order with your group, 4) Post your security deposit and start contributing. There is no seed phrase to write down; contributions are paid in USDC or SUI."
         },
         {
           id: "cost-to-use",
           question: "How much does it cost to use Njangi On-Chain?",
-          answer: "Running a circle is free. You pay only the small Sui network transaction fee (usually a few cents) when contributing or receiving a payout, and that goes to the network, not to us. We never take a cut of contributions or payouts. A Premium subscription unlocks coordination features — larger circles, WhatsApp notifications, smart goals, and analytics — and is paid by the circle admin; see the pricing page for what is included. Your circle's money is never behind a paywall."
+          answer: "Running a circle is free. You pay only the small Sui network transaction fee (usually a few cents) when contributing or receiving a payout, and that goes to the network, not to us. We never take a cut of contributions or payouts. A Premium subscription unlocks coordination features — larger circles, WhatsApp notifications and smart goals — and is paid by the circle admin; see the pricing page for what is included. Your circle's money is never behind a paywall."
         },
         {
           id: "currencies-supported",
@@ -47,22 +64,22 @@ export default function FAQPage() {
         {
           id: "how-its-different",
           question: "How is Njangi On-Chain different from traditional savings circles?",
-          answer: "The circle is the same; what changes is who holds the money and who keeps the record. 1) Nobody holds the pot — each cycle's contributions sit in escrow that only the scheduled recipient can open, 2) the rotation runs to the order your circle agreed rather than to memory, 3) every contribution and payout is on a shared record any member can check, 4) members can vote to stop a circle and get their money back, and 5) a circle can span countries, so family abroad can take part."
+          answer: "The circle is the same; what changes is who holds the money and who keeps the record. 1) Nobody holds the pot — each cycle's contributions sit in escrow that only the scheduled recipient can open, 2) the rotation runs to the order your circle agreed rather than to memory, 3) every contribution and payout is on a shared record any member can check, 4) stopping a circle early goes to a member vote, and a stopped circle returns each member's security deposit, and 5) a circle can span countries, so family abroad can take part."
         },
         {
           id: "smart-contracts-work",
           question: "How is the money actually held?",
-          answer: "Each cycle's contributions are held by a contract — a set of rules fixed before anyone pays in, which nobody can quietly change afterwards, including us. It holds the contributions in escrow, release the pot to the member whose turn it is under the rotation order your circle agreed, record every contribution and payout on chain, and apply the same rules to everyone. The rotation order is set by the circle admin before the circle starts, not drawn at random."
+          answer: "Each cycle's contributions are held by a contract — a set of rules fixed before anyone pays in, which nobody can quietly change afterwards, including us. It holds the contributions in escrow, releases the pot to the member whose turn it is under the rotation order your circle agreed, records every contribution and payout on chain, and applies the same rules to everyone. The rotation order is set by the circle admin before the circle starts, not drawn at random."
         },
         {
           id: "payout-order",
           question: "How is the payout order determined?",
-          answer: "The circle admin sets the rotation order, the same way a njangi treasurer traditionally would — by arranging members into positions the group has agreed on. It is not random. What is different from a paper list is that the order is stored on-chain and visible to every member, and any change to it is recorded as an on-chain event, so nobody can quietly move themselves up the queue. Once the order is set, each cycle pays the member in the next position until everyone has had their turn."
+          answer: "The circle admin sets the rotation order, the same way a njangi treasurer traditionally would — by arranging members into positions the group has agreed on. It is not random. What is different from a paper list is that the order is stored on-chain, where any member can check it, and any change to it is recorded as an on-chain event, so nobody can quietly move themselves up the queue. Once the order is set, each cycle pays the member in the next position until everyone has had their turn."
         },
         {
           id: "what-happens-missed-payment",
           question: "What happens if someone misses a payment?",
-          answer: "The circle's rules cover missed payments, and they are applied the same way to everyone. Depending on what your circle agreed: the member may pay a penalty fee, they might be moved later in the payout queue, or in severe cases, they could be removed from the circle. All of it is agreed when joining and applied automatically, not decided by a person after the fact."
+          answer: "The round waits. The member whose turn it is can collect only once everyone else has paid, and nothing in the app can force a member to pay, so a missed payment can make a payout late or stop it happening at all. That is why a circle works best with people who already trust each other."
         }
       ]
     },
@@ -72,7 +89,7 @@ export default function FAQPage() {
         {
           id: "zklogin-secure",
           question: "Is zkLogin secure? How does it work?",
-          answer: "zkLogin is a cutting-edge authentication system that's actually more secure than traditional passwords. It uses zero-knowledge proofs to verify your identity through social accounts (Google, Facebook, etc.) without putting your personal information on the public record. You get the convenience of a social login without a seed phrase to lose."
+          answer: "zkLogin lets you sign in with your Google, Facebook or Apple account instead of a seed phrase. It uses zero-knowledge proofs, so your wallet is tied to that account without putting your personal information on the public record. That also means your wallet is only as safe as the account you sign in with: protect it with a strong password and two-step verification."
         },
         {
           id: "funds-security",
@@ -82,7 +99,7 @@ export default function FAQPage() {
         {
           id: "what-if-member-leaves",
           question: "What if a member wants to leave the circle?",
-          answer: "Members can leave circles, but there are important considerations: 1) If they haven't received their payout yet, they may forfeit their contributions (depending on circle rules), 2) If they've already been paid, they must complete their remaining contribution obligations, 3) Some circles allow transferring membership to a trusted replacement, 4) All departure rules are set when the circle is created and applied the same way to everyone."
+          answer: "Before a circle starts, the admin can remove a member, and that member's security deposit is returned. Once the circle is running, the app has no way to leave it or hand your place to someone else, and nothing can force a member to keep paying; if someone stops, the rounds wait for them. If the whole group wants to stop, the admin can put it to a member vote, and a stopped circle returns each member's security deposit."
         },
         {
           id: "identity-verification",
@@ -92,7 +109,7 @@ export default function FAQPage() {
         {
           id: "network-or-app-down",
           question: "What if the network or the app goes down?",
-          answer: "Your circle's money is not held by us and does not depend on our app being up: it sits in the escrow contract on a public network run by thousands of independent operators, and the record stays readable even if this website is unavailable. What this does not do is make your account recoverable if you lose access to the social account you signed in with — sign-in is currently one-way, so keep access to that account."
+          answer: "Your circle's money is not held by us and does not depend on our app being up: it sits in the escrow contract on a public network run by independent validators, and the record stays readable even if this website is unavailable. What this does not do is make your account recoverable if you lose access to the social account you signed in with — sign-in is currently one-way, so keep access to that account."
         }
       ]
     },
@@ -102,7 +119,7 @@ export default function FAQPage() {
         {
           id: "create-vs-join",
           question: "Should I create a new circle or join an existing one?",
-          answer: "Both options have benefits: Create a new circle if you want to invite specific friends/family, set your own rules and schedule, or start with people you already trust. Join an existing circle if you want to start immediately, connect with new community members, or find circles with specific contribution amounts that match your budget."
+          answer: "Create a new circle if you want to invite specific friends or family and set your own amount and schedule. Join a circle when someone you know sends you its invite link: there is no public list of circles to browse, and the organiser approves each member who asks to join."
         },
         {
           id: "circle-size-limits",
@@ -127,17 +144,17 @@ export default function FAQPage() {
         {
           id: "cultural-names",
           question: "Why do you mention so many different names (Tontine, Sou Sou, etc.)?",
-          answer: "Rotating savings and credit associations exist in virtually every culture worldwide, each with their own name and traditions: Njangi (Cameroon), Tontine (French-speaking Africa), Sou Sou (Caribbean), ROSCA (Economics), Chama (Kenya), Hui (China), and dozens more. We honor all these traditions while providing a universal platform that serves every community."
+          answer: "Rotating savings and credit associations exist in virtually every culture worldwide, each with their own name and traditions: Njangi (Cameroon), Tontine (French-speaking Africa), Sou Sou (Caribbean), ROSCA (Economics), Chama (Kenya), Hui (China), and dozens more. We honor all these traditions; the product runs the rotating format they share."
         },
         {
           id: "preserve-culture",
           question: "How does the platform preserve cultural traditions?",
-          answer: "While we modernize the financial infrastructure, we preserve cultural elements through: customizable circle ceremonies and rituals, support for traditional meeting schedules, cultural naming and language options, community celebration features, and integration with diaspora communities. Technology enhances tradition rather than replacing it."
+          answer: "The app handles the money and the record; the meetings, the meals and the ceremonies stay with your group. You can give your circle the name your group already uses, switch the app between languages including English and French, and a member who collects their pot gets a short celebration on screen."
         },
         {
           id: "global-participation",
           question: "Can I join circles with people from other countries?",
-          answer: "Yes — this is one of the main reasons the product exists. A circle can include family at home and relatives abroad, so a njangi no longer has to end at a border. Contributions are made in a digital dollar so everyone is paying the same agreed amount regardless of where they live."
+          answer: "Yes — this is one of the main reasons the product exists. A circle can include family at home and relatives abroad, so a njangi no longer has to end at a border. A circle can settle in USDC, a digital dollar, so everyone pays the same agreed amount regardless of where they live."
         },
         {
           id: "regulations-compliance",
@@ -177,211 +194,154 @@ export default function FAQPage() {
         ]}
       />
 
-      <MarketingShell>
-        {/* Navigation */}
-        <nav className="bg-ink-surface border-b">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div className="flex items-center space-x-2 py-3 text-sm text-sand">
-              <Link href="/" className="hover:text-gold transition-colors">Home</Link>
-              <span>/</span>
-              <span className="text-cream font-medium">FAQ</span>
+      <MarketingShell legacy={false}>
+        {/* ================= HERO ================= */}
+        <header className="relative overflow-hidden">
+          <div
+            aria-hidden
+            className="pointer-events-none absolute inset-0 bg-[radial-gradient(900px_460px_at_50%_-12%,rgba(232,176,75,0.10),transparent_64%)]"
+          />
+          <div className="relative mx-auto max-w-[980px] px-5 pb-16 pt-8 text-center sm:px-8 md:pb-24 md:pt-12">
+            <Breadcrumbs
+              className="flex justify-center"
+              items={[{ label: 'Home', href: '/' }, { label: 'FAQ' }]}
+            />
+            <h1 className="type-hero mx-auto mt-12 max-w-[16ch] text-balance text-mist">
+              Frequently Asked Questions
+            </h1>
+            <p className="type-intro mx-auto mt-6 max-w-[40rem] text-balance text-mist-2">
+              Everything you need to know about Njangi On-Chain, how a savings circle works, and
+              what happens to your money at each step.
+            </p>
+            <div className="mt-10 flex flex-col items-center justify-center gap-5 sm:flex-row sm:gap-8">
+              <Link href="/" className={goldButtonClass}>
+                Get Started
+              </Link>
+              <ChevronLink href="/learn">Learn the Basics</ChevronLink>
             </div>
+          </div>
+        </header>
+
+        {/* ============ JUMP BAR (sticks under the global bar) ============ */}
+        <nav
+          aria-label="FAQ sections"
+          className="sticky top-[52px] z-30 border-y border-white/[0.08] bg-black/75 backdrop-blur-xl backdrop-saturate-[1.8]"
+        >
+          <div className="mx-auto flex max-w-[980px] items-center gap-2 overflow-x-auto px-5 py-3 [scrollbar-width:none] sm:justify-center sm:px-8 [&::-webkit-scrollbar]:hidden">
+            {faqCategories.map((category) => (
+              <a
+                key={category.title}
+                href={`#${categoryAnchor(category.title)}`}
+                className={`shrink-0 rounded-full bg-white/[0.06] px-4 py-2 text-[14px] text-mist-2 transition-colors duration-200 hover:bg-white/[0.12] hover:text-mist ${focusRing}`}
+              >
+                {category.title}
+              </a>
+            ))}
           </div>
         </nav>
 
-        {/* Hero Section */}
-        <section className="bg-gradient-to-r from-ink-surface to-ink-deep text-cream py-16">
-          <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
-            <h1 className="text-4xl md:text-5xl font-bold mb-6">
-              Frequently Asked Questions
-            </h1>
-            <p className="text-xl md:text-2xl mb-8 text-cream-muted">
-              Everything you need to know about Njangi On-Chain, how a savings circle works,
-              and what happens to your money at each step.
-            </p>
-            <div className="flex flex-col sm:flex-row gap-4 justify-center">
-              <Link 
-                href="/learn" 
-                className="bg-ink-surface text-gold px-8 py-3 rounded-lg font-semibold hover:bg-ink-surface transition-colors"
-              >
-                Learn the Basics →
-              </Link>
-              <Link 
-                href="/" 
-                className="border border-gold-deep/55 text-cream px-8 py-3 rounded-lg font-semibold hover:bg-ink-surface hover:text-gold transition-colors"
-              >
-                Get Started
-              </Link>
-            </div>
-          </div>
-        </section>
-
-        {/* Quick Links */}
-        <section className="bg-ink-surface border-b">
-          <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-            <h2 className="text-xl font-semibold mb-4 text-center">Jump to Section</h2>
-            <div className="flex flex-wrap justify-center gap-4">
-              {faqCategories.map((category, index) => (
-                <a
-                  key={index}
-                  href={`#${category.title.toLowerCase().replace(/\s+/g, '-')}`}
-                  className="bg-gold/[0.07] text-gold px-4 py-2 rounded-lg text-sm font-medium hover:bg-gold/[0.07] transition-colors"
-                >
-                  {category.title}
-                </a>
-              ))}
-            </div>
-          </div>
-        </section>
-
-        {/* FAQ Content */}
-        <main className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
-          {faqCategories.map((category, categoryIndex) => (
-            <section 
-              key={categoryIndex}
-              id={category.title.toLowerCase().replace(/\s+/g, '-')}
-              className="mb-12"
+        {/* ================= ANSWERS ================= */}
+        <main className="mx-auto max-w-[860px] px-5 pb-8 pt-16 sm:px-8 md:pt-24">
+          {faqCategories.map((category) => (
+            <section
+              key={category.title}
+              id={categoryAnchor(category.title)}
+              className="mb-20 scroll-mt-[132px] md:mb-28"
             >
-              <h2 className="text-3xl font-bold text-cream mb-8 pb-4 border-b border-ink-border border-ink-border">
-                {category.title}
-              </h2>
-              
-              <div className="space-y-4">
-                {category.faqs.map((faq) => (
-                  <div key={faq.id} className="bg-ink-surface border border-ink-border rounded-lg overflow-hidden">
-                    <button 
-                      className="w-full px-6 py-4 text-left hover:bg-ink-deep transition-colors"
-                      onClick={() => toggleFaqItem(faq.id)}
-                      aria-expanded={openFaqItems[faq.id]}
-                    >
-                      <div className="flex justify-between items-center">
-                        <span className="text-lg font-semibold text-cream pr-4">
-                          {faq.question}
-                        </span>
-                        <svg 
-                          className={`h-5 w-5 text-sand-dim transform ${
-                            openFaqItems[faq.id] ? 'rotate-180' : ''
-                          } transition-transform duration-200 flex-shrink-0`} 
-                          fill="none" 
-                          viewBox="0 0 24 24" 
-                          stroke="currentColor"
-                        >
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                        </svg>
-                      </div>
-                    </button>
-                    <div 
-                      className={`px-6 pb-4 ${openFaqItems[faq.id] ? 'block' : 'hidden'}`}
-                    >
-                      <div className="text-sand leading-relaxed whitespace-pre-line">
-                        {faq.answer}
-                      </div>
-                    </div>
-                  </div>
-                ))}
+              <h2 className="type-headline text-mist">{category.title}</h2>
+              <div className="mt-8">
+                <FaqList
+                  items={category.faqs.map((item) => ({
+                    id: item.id,
+                    question: item.question,
+                    answer: item.answer,
+                  }))}
+                  open={openFaqItems}
+                  onToggle={toggleFaqItem}
+                />
               </div>
             </section>
           ))}
         </main>
 
-        {/* Still Have Questions */}
-        <section className="bg-gold/[0.07]">
-          <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-16 text-center">
-            <h2 className="text-3xl font-bold text-cream mb-4">
-              Still Have Questions?
-            </h2>
-            <p className="text-lg text-sand mb-8 max-w-2xl mx-auto">
-              Can&rsquo;t find what you&rsquo;re looking for? We&rsquo;re here to help! 
-              Reach out to our community, or read more about how savings circles work.
+        {/* ================= STILL HAVE QUESTIONS ================= */}
+        <section className="px-5 pb-24 sm:px-8 md:pb-32">
+          <div className="relative mx-auto max-w-[980px] overflow-hidden rounded-[28px] bg-ink-surface px-7 py-14 text-center sm:px-12 md:py-20">
+            <div
+              aria-hidden
+              className="pointer-events-none absolute inset-x-0 -top-32 mx-auto h-64 max-w-[640px] rounded-full"
+              style={{ background: 'radial-gradient(closest-side, rgba(232,176,75,0.14), transparent)' }}
+            />
+            <h2 className="type-section relative text-balance text-mist">Still Have Questions?</h2>
+            <p className="type-intro relative mx-auto mt-5 max-w-[36rem] text-balance text-mist-2">
+              Can&rsquo;t find what you&rsquo;re looking for? We&rsquo;re here to help! Reach out to
+              our community, or read more about how savings circles work.
             </p>
-            <div className="flex flex-col sm:flex-row gap-4 justify-center">
-              <Link 
-                href="/learn"
-                className="bg-gold text-cream px-8 py-3 rounded-lg font-semibold hover:bg-gold transition-colors"
-              >
-                Educational Resources
-              </Link>
-              <a
-                href={SUPPORT_MAILTO}
-                className="border-2 border-gold/45 text-gold px-8 py-3 rounded-lg font-semibold hover:bg-gold hover:text-cream transition-colors"
-              >
+            <div className="relative mt-10 flex flex-col items-center justify-center gap-4 sm:flex-row sm:gap-5">
+              <a href={SUPPORT_MAILTO} className={goldButtonClass}>
                 Contact Support
               </a>
-              <a 
+              <Link href="/learn" className={quietButtonClass}>
+                Educational Resources
+              </Link>
+            </div>
+            <div className="relative mt-6">
+              <a
                 href="https://x.com/njangi_on_chain"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="border-2 border-ink-border text-sand px-8 py-3 rounded-lg font-semibold hover:bg-ink-surface transition-colors"
+                className={`group inline-flex items-center gap-0.5 rounded text-[17px] tracking-[-0.022em] text-gold underline-offset-4 hover:underline ${focusRing}`}
               >
                 Join Community
+                <span aria-hidden className="transition-transform duration-200 group-hover:translate-x-0.5 rtl:rotate-180">
+                  ›
+                </span>
               </a>
             </div>
           </div>
         </section>
 
-        {/* Related Resources */}
-        <section className="bg-ink-surface">
-          <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-16">
-            <h2 className="text-3xl font-bold text-cream text-center mb-8">
-              Learn More About Savings Circles
-            </h2>
-            <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
-              <Link href="/learn/what-is-njangi" className="group">
-                <div className="bg-gold/[0.07] border border-gold/45 rounded-lg p-6 hover:border-gold/45 hover:shadow-[0_14px_40px_-24px_rgba(0,0,0,0.8)] transition-all">
-                  <h3 className="font-semibold text-gold group-hover:text-gold mb-2">
-                    What is Njangi?
-                  </h3>
-                  <p className="text-sm text-gold">
-                    Learn about Cameroon&rsquo;s traditional savings circles.
-                  </p>
-                </div>
-              </Link>
-              
-              <Link href="/learn/rosca" className="group">
-                <div className="bg-gold/[0.07] border border-gold/45 rounded-lg p-6 hover:border-gold/45 hover:shadow-[0_14px_40px_-24px_rgba(0,0,0,0.8)] transition-all">
-                  <h3 className="font-semibold text-gold group-hover:text-gold mb-2">
-                    What is a ROSCA?
-                  </h3>
-                  <p className="text-sm text-gold">
-                    Discover the future of community savings.
-                  </p>
-                </div>
-              </Link>
-              
-              <Link href="/learn/tontine" className="group">
-                <div className="bg-gold/[0.07] border border-gold/45 rounded-lg p-6 hover:border-gold/45 hover:shadow-[0_14px_40px_-24px_rgba(0,0,0,0.8)] transition-all">
-                  <h3 className="font-semibold text-gold group-hover:text-gold mb-2">
-                    What is a Tontine?
-                  </h3>
-                  <p className="text-sm text-gold">
-                    The rotating savings circle across West and Central Africa.
-                  </p>
-                </div>
-              </Link>
-              
-              <Link href="/learn/susu" className="group">
-                <div className="bg-gold/[0.07] border border-gold/45 rounded-lg p-6 hover:border-gold/45 hover:shadow-[0_14px_40px_-24px_rgba(0,0,0,0.8)] transition-all">
-                  <h3 className="font-semibold text-gold group-hover:text-gold mb-2">
-                    What is a Susu?
-                  </h3>
-                  <p className="text-sm text-gold">
-                    Caribbean savings circles go digital.
-                  </p>
-                </div>
-              </Link>
+        {/* ================= RELATED ================= */}
+        <section className="px-5 pb-24 sm:px-8 md:pb-32">
+          <div className="mx-auto max-w-[1100px]">
+            <div className="text-center">
+              <h2 className="type-section text-balance text-mist">
+                Learn More About Savings Circles
+              </h2>
+            </div>
+            <div className="mt-12 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              {RELATED.map((item) => (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className={`group flex flex-col rounded-[28px] bg-ink-surface p-7 transition-colors duration-200 hover:bg-[#1b1b1e] ${focusRing}`}
+                >
+                  <span className="text-[19px] font-semibold tracking-[0.012em] text-mist">
+                    {item.title}
+                  </span>
+                  <span className="type-caption mt-2 flex-1 text-mist-3">{item.body}</span>
+                  <span className="mt-6 inline-flex items-center gap-0.5 text-[15px] text-gold">
+                    Read
+                    <span aria-hidden className="transition-transform duration-200 group-hover:translate-x-0.5 rtl:rotate-180">
+                      ›
+                    </span>
+                  </span>
+                </Link>
+              ))}
             </div>
           </div>
         </section>
 
-        {/* Footer */}
-        <footer className="bg-ink-surface">
-          <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-            <p className="text-sm text-sand text-center">
-              <strong>Disclaimer:</strong> This content is for educational purposes only and does not constitute financial advice. 
-              Njangi On-Chain is coordination software for savings circles: it never holds your money, never offers an investment, and never pays a return. Take part only with an amount your group can commit to the schedule.
-            </p>
-          </div>
-        </footer>
+        {/* ================= DISCLAIMER ================= */}
+        <aside className="px-5 pb-16 sm:px-8">
+          <p className="type-fine mx-auto max-w-[44rem] text-center text-mist-3">
+            <strong className="font-semibold text-mist-2">Disclaimer:</strong> This content is for
+            educational purposes only and does not constitute financial advice. Njangi On-Chain is
+            coordination software for savings circles: it never holds your money, never offers an
+            investment, and never pays a return. Take part only with an amount your group can commit
+            to the schedule.
+          </p>
+        </aside>
       </MarketingShell>
     </>
   );

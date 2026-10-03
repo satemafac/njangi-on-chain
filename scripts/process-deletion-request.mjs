@@ -9,9 +9,10 @@
 //     expire on-network; the lookup pointer is gone immediately)
 //   - join_requests rows for the wallet address
 //   - zklogin_sessions rows for the wallet address
-//   - salts + recovery_codes for the OAuth identity
-//     — WARNING: deleting the salt makes the wallet UNRECOVERABLE via
-//     social login; the public deletion form warns the requester.
+//   - legacy salts + recovery_codes rows for the OAuth identity. Nothing
+//     has written these since salts moved to Enoki (2025-05-24, 11b5e7b);
+//     any rows left over are deleted here. Deleting them does NOT affect
+//     wallet access: Enoki supplies the salt at every sign-in.
 // What it deliberately RETAINS (legal hold, documented in the privacy
 // policy): legal_acceptances (append-only), Stripe billing records
 // (live in Stripe), walrus_renewal_audit (append-only audit log), and
@@ -21,8 +22,8 @@
 // unauthenticated by design, and its `user_address` field is a public
 // on-chain value that any visitor can set to a VICTIM's wallet. So this
 // script NEVER derives the OAuth identity (sub/aud) from a request's
-// address to drive the cryptographic-erasure step. The salt/recovery-code
-// deletion runs only against a TRUSTED identity:
+// address to drive the identity-keyed deletes. The legacy salt/recovery-
+// code deletion runs only against a TRUSTED identity:
 //   1. the (verified_sub, verified_aud) the endpoint captured from the
 //      requester's own zkLogin session at request time (identity_verified),
 //      OR
@@ -31,7 +32,8 @@
 //      verified wallet ownership OUT OF BAND (e.g. signed challenge, support
 //      ticket). Address-keyed deletes (join_requests, zklogin_sessions) are
 //      likewise skipped for unverified requests unless that flag is passed.
-// Without either, the erasure of salts/recovery_codes is refused and logged.
+// Without either, the legacy salts/recovery_codes delete is refused and
+// logged.
 //
 // Usage:
 //   node scripts/process-deletion-request.mjs --request-id 7 \
@@ -111,7 +113,7 @@ async function main() {
   const argSub = arg('sub') || null;
   const argAud = arg('aud') || null;
 
-  // sub/aud used for the salt/recovery-code erasure.
+  // sub/aud used for the legacy salt/recovery-code delete.
   let sub = null;
   let aud = null;
   if (identityVerified && request.verified_sub && request.verified_aud) {
@@ -131,7 +133,7 @@ async function main() {
     console.warn(
       '[deletion] identity: NONE trusted. Request was not submitted from an authenticated ' +
         'session and no --force-unverified-identity + --sub/--aud override was given. ' +
-        'Cryptographic erasure (salts/recovery_codes) will be SKIPPED.',
+        'The legacy salts/recovery_codes delete will be SKIPPED.',
     );
   }
 
@@ -194,9 +196,11 @@ async function main() {
     console.log('[deletion] no address-keyed deletes to run');
   }
 
-  // 3. Salt + recovery codes (makes the wallet unrecoverable — the public
-  //    form warned the requester; this is the cryptographic-erasure step).
-  //    Only ever runs against the trusted identity established above.
+  // 3. Legacy salts + recovery_codes rows. Nothing has written them since
+  //    salts moved to Enoki (2025-05-24), so this only clears leftovers and
+  //    cannot lock anyone out of a wallet their login reaches today. It
+  //    still runs only against the trusted identity established above, so
+  //    a spoofed request can never delete a stranger's rows.
   if (sub && aud) {
     await run(
       'recovery_codes for identity',
@@ -207,22 +211,22 @@ async function main() {
     await run('salts for identity', `DELETE FROM salts WHERE sub = $1 AND aud = $2`, [sub, aud]);
   } else {
     console.log(
-      '[deletion] salts/recovery_codes UNTOUCHED — no trusted identity. If the requester owns ' +
+      '[deletion] legacy salts/recovery_codes UNTOUCHED — no trusted identity. If the requester owns ' +
         'the wallet, verify ownership out-of-band, then re-run with ' +
         '--sub <s> --aud <a> --force-unverified-identity.',
     );
   }
 
-  // 4. Close out the request. If the cryptographic erasure could not run but
-  //    the request points at a wallet, leave it actionable ('processing')
-  //    instead of 'completed', so a request whose salt still exists is never
-  //    silently closed as "erased". Email-only requests with no wallet
-  //    reference have nothing further to erase and are completed.
-  const cryptoErasureRan = Boolean(sub && aud);
+  // 4. Close out the request. If the identity-keyed deletes could not run
+  //    but the request points at a wallet, leave it actionable
+  //    ('processing') instead of 'completed', so a request whose rows still
+  //    exist is never silently closed as "erased". Email-only requests with
+  //    no wallet reference have nothing further to erase and are completed.
+  const identityDeletesRan = Boolean(sub && aud);
   const walletReferenced = Boolean(
     request.user_address || request.verified_sub || arg('address') || argSub,
   );
-  const finalStatus = !cryptoErasureRan && walletReferenced ? 'processing' : 'completed';
+  const finalStatus = !identityDeletesRan && walletReferenced ? 'processing' : 'completed';
   await run(
     `mark request ${finalStatus}`,
     `UPDATE deletion_requests SET status = $2, updated_at = NOW() WHERE id = $1`,
@@ -231,7 +235,8 @@ async function main() {
   if (finalStatus === 'processing') {
     console.warn(
       '[deletion] request left in status=processing: it references a wallet but ownership was ' +
-        'not proven, so recovery material was retained. Complete the verified re-run to finish.',
+        'not proven, so rows keyed to its OAuth identity were retained. Complete the verified ' +
+        're-run to finish.',
     );
   }
 

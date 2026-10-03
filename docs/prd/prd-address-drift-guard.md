@@ -175,7 +175,7 @@ everyone who logs in afterward. Emit on every drift event:
 - A counter suitable for "N drift events in the last hour" so a spike is visible.
 
 Add a short section to `docs/incident-playbook.md`: on a drift spike, the first question is
-*"which address-affecting env var or Enoki key changed, and can it be reverted?"* — reverting the
+*"which address-affecting env var or Enoki application changed, and can it be reverted?"* — reverting the
 salt source restores the original addresses for everyone who has not yet been onboarded under the
 new one.
 

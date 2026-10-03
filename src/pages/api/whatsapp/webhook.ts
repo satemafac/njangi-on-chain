@@ -12,8 +12,23 @@ import { getActiveWhatsAppRegistries } from '../../../services/whatsapp-registry
 import { getCircleStatus, formatCircleStatusForWhatsAppWithNames } from '../../../services/circle-status.service';
 import { getPooledSuiClient } from '../../../services/sui-rpc-failover';
 import { fetchAndDecryptPII } from '../../../lib/walrus-pii';
+import { WHATSAPP_GRAPH_API_VERSION } from '../../../lib/whatsapp-graph-api';
 import { lookupCirclesForPhone } from '../../../lib/whatsapp-link-index';
 import { timingSafeEqualStrings } from '../../../lib/timing-safe';
+import { WHATSAPP_HELP_REPLY } from '../../../content/whatsapp-updates';
+
+// Meta signs the exact bytes it POSTs: X-Hub-Signature-256 is an HMAC-SHA256
+// of the raw body. Next.js' default bodyParser would hand the handler a
+// parsed object, and JSON.stringify does not reproduce Meta's bytes — Meta
+// escapes non-ASCII characters as \uXXXX (emoji, accented names) and can
+// escape '/' as '\/' ("/status") — so the check failed with 403 and Meta
+// retried for 7 days. Disable parsing and read the raw stream, as the
+// Coinbase, MoonPay and Stripe webhooks do.
+export const config = {
+  api: {
+    bodyParser: false,
+  },
+};
 
 interface WebhookResponse {
   success?: boolean;
@@ -29,6 +44,25 @@ const MESSAGE_DEDUP_WINDOW = 60000; // 60 seconds
 // Get the current network from environment (server-side)
 function getWhatsAppNetwork(): 'testnet' | 'mainnet' {
   return (process.env.NEXT_PUBLIC_SUI_NETWORK as 'testnet' | 'mainnet') || 'testnet';
+}
+
+function readRawBody(req: NextApiRequest): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
+}
+
+/**
+ * Log-safe form of a WhatsApp number: its last four digits. Routing PII is
+ * kept encrypted on Walrus and indexed only by HMAC, so a plaintext number
+ * (like a message body) must never reach the production logs.
+ */
+function redactPhone(phone: unknown): string {
+  const digits = typeof phone === 'string' ? phone.replace(/\D/g, '') : '';
+  return digits.length > 4 ? `***${digits.slice(-4)}` : '***';
 }
 
 /**
@@ -61,7 +95,7 @@ async function getAllLinkedCirclesFromRegistry(phoneNumber: string): Promise<str
     const indexed = await lookupCirclesForPhone(phoneNumber);
     if (indexed.length > 0) {
       appLogger.info('Resolved linked circles via HMAC index', {
-        phoneNumber: phoneNumber.replace(/^\+/, ''),
+        phoneNumber: redactPhone(phoneNumber),
         count: indexed.length,
       });
       return indexed.map((row) => row.circleId);
@@ -138,7 +172,7 @@ async function scanRegistryAndDecryptForPhone(phoneNumber: string): Promise<stri
     }
 
     appLogger.info('Found linked circles', {
-      phoneNumber: normalizedPhone,
+      phoneNumber: redactPhone(normalizedPhone),
       count: linkedCircles.length,
     });
 
@@ -146,7 +180,7 @@ async function scanRegistryAndDecryptForPhone(phoneNumber: string): Promise<stri
   } catch (error) {
     appLogger.error('Error querying WhatsApp registry for all circles', {
       error: error instanceof Error ? error.message : String(error),
-      phoneNumber,
+      phoneNumber: redactPhone(phoneNumber),
     });
     return [];
   }
@@ -216,8 +250,20 @@ async function handler(
   if (req.method === 'POST') {
     try {
       const signature = req.headers['x-hub-signature-256'] as string | undefined;
-      const rawBody = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
       const appSecret = process.env.WHATSAPP_APP_SECRET;
+
+      let rawBody: Buffer;
+      try {
+        rawBody = await readRawBody(req);
+      } catch (readError) {
+        appLogger.warn('Failed to read webhook request body', {
+          error: readError instanceof Error ? readError.message : String(readError),
+        });
+        return res.status(400).json({
+          success: false,
+          error: 'Unable to read the request body',
+        });
+      }
 
       appLogger.debug('Webhook POST received', {
         hasSignature: !!signature,
@@ -245,6 +291,7 @@ async function handler(
       } else {
         let isValid = false;
         try {
+          // HMAC over the exact bytes Meta sent — never a re-serialized copy.
           const hash = crypto
             .createHmac('sha256', appSecret)
             .update(rawBody)
@@ -275,8 +322,19 @@ async function handler(
         appLogger.debug('Webhook signature verified');
       }
 
-      // Parse the webhook body
-      const body = typeof req.body === 'object' ? req.body : JSON.parse(rawBody);
+      // Parse the webhook body — only now that the signature has passed.
+      let body;
+      try {
+        body = JSON.parse(rawBody.toString('utf8'));
+      } catch {
+        appLogger.warn('Rejected webhook with an unparseable body', {
+          bodySize: rawBody.length,
+        });
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid JSON body',
+        });
+      }
 
       // Process incoming messages
       if (body.entry && Array.isArray(body.entry)) {
@@ -292,15 +350,16 @@ async function handler(
                   if (isMessageProcessed(msg.id)) {
                     appLogger.debug('⏭️  Skipping duplicate message', {
                       messageId: msg.id,
-                      from: msg.from,
+                      from: redactPhone(msg.from),
                     });
                     continue;
                   }
 
+                  // The text stays out of the logs: like the number, it is
+                  // the member's PII.
                   appLogger.info('📱 Incoming WhatsApp message', {
-                    from: msg.from,
+                    from: redactPhone(msg.from),
                     type: msg.type,
-                    text: msg.text?.body || '<non-text>',
                     messageId: msg.id,
                   });
 
@@ -315,13 +374,13 @@ async function handler(
                   const lowerText = messageText.toLowerCase();
 
                   if (lowerText.includes('help') || lowerText === '?') {
-                    // Send help message
-                    const helpMessage = `✅ *Njangi WhatsApp Channel*\n\nThis is a notification-only channel. You will receive:\n\n• 🔄 Cycle started notifications\n• 💰 Contribution confirmations\n• ⏰ Deadline reminders\n• 💵 Payout notifications\n• 👥 Member joined alerts\n• 📊 Circle insights\n\n*Available Commands:*\n/status <circle-id> - Get live circle status from blockchain\n/help - Show this message\n\n*Example:*\n/status 0x1639fcff0c0f7a48ba0a1aa9f727985f1c9360d399bd8210dc99f26c07237d8e`;
-
+                    // Lists only the updates something actually sends — see
+                    // src/content/whatsapp-updates.ts.
+                    const helpMessage = WHATSAPP_HELP_REPLY;
 
                     try {
                       const whatsappResponse = await fetch(
-                        `https://graph.facebook.com/v23.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
+                        `https://graph.facebook.com/${WHATSAPP_GRAPH_API_VERSION}/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
                         {
                           method: 'POST',
                           headers: {
@@ -346,7 +405,7 @@ async function handler(
                           error: errorText,
                         });
                       } else {
-                        appLogger.info('✅ Help message sent', { to: sender });
+                        appLogger.info('✅ Help message sent', { to: redactPhone(sender) });
                       }
                     } catch (sendError) {
                       appLogger.error('Error sending help message', {
@@ -375,7 +434,7 @@ async function handler(
                         }
 
                         const whatsappResponse = await fetch(
-                          `https://graph.facebook.com/v23.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
+                          `https://graph.facebook.com/${WHATSAPP_GRAPH_API_VERSION}/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
                           {
                             method: 'POST',
                             headers: {
@@ -401,12 +460,12 @@ async function handler(
                             error: errorText,
                           });
                         } else {
-                          appLogger.info('✅ Status message sent', { to: sender, circleId: specificCircleId });
+                          appLogger.info('✅ Status message sent', { to: redactPhone(sender), circleId: specificCircleId });
                         }
                       } catch (statusError) {
                         appLogger.error('Error sending status message', {
                           error: statusError instanceof Error ? statusError.message : String(statusError),
-                          sender,
+                          sender: redactPhone(sender),
                         });
                       }
                     } else {
@@ -418,7 +477,7 @@ async function handler(
 
                         try {
                           await fetch(
-                            `https://graph.facebook.com/v23.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
+                            `https://graph.facebook.com/${WHATSAPP_GRAPH_API_VERSION}/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
                             {
                               method: 'POST',
                               headers: {
@@ -458,7 +517,7 @@ async function handler(
                             }
 
                             await fetch(
-                              `https://graph.facebook.com/v23.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
+                              `https://graph.facebook.com/${WHATSAPP_GRAPH_API_VERSION}/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
                               {
                                 method: 'POST',
                                 headers: {
@@ -487,7 +546,7 @@ async function handler(
                           }
                         }
 
-                        appLogger.info('✅ Status messages sent for all circles', { to: sender, count: linkedCircles.length });
+                        appLogger.info('✅ Status messages sent for all circles', { to: redactPhone(sender), count: linkedCircles.length });
                       }
                     }
                   } else {
@@ -496,7 +555,7 @@ async function handler(
 
                     try {
                       const whatsappResponse = await fetch(
-                        `https://graph.facebook.com/v23.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
+                        `https://graph.facebook.com/${WHATSAPP_GRAPH_API_VERSION}/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
                         {
                           method: 'POST',
                           headers: {
@@ -521,7 +580,7 @@ async function handler(
                           error: errorText,
                         });
                       } else {
-                        appLogger.debug('✓ Acknowledgment sent', { to: sender });
+                        appLogger.debug('✓ Acknowledgment sent', { to: redactPhone(sender) });
                       }
                     } catch (sendError) {
                       appLogger.error('Error sending acknowledgment', {

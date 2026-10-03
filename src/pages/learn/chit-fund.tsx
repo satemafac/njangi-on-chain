@@ -32,7 +32,7 @@ const FAQS = [
   {
     question: 'Is a chit fund legal?',
     answer:
-      'In India, yes, and it is specifically regulated. Registered chit funds operate under the Chit Funds Act, 1982, and are licensed and supervised by state governments, which cap the organiser\'s commission and require the foreman to lodge security. Alongside the registered sector sits a very large informal one — workplace and neighbourhood chits run on trust — which is outside that framework. The distinction matters: the protections of the Act apply to registered chits only.',
+      'In India, yes, and it is specifically regulated. Under the Chit Funds Act, 1982, a chit needs the state government\'s sanction and registration with the state\'s registrar, and the Act caps the organiser\'s commission and requires the foreman to lodge security. Alongside the registered sector sits a very large informal one — workplace and neighbourhood chits run on trust — which mostly runs without registration, and so without the Act\'s protections.',
   },
   {
     question: 'What is the difference between a chit fund and a ROSCA?',
@@ -42,17 +42,17 @@ const FAQS = [
   {
     question: 'How does chit fund bidding work?',
     answer:
-      'Each month, members who want the pool early state the discount they will accept — they take less than the full amount. Whoever offers to take the least wins that month\'s pool, and the sum they gave up is divided among the other members after the organiser\'s commission. A member with an urgent need can move to the front of the queue by accepting less; a member who can wait is compensated out of other people\'s discounts.',
+      'Each month, members who want the pool early state the discount they will accept — they take less than the full amount. Whoever offers to take the least wins that month\'s pool, and the sum they gave up, after the organiser\'s commission, is shared equally among all the members, the winner included. A member with an urgent need can move to the front of the queue by accepting less; a member who can wait is compensated out of other people\'s discounts.',
   },
   {
     question: 'What does the foreman do?',
     answer:
-      'The foreman is the organiser of a registered chit. They assemble the group, run the monthly auction, collect contributions, distribute the pool, and are legally required to lodge security with the state registrar. In exchange they take a commission on each pool, capped by the Act at five per cent.',
+      'The foreman is the organiser of a registered chit. They assemble the group, run the monthly auction, collect contributions, distribute the pool, and are legally required to lodge security with the state registrar. In exchange they take a commission on each pool, capped by the Act at seven per cent since a 2019 amendment (five per cent before).',
   },
   {
     question: 'Is a chit fund the same as a chitty or a kuri?',
     answer:
-      'Yes. Chitty is the usual word in Kerala, kuri is used in Malayalam-speaking areas, and chit or chit scheme appears in official and company names. They describe the same arrangement.',
+      'Yes. Chitty and kuri are both Malayalam names used in Kerala, and chit or chit scheme appears in official and company names. They describe the same arrangement.',
   },
 ];
 
@@ -81,7 +81,7 @@ export default function ChitFundPage() {
       <Seo
         title="What is a Chit Fund? How Chit Funds Actually Work"
         titleAbsolute
-        description="A chit fund is India's rotating savings circle, and the only one decided by monthly auction: members bid a discount for early access, and the discount is shared out."
+        description="A chit fund is India's rotating savings circle, and the best-known one decided by monthly auction: members bid a discount for early access, and the discount is shared out."
         path={PATH}
         ogType="article"
         image={{ url: '/og/learn-chit-fund.png', alt: 'What is a chit fund?' }}
@@ -128,8 +128,8 @@ export default function ChitFundPage() {
         title="What is a chit fund?"
         standfirst={
           <p>
-            A chit fund is India&rsquo;s rotating savings circle — and the only one in the family
-            that decides whose turn it is by auction. Everyone pays the same amount each month, and
+            A chit fund is India&rsquo;s rotating savings circle — and the best-known one in the
+            family that decides whose turn it is by auction. Everyone pays the same amount each month, and
             each month the members bid for who takes the pool.
           </p>
         }
@@ -186,32 +186,33 @@ export default function ChitFundPage() {
             ₹82,000. Nobody goes lower. The hospital bill wins the pool at ₹82,000.
           </p>
           <p>
-            The ₹18,000 they gave up does not vanish. The foreman takes their commission — capped
-            by law at five per cent of the pool, so ₹5,000 — and the remaining ₹13,000 is divided
-            among the other nineteen members, who each get about ₹684 back. In practice that is
-            deducted from what they owe next month, so their next contribution is smaller.
+            The ₹18,000 they gave up does not vanish. The foreman takes their commission — the law
+            caps it at seven per cent of the pool; say five per cent here, ₹5,000 — and the
+            remaining ₹13,000 is shared equally among all twenty members, the winner included, so
+            each gets ₹650 back. In practice that is deducted from what they owe next month, so
+            their next contribution is smaller.
           </p>
           <div className={`${cardClass} mt-6 px-6 py-6 sm:px-8`}>
             <h3 className="text-[11px] font-semibold uppercase tracking-[0.2em] text-gold">
               What the auction actually does
             </h3>
             <p className="mt-3 text-base leading-7 text-cream-muted">
-              It prices urgency, out loud. In every other tradition on this list, a member who needs
+              It prices urgency, out loud. In many other traditions on this list, a member who needs
               the money early has to ask the group and hope — a social negotiation with no
               mechanism behind it. A chit fund turns that into a number the whole group can see, and
               compensates the people who wait out of the pocket of the person who could not.
             </p>
           </div>
           <p>
-            Members who have already taken their turn keep contributing the full amount and can no
-            longer bid. That is what stops someone taking an early pool cheaply and then coasting.
+            Members who have already taken the pool keep paying every instalment and can no longer
+            bid.
           </p>
         </Section>
 
         <Section id="registered" title="Registered chits and informal ones">
           <p>
             Two quite different things go by the name. A <strong>registered chit fund</strong> is
-            run by a licensed company under the Chit Funds Act, 1982. There is a written agreement,
+            run by a foreman, usually a company, under the Chit Funds Act, 1982. There is a written agreement,
             the group is filed with a state registrar, the foreman must lodge security, and their
             commission is capped. Kerala&rsquo;s state-owned operator is among the largest in the
             country, which is unusual — a government running the local ROSCA.
@@ -219,7 +220,7 @@ export default function ChitFundPage() {
           <p>
             An <strong>informal chit</strong> is a dozen colleagues in an office, or traders in one
             market, running the same arrangement on trust with no paperwork and often no auction at
-            all — just a draw. This sector is far larger than the registered one and is much closer
+            all — just a draw. This sector is thought to be far larger than the registered one and is much closer
             to how a{' '}
             <Link href="/learn/committee" className="text-gold-hi underline underline-offset-4 hover:text-gold">
               committee
@@ -239,24 +240,23 @@ export default function ChitFundPage() {
 
         <Section id="history" title="Where it comes from">
           <p>
-            The name comes from <em>chitthi</em>, a written slip. Members once drew slips from a pot
-            to settle whose turn had come, and the lottery form still exists. The shift from drawing
-            lots to bidding is what turned a common practice into something distinctly Indian, and
-            it spread the chit through the south — Kerala, Tamil Nadu, Andhra Pradesh, Karnataka.
+            The name comes from <em>chitthi</em>, a written slip, and a lottery form still exists
+            alongside the auction. The shift from drawing lots to bidding is what gives the chit its
+            character, and today it is most common in the south — Kerala, Tamil Nadu, Andhra
+            Pradesh, Karnataka.
           </p>
           <p>
-            India began regulating chits more than a century before the 1982 Act, which is why the
-            chit fund is among the best-documented rotating savings traditions anywhere. Most of the
-            others on this list left no institutional record at all, which is precisely why nobody
-            can tell you how large the global practice is.
+            Parts of India regulated chits decades before the 1982 Act, which is why the chit fund
+            is among the best-documented rotating savings traditions anywhere. Most of the others on
+            this list were never regulated, so there are few official figures on them, which is
+            precisely why nobody can tell you how large the global practice is.
           </p>
         </Section>
 
         <Section id="diaspora" title="Chits abroad">
           <p>
             Indian communities carry chits to the Gulf, Singapore, Malaysia, the United Kingdom,
-            the United States and Canada — usually in the simpler lottery form rather than the full
-            auction. Among Gulf workers they are a common way to turn a steady monthly wage into an
+            the United States and Canada. Among Gulf workers they are a common way to turn a steady monthly wage into an
             occasional lump sum worth sending home.
           </p>
           <p>

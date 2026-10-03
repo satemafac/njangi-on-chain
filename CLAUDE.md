@@ -53,15 +53,6 @@ npm start
 npm run lint
 ```
 
-### zkLogin Services (Docker)
-```bash
-# Start zkLogin prover services
-docker-compose up -d
-
-# Alternative: Local zkLogin services
-./start-zklogin-services.sh
-```
-
 ## Architecture Overview
 
 ### Core System Integration
@@ -108,9 +99,31 @@ Frontend → zkLogin API (/api/zkLogin) → Move Contract → Event Parsing → 
 - Never hand-edit `move/Move.toml` — it is a copy of `move/config/{testnet,mainnet}.toml`.
   Switch networks with `bash move/scripts/switch-network.sh {testnet|mainnet}` and
   verify the active manifest with `npm run validate:move-network` (CI guard).
+- **Package lineage**: object TYPES stay pinned to the ORIGINAL package id
+  (testnet `0x89cddf4d…`); CALLS and `devInspect` must target the LATEST
+  version (`NEXT_PUBLIC_TESTNET_PACKAGE_ID`). The authoritative "what is live"
+  is the UpgradeCap `0xc590f7b3…` (`package` / `version` fields), not
+  `move/Published.toml` — a publish does not update that file by itself.
+- **After ANY Move upgrade, five things must move together or chain and
+  source drift**: merge the branch you published from, bump
+  `move/Published.toml` (`published-at`, `version`), bump the in-code
+  lineage table in `src/lib/circle-chain.ts` (`publishedAt`; keep every
+  version that DEFINED types/events reachable — `getPackageLookupIds` feeds
+  event filters keyed by defining package), set the new id in `.env.local`
+  AND the Vercel Production env (a Move publish never redeploys the web app —
+  verify with a bundle fingerprint), then run any repair entrypoints the
+  release introduced. On 2026-09-06 v7 (`0x9250490b…`, PR #19)
+  was published ~1h before the merge and the env flip; the gap is recorded in
+  the `testnet-package-v7-drift` memory.
+- Publish one PR per upgrade and merge it before the next one: building v8
+  from a tree that never contained v7's code is how upgrades get lost.
 
 **zkLogin Integration**:
-- Development uses Docker services (ports 5001, 5003)
+- Salts and zkProofs both come from Enoki: `src/services/enokiZkLoginService.ts`
+  calls `/v1/zklogin` (salt) and `/v1/zklogin/zkp` (proof). There is no local
+  prover or salt service to run; every sign-in, local or deployed, needs the
+  server-only `ENOKI_API_KEY_TESTNET`/`ENOKI_API_KEY_MAINNET` for the active
+  network.
 - zkLogin session state persists across OAuth flows
 - Address generation is deterministic based on social identity
 
@@ -131,13 +144,62 @@ Frontend → zkLogin API (/api/zkLogin) → Move Contract → Event Parsing → 
 ### Testing Strategy
 - Move contracts: `sui move test` for unit tests
 - Frontend: Uses real testnet integration for development
-- zkLogin: Docker services provide isolated auth environment
+- zkLogin: there is no isolated auth stack; every sign-in, local or E2E, calls
+  Enoki with the active network's key
+- Live E2E on production testnet follows `docs/e2e-browser-runbook.md` with
+  three Google-signed-in accounts (admin, MEMBER-1, MEMBER-2 on circle
+  `0xa3fada18…`). Hard-won rules:
+  - A healthy signature is ZERO `/api/zkLogin` POSTs; the signer lives in
+    tab-scoped `sessionStorage['njangi.zklogin.signer']`. In the Browser pane
+    the `navigate` tool re-creates the tab and wipes it — move between pages
+    with `location.assign(...)` from `javascript_tool` instead. Google's
+    account chooser only takes coordinate clicks at `preset: desktop`.
+  - Open a round ONCE and wait. Since v8 the contract refuses a second open
+    of the same round (abort 234 `E_ROUND_ALREADY_OPEN`, verified live) and
+    the panel holds an in-flight lock, but the orphan escrow #4 from the
+    pre-guard days is still in this circle's history. When polling, read the
+    LAST entry of the circle's `escrow_history` dynamic field, never an
+    escrow id captured earlier.
+  - Admin round controls live on `/circle/<id>/manage` (the contribute page
+    never passes `showAdminOpenButton`). The open button is gated on deposits
+    HELD (`src/lib/deposit-status.ts`): before v7, `resume_cycle` cleared
+    `deposit_paid` while balances stayed in custody and the contract refused a
+    re-deposit (abort 21). v7 keeps the flags across laps and
+    `reconcile_deposit_paid` repairs circles that resumed under v6;
+    contributions and claims never check the flag.
+  - `current_cycle` counts laps, not rounds; `current_position` is the
+    recipient pointer; `paused_after_cycle` flips when the last member of a
+    lap collects and the pointer stays on them. Admin flow at end of lap:
+    Resume Cycle → Open the next round.
+  - Assert contract behaviour without signing via
+    `devInspectTransactionBlock` (abort codes: 21 deposit already paid,
+    55 circle active, 58 not paused, 205/206 already finalized/claimed,
+    207 not recipient, 221 already advanced, 222 not finalized, 223 claim
+    not expired). Read chain state from publicnode (object reads only —
+    `queryEvents` 429s/fails there and blockvision rate-limits the app).
+  - The dashboard's round scanner (`NjangiRoundAlerts`) reads a circle's
+    `is_active` first and skips discovery for inactive circles; only an
+    explicit `false` skips — an unreadable flag still ends up reported as
+    "we couldn't check N of your circles", never as "nothing due".
+- **Shared URLs are judged by crawlers, not browsers.** A link card
+  (WhatsApp, iMessage, Facebook) is built from the SERVER-rendered `<meta>`
+  tags; anything a page sets after hydration is invisible to it. Any URL
+  people share (`/circle/<id>/join` above all) must emit its `<Seo>` from
+  `getServerSideProps` on EVERY render path, including loading and error
+  branches (`src/lib/invite-preview.ts` is the pattern). Verify with
+  `curl -s -A "facebookexternalhit/1.1" <url> | grep og:title` — and only
+  on production: Vercel preview deployments are SSO-gated (302 to
+  `vercel.com/sso-api`). Messaging apps cache cards per link, so a link
+  pasted before a fix keeps its old card until shared fresh.
 
 ### Environment Configuration
 Key environment variables:
 - `NEXT_PUBLIC_PACKAGE_ID`: Auto-updated by build script
 - `ZKLOGIN_SECRET`: Session encryption
-- Various API keys for Cetus, NAVI, zkLogin services
+- `ENOKI_API_KEY_TESTNET`/`ENOKI_API_KEY_MAINNET`: Enoki key for zkLogin salts
+  and zkProofs (server-only; the old `NEXT_PUBLIC_ENOKI*` names put it in the
+  browser bundle, are no longer read, and fail `npm run validate:env`)
+- Various API keys for Cetus, NAVI
 
 ## Claude Code Skills
 
@@ -146,11 +208,12 @@ Project-specific slash commands available in `.claude/skills/`:
 - `/test-contracts` - Run Move contract test suite
 - `/build-deploy` - Build and optionally deploy contracts
 - `/verify-circle` - Check circle state on-chain
-- `/start-zklogin` - Start Docker zkLogin services
 - `/check-env` - Validate environment configuration
 - `/deploy-testnet` - Full testnet deployment workflow
 
-(The yield module and its skill were retired in the Phase 1 compliance redesign.)
+(The yield module and its skill were retired in the Phase 1 compliance redesign.
+`/start-zklogin` went with the local Docker prover: Enoki serves salts and
+zkProofs.)
 
 ## Troubleshooting Guide
 
@@ -177,9 +240,14 @@ Project-specific slash commands available in `.claude/skills/`:
 ### Frontend Issues
 
 **zkLogin Not Working**:
-- Verify Docker services are running: `docker ps`
-- Check ports 5001, 5003 are not in use
-- Restart services: `docker-compose down && docker-compose up -d`
+- There is no local service to restart; salt and proof come from Enoki.
+  "Enoki API key is required" means the active network's
+  `ENOKI_API_KEY_TESTNET`/`ENOKI_API_KEY_MAINNET` is unset
+  (`npm run validate:env` checks it). "Enoki zklogin service error" (salt) and
+  "Enoki zkp service error" (proof) carry Enoki's status and response body.
+- Never "fix" a login by changing an OAuth client id or the Enoki application:
+  either one moves users to new addresses (see "Address-affecting
+  configuration" below).
 - Clear zkLogin session state in browser
 - Check ZKLOGIN_SECRET in .env.local
 
@@ -189,6 +257,23 @@ Project-specific slash commands available in `.claude/skills/`:
 - Check signed-URL secret keys are set server-side (`MOONPAY_SECRET_KEY`,
   `TRANSAK_API_SECRET`)
 - Inspect webhook payload signatures via `pages/api/onramp/<provider>/webhook.ts`
+
+**Testnet SUI for new accounts (no in-app faucet)**:
+- The dashboard's testnet banner links to `https://faucet.sui.io/?address=<addr>`.
+  That is the only path: since 2026-09 Sui's public faucet gates every
+  request on a browser-side proof-of-work challenge (a WASM miner in a web
+  worker) plus Cloudflare's bot check, and the bare `/v2/gas` API answers
+  429 with a moving `retry-after` from ANY IP — waiting it out never yields a
+  token. The community faucets are captcha forms or paywalled.
+- The in-app `POST /api/faucet/drip` + "Get test SUI" button (2026-06 →
+  2026-09-23) were removed for that reason; do not reintroduce a drip that
+  calls the public faucet, and do not automate its proof-of-work or Turnstile
+  (that is anti-bot machinery). If one-click gas is wanted again, the options
+  are a project-funded testnet drip from a server-held key, or Enoki gas
+  sponsorship (built, behind `GAS_SPONSORSHIP_ENABLED`).
+- Rule kept from that work, for any rate limit guarding a fallible upstream:
+  `peekRateLimit` → do the work → `consumeRateLimit` on success
+  (`src/lib/rate-limit.ts`). Never consume-then-do.
 
 **RPC Connection Issues**:
 - Use `sui-rpc-failover` service for reliability
@@ -266,19 +351,25 @@ publish runbook below is separate (it ships contracts, not the web app).
    `CRON_SECRET`, `ENOKI_API_KEY_TESTNET`/`ENOKI_API_KEY_MAINNET`, ramp secrets)
    must NOT carry the `NEXT_PUBLIC_` prefix so Next.js keeps them off the client
    bundle. `RENEWAL_THRESHOLD_EPOCHS` (default 2) is an optional knob for the
-   Walrus renewal cron.
+   Walrus renewal cron. Never replace `WALRUS_PII_MASTER_KEY` in place: every
+   stored WhatsApp link opens only with the key that sealed it. Rotate it with
+   `WALRUS_PII_PREVIOUS_MASTER_KEY` (`docs/environment.md`, "Rotating the
+   WhatsApp PII keys"). `WALRUS_LOOKUP_SALT` has no rotation path at all.
 3. Cron jobs are declared in `vercel.json` and run on Vercel's scheduler; each
    authenticates with `CRON_SECRET` via a timing-safe bearer check and uses the
    fenced-lease machinery in `src/lib/cycle-finalized-cron.ts`:
    - `/api/cron/cycle-finalized` (every minute) — your-turn WhatsApp nudges.
    - `/api/cron/whatsapp-circle-events` (every minute) — circle lifecycle relays.
    - `/api/cron/walrus-renewal` (daily, `0 3 * * *`) — renews Walrus PII blobs
-     before expiry (tracked via `walrus_end_epoch` in Postgres).
+     before expiry (tracked via `walrus_end_epoch` in Postgres). End epochs are
+     WALRUS epochs (a day on testnet, two weeks on mainnet), read from the
+     Walrus System object by `src/lib/walrus-epoch.ts`; never compare them with
+     the Sui epoch (`docs/environment.md`, "Walrus blob renewal").
 4. Vercel runs `next build`; the active Sui network is `NEXT_PUBLIC_SUI_NETWORK`.
 
-On Vercel the cron functions replace the standalone Heroku worker dyno described
-under "Cycle-finalized WhatsApp notifier" below — that section is retained only
-for the legacy worker-process deployment.
+Heroku is retired: Vercel is the only deploy target. The `Procfile`,
+`.slugignore`, root Dockerfiles and Heroku runbooks were deleted on
+2026-10-01, and the Vercel crons above replaced the old worker dynos.
 
 **Publish runbook (testnet)**:
 1. `npm run validate:move-network` — Move.toml byte-equal to canonical
@@ -309,27 +400,44 @@ for the legacy worker-process deployment.
    shows when the circle has no link.
 10. Re-run `npm run preflight` once more before pushing.
 
+**Testnet package versions** (read the UpgradeCap `0xc590f7b3…` for truth):
+| version | package id | contents / status |
+|---|---|---|
+| 1 | `0x89cddf4d…` (original; all object types) | — |
+| 6 | `0x859e3add…` | superseded 2026-09-06 |
+| 7 | `0x9250490b…` | PR #19 (`resume_cycle` keeps deposits, `reconcile_deposit_paid`); published 2026-09-06 19:14Z, tx `HXPdLZJB…`; superseded the same night |
+| 8 | `0x401ed420…` | PR #20 (open-round marker, abort 234 `E_ROUND_ALREADY_OPEN`, `release_open_round`); published 2026-09-06 ~20:20Z, tx `H87Dirpn…`; guard verified live in lap 5; `NEXT_PUBLIC_ESCROW_ROUND_GUARD_ENABLED=true`; superseded by v9 the same night |
+| 9 | `0xf8afd3df…` | PR #14 (`create_circle` stores the real custody `wallet_id`; `create_custody_wallet_returning_id`); published 2026-09-06 with `sui` 1.79.0, tx `Ap9Xpvx2…`, from `main` 5864d5f; all references point here |
+No Move PR is waiting on a publish. Upgrade with the CLI: `suiup install
+sui@testnet -y` when it lags the network, then `sui client upgrade
+--upgrade-capability <cap from Published.toml>` from `move/` — the CLI holds
+the deployer key and rewrites `Published.toml` itself.
+
 **Re-running the bootstrap manually**:
 `node scripts/bootstrap-package.mjs <packageId>` — re-issues the registry
-inits if the env file got out of sync. Skips inits for any registry env
-var that's already populated, so it's safe to re-run.
+inits if the env file got out of sync. It keeps a registry env var only if
+it points at a live shared registry of `<packageId>`'s lineage. The expected
+type comes from the package's type origin table, so passing the latest
+upgraded id keeps the live registries. A `0xyour_…` placeholder, an id
+missing on that network, or a previous lineage's registry (the `link_circle`
+TypeMismatch) gets a fresh `init_registry` and is overwritten. Every check
+runs before the first signed call; when a read fails, the script stops with
+nothing signed or written. Reads go to `NEXT_PUBLIC_<NET>_RPC_URL` (override:
+`NJANGI_BOOTSTRAP_RPC_URL`). `npm run validate:env` rejects placeholder ids
+on the active network.
 
-**Cycle-finalized WhatsApp notifier** (legacy worker-dyno path; superseded by
-the Vercel `/api/cron/cycle-finalized` job on the Vercel deploy above):
-- Worker script: `scripts/cycle-finalized-notifier.mjs`. Launches via
-  `npm run notifier:cycle-finalized` or the `notifier` process in
-  `Procfile`. Polls `CycleFinalized` events every `POLL_INTERVAL_MS`
-  (default 60s), persists its cursor to `.cycle-finalized-cursor.json`
-  (git-ignored), and POSTs to `/api/whatsapp/notify/your-turn` for each
-  new recipient.
-- Required env on the worker dyno:
-  `PACKAGE_ID`, `NOTIFY_ENDPOINT` (points at the web dyno),
-  `INTERNAL_NOTIFY_SECRET` (must match the web dyno),
+**Cycle-finalized WhatsApp notifier** (deprecated local-dev poller; production
+runs the same logic as the Vercel `/api/cron/cycle-finalized` job above):
+- Script: `scripts/cycle-finalized-notifier.mjs`, run by hand against a dev
+  server with `npm run notifier:cycle-finalized`; never deploy it as a
+  worker. Polls `CycleFinalized` events every `POLL_INTERVAL_MS`
+  (default 60s), persists its cursor (Postgres when `DATABASE_URL` is set,
+  else the git-ignored `.cycle-finalized-cursor.json`), and POSTs to
+  `/api/whatsapp/notify/your-turn` for each new recipient.
+- Required env: `PACKAGE_ID`, `NOTIFY_ENDPOINT` (full URL of the notify
+  route), `INTERNAL_NOTIFY_SECRET` (must match the app's),
   `NETWORK` (`testnet`/`mainnet`), `SUI_RPC_URL` (optional override),
   `COIN_DECIMALS`, `COIN_SYMBOL`.
-- Deploying on Heroku: `heroku ps:scale notifier=1 -a <app>` after pushing
-  this Procfile. Rotate `INTERNAL_NOTIFY_SECRET` by setting the new value
-  on both the web and notifier dynos in the same release.
 
 **Compliance attestor console**:
 - Page: `/admin/compliance`. Uses the Phase 2 client-side signer, so the
@@ -410,10 +518,9 @@ the Vercel `/api/cron/cycle-finalized` job on the Vercel deploy above):
 
 **Daily Development**:
 1. Pull latest: `git pull`
-2. Start zkLogin: `docker-compose up -d`
-3. Run dev server: `npm run dev`
-4. Check environment: `/check-env`
-5. Run tests before committing
+2. Run dev server: `npm run dev`
+3. Check environment: `/check-env`
+4. Run tests before committing
 
 **Making Changes**:
 1. Create feature branch

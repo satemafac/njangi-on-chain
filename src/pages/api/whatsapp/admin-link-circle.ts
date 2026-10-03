@@ -9,8 +9,10 @@
  *
  * POST /api/whatsapp/admin-link-circle
  *  body: {
- *    circleId, linkType (1|2), phoneOrGroup, adminAddress, account, network
+ *    circleId, linkType (1), phoneOrGroup, adminAddress, account, network
  *  }
+ *  linkType 2 (a WhatsApp group) is refused with a 400 — see
+ *  GROUP_LINKS_UNSUPPORTED.
  *
  * GET /api/whatsapp/admin-link-circle?circleId=...&network=...
  *  returns { isLinked, linkType, walrusBlobId, linkNonceHex, recipient? }
@@ -61,31 +63,37 @@ import {
 
 interface LinkCircleRequest {
   circleId: string; // consumed by withCircleAdminAuth, not the handler
-  linkType: 1 | 2; // 1 = individual, 2 = group
+  linkType: 1 | 2; // 1 = phone number; 2 = WhatsApp group, refused below
   phoneOrGroup: string;
-  groupName?: string;
   adminAddress?: string; // must match the session (middleware-enforced)
   account?: AccountData;
   network?: NetworkType; // consumed by withCircleAdminAuth, not the handler
 }
 
-function buildPayload(
-  linkType: 1 | 2,
-  phoneOrGroup: string,
-  groupName?: string,
-): WhatsAppPiiPayload {
-  const base: WhatsAppPiiPayload = {
+// WhatsApp group links (linkType 2) are refused. The Cloud API can message a
+// group only if this business number created it through Meta's Groups API
+// (Official Business Accounts only, members join by invite link, 8 at most),
+// and it addresses that group by the opaque id the Groups API returns. A group
+// id copied from the WhatsApp app (…@g.us) can never be messaged, and every
+// sender reads only `phone_e164`, so these links received nothing. The
+// on-chain registry still accepts LINK_TYPE_GROUP, so a group link made before
+// this check can exist; the manage page marks it unsupported.
+const GROUP_LINKS_UNSUPPORTED = {
+  success: false,
+  code: 'WHATSAPP_GROUP_LINKS_UNSUPPORTED',
+  error:
+    'WhatsApp group links are not supported. WhatsApp only lets a business number ' +
+    'message groups it created itself, so a group ID (ending in @g.us) would never ' +
+    'receive anything. Link a phone number instead.',
+};
+
+function buildPayload(phoneE164: string): WhatsAppPiiPayload {
+  return {
     schema_version: 1,
-    link_type: linkType === 1 ? 'individual' : 'group',
+    link_type: 'individual',
+    phone_e164: phoneE164,
     created_at: new Date().toISOString(),
   };
-  if (linkType === 1) {
-    base.phone_e164 = phoneOrGroup;
-  } else {
-    base.group_id = phoneOrGroup;
-    if (groupName) base.group_name = groupName;
-  }
-  return base;
 }
 
 async function handleGet(req: NextApiRequest, res: NextApiResponse) {
@@ -227,7 +235,7 @@ async function handlePost(req: AuthenticatedRequest, res: NextApiResponse) {
     // NB: `account` is deliberately not read. The client used to send its
     // ephemeral private key here; nothing in this route may depend on it.
 
-    const { linkType, phoneOrGroup, groupName } = req.body as LinkCircleRequest;
+    const { linkType, phoneOrGroup } = req.body as LinkCircleRequest;
 
     if (!linkType || !phoneOrGroup) {
       return res.status(400).json({
@@ -236,10 +244,14 @@ async function handlePost(req: AuthenticatedRequest, res: NextApiResponse) {
       });
     }
 
-    if (![1, 2].includes(linkType)) {
+    if (linkType === 2) {
+      return res.status(400).json(GROUP_LINKS_UNSUPPORTED);
+    }
+
+    if (linkType !== 1) {
       return res
         .status(400)
-        .json({ success: false, error: 'Invalid linkType (must be 1 or 2)' });
+        .json({ success: false, error: 'Invalid linkType (must be 1)' });
     }
 
     // OFAC screen (docs/sanctions-program.md) — before the Walrus upload
@@ -291,7 +303,7 @@ async function handlePost(req: AuthenticatedRequest, res: NextApiResponse) {
     logAdminAction('LINK_CIRCLE_INITIATED', adminAddr, {
       circleId,
       linkType,
-      recipient: linkType === 1 ? 'individual' : 'group',
+      recipient: 'individual',
       network,
     });
 
@@ -364,7 +376,7 @@ async function handlePost(req: AuthenticatedRequest, res: NextApiResponse) {
 
     // Encrypt the PII payload and upload to Walrus before touching chain so
     // a failed upload aborts the link before consuming gas.
-    const payload = buildPayload(linkType, phoneOrGroup, groupName);
+    const payload = buildPayload(phoneOrGroup);
     const { walrusBlobId, linkNonce, walrusEndEpoch } = await encryptAndStorePII(payload);
 
     // The server's job ends at the Walrus upload. The anchor is signed in

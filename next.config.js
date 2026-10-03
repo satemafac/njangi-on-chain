@@ -185,7 +185,7 @@ const nextConfig = {
         source,
         headers: [{ key: 'X-Robots-Tag', value: 'noindex, nofollow' }],
       })),
-      ...['/circle', '/pool', '/auth', '/admin', '/automation'].map((prefix) => ({
+      ...['/circle', '/pool', '/auth', '/admin'].map((prefix) => ({
         source: `${prefix}/:path*`,
         headers: [{ key: 'X-Robots-Tag', value: 'noindex, nofollow' }],
       })),

@@ -3,7 +3,8 @@ import { useRouter } from 'next/router';
 import { useAuth } from '@/contexts/AuthContext';
 import { SuiClient, SuiEvent } from '@mysten/sui/client';
 import { toast } from 'react-hot-toast';
-import { ArrowLeft, Copy, Link, Check, X, Pause, ListOrdered, CheckCircle, AlertTriangle, Edit3, Users, Crown, RefreshCw } from 'lucide-react';
+import { copyToClipboard as copyTextToClipboard, manualCopyMessage } from '@/lib/copy-to-clipboard';
+import { ArrowLeft, Copy, Link, Check, X, Pause, ListOrdered, CheckCircle, AlertTriangle, Edit3, Users, Crown, RefreshCw, Info } from 'lucide-react';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import * as Dialog from '@radix-ui/react-dialog';
 import { RecoveryRefundTable } from '@/components/recovery/RecoveryRefundTable';
@@ -1120,7 +1121,7 @@ export default function ManageCircle() {
               limit: 100
             }),
             queryEventsCached({
-              query: { MoveEventType: `${determinedPackageId}::njangi_payments::SecurityDepositReturned` },
+              query: { MoveEventType: `${determinedPackageId}::njangi_circles::SecurityDepositReturned` },
               limit: 100
             })
           ]);
@@ -1159,7 +1160,7 @@ export default function ManageCircle() {
               limit: 100
             }),
             queryEventsCached({
-              query: { MoveEventType: `${determinedPackageId}::njangi_payments::SecurityDepositReturned` },
+              query: { MoveEventType: `${determinedPackageId}::njangi_circles::SecurityDepositReturned` },
               limit: 100
             })
           ]);
@@ -2742,13 +2743,19 @@ export default function ManageCircle() {
   const copyToClipboard = async (text: string, type: 'id' | 'link') => {
     try {
       if (type === 'id') {
-        await navigator.clipboard.writeText(text);
+        if ((await copyTextToClipboard(text)) === 'failed') {
+          toast.error(manualCopyMessage('text', text), { duration: 12000 });
+          return;
+        }
         setCopiedId(true);
         toast.success('Circle ID copied to clipboard!');
         setTimeout(() => setCopiedId(false), 2000);
       } else if (type === 'link') {
         const shareLink = `${window.location.origin}/circle/${text}/join`;
-        await navigator.clipboard.writeText(shareLink);
+        if ((await copyTextToClipboard(shareLink)) === 'failed') {
+          toast.error(manualCopyMessage('invite link', shareLink), { duration: 12000 });
+          return;
+        }
         toast.success('Invite link copied to clipboard!');
       }
     } catch (err: unknown) {
@@ -2759,7 +2766,10 @@ export default function ManageCircle() {
 
   const copyPlainText = useCallback(async (text: string, successMessage: string) => {
     try {
-      await navigator.clipboard.writeText(text);
+      if ((await copyTextToClipboard(text)) === 'failed') {
+        toast.error(manualCopyMessage('text', text), { duration: 12000 });
+        return;
+      }
       toast.success(successMessage);
     } catch (err: unknown) {
       console.error('Failed to copy:', err);
@@ -4945,7 +4955,8 @@ export default function ManageCircle() {
    *
    * Runs the transaction directly rather than opening a second dialog. The
    * button that reaches here already confirms, with strictly more detail (it
-   * spells out the deposit reset); the dialog this used to chain only
+   * spells out that deposits stay in custody across laps — since package v7
+   * `resume_cycle` no longer clears them); the dialog this used to chain only
    * restated it. Chaining was also what broke it: a dialog opened from inside
    * another dialog's confirm handler is closed again by the dialog that is
    * dismissing itself, so the transaction was never built and every circle
@@ -5989,15 +6000,15 @@ export default function ManageCircle() {
                           The circle has been paused after completing cycle {circle.currentCycle}. As the admin, you can:
                         </p>
                         <ul className="mt-3 list-disc space-y-1 pl-5 text-sm text-amber-800/90">
-                          <li>Pay out remaining security deposits to members who want to leave</li>
                           <li>Edit rotation order for the next cycle</li>
+                          <li>Approve waiting members so they get a seat in the next rotation</li>
                           <li>Resume the circle to start the next cycle</li>
                         </ul>
                         <p className="mt-4 flex items-start rounded-[18px] border border-amber-200 bg-white/70 p-3 text-sm font-medium text-amber-900">
-                          <AlertTriangle className="mr-2 h-4 w-4 flex-shrink-0 mt-0.5" />
+                          <Info className="mr-2 h-4 w-4 flex-shrink-0 mt-0.5" />
                           <span>
-                            When you resume the circle, all members will need to pay a new security deposit for the next cycle.
-                            Their deposit status will be reset, requiring them to make a new deposit before they can contribute.
+                            Security deposits stay in the custody wallet between cycles. Resuming starts the next cycle from
+                            the top of the rotation order; members keep their existing deposit and are not asked to pay it again.
                           </span>
                         </p>
                       </div>
@@ -6006,11 +6017,11 @@ export default function ManageCircle() {
                           onClick={() => {
                             setConfirmationModal({
                               isOpen: true,
-                              title: 'Resume Circle & Reset Deposits',
+                              title: 'Resume Circle',
                               message: (
                                 <div>
                                   <p className="mb-2">Are you sure you want to resume the circle for the next cycle?</p>
-                                  <p className="text-amber-600 font-medium">This will reset all members&apos; deposit status, requiring them to pay a new security deposit before they can contribute to the next cycle.</p>
+                                  <p className="text-amber-600 font-medium">The next cycle starts from the top of the rotation order. Security deposits stay in custody and members are not asked to pay them again; only members admitted while the circle was paused still owe theirs.</p>
                                 </div>
                               ),
                               onConfirm: () => handleResumeCycle(), // Use the existing handleResumeCycle function
@@ -7147,8 +7158,14 @@ export default function ManageCircle() {
                     />
                     <button
                       onClick={() => {
-                        navigator.clipboard.writeText(`${window.location.origin}/circle/${circle.id}/join`);
-                        toast.success('Invite link copied to clipboard');
+                        const shareLink = `${window.location.origin}/circle/${circle.id}/join`;
+                        void copyTextToClipboard(shareLink).then((outcome) => {
+                          if (outcome === 'failed') {
+                            toast.error(manualCopyMessage('invite link', shareLink), { duration: 12000 });
+                            return;
+                          }
+                          toast.success('Invite link copied to clipboard');
+                        });
                       }}
                       className={`${primaryActionClass} w-full px-4 py-2 sm:w-auto`}
                     >

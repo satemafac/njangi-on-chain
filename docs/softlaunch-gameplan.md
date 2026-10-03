@@ -59,6 +59,6 @@ CONDITIONAL GO — one hard blocker must ship first, then it's a config-only lau
 ### Phase-0 ENG fixes — status (this session)
 
 - ✅ **Legal-doc lambda tracing** — `next.config.js` `outputFileTracingIncludes` now bundles `docs/legal-drafts/*.md` into the `/api/legal/doc` + `/legal/[doc]` functions. Fixes the 500 that blocked every new user at the acceptance modal.
-- ✅ **Testnet faucet drip** — new `POST /api/faucet/drip` (session-verified, rate-limited, testnet-only/404s on mainnet) + a 'Get test SUI' button in the dashboard testnet banner. Removes the #1 onboarding drop-off.
+- ❌ **Testnet faucet drip** — shipped 2026-06 as `POST /api/faucet/drip` + a 'Get test SUI' button, RETIRED 2026-09-23: Sui's public faucet now gates every request on a browser-side proof-of-work challenge and Cloudflare bot check, so the server-side drip could never deliver (verified: every attempt 429 from any IP). The testnet banner links to faucet.sui.io with the address prefilled; the durable fix is Enoki gas sponsorship (built, flag-gated).
 - ✅ **Circle-stats edge cache** — `s-maxage=60, stale-while-revalidate=300` on `/api/circle-stats` to stop per-view RPC fan-out.
 - ⏸ **WhatsApp circle-event templates** — keep `WHATSAPP_TEMPLATES_ENABLED=false` for launch (freeform inside 24h window is fine); full template wiring is post-launch.

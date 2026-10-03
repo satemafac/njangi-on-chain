@@ -9,6 +9,17 @@
 //      escrow opened for the circle through the v1.1 indexed entries, oldest
 //      first, so the LAST id is the current round. One object read, served
 //      by every RPC endpoint, immune to event retention.
+//
+//      Tie-break: the NEWEST entry wins, unconditionally — never an older
+//      entry that happens to be unfinalized. Production 2026-08-30 (circle
+//      0xa3fada…675ed) minted two escrows for one round 34 seconds apart; the
+//      newer one is the admin's latest intent, and resolving to it converges
+//      every member's page onto a single pot, while "prefer the unfinalized
+//      one" would resurrect the empty orphan the moment the real round
+//      settled. The orphan reads as abandoned and its funds (if any) go back
+//      through the ordinary cancel path. Once the package carrying the
+//      duplicate-open guard (`E_ROUND_ALREADY_OPEN`) is published, two live
+//      escrows for one round cannot exist and the tie-break is moot.
 //   2. `CycleEscrowOpened` events — the historical path, kept as the fallback
 //      for circles whose history field does not exist: they predate the
 //      indexed opens, or their rounds were opened through the original
@@ -63,6 +74,15 @@ export interface CycleEscrowLiveState {
   assetType: string;
   finalized: boolean;
   claimed: boolean;
+  /**
+   * Terminal: refunds began (cancel of an unfinalized escrow, or an expired
+   * claim). Contributions, finalize and redeem all abort on chain from
+   * here, so the panel must stop offering "pay your share" and instead let
+   * the admin open the round again — chaining `release_open_round` once the
+   * duplicate-open guard is published, because the refunded escrow still
+   * pins its round until released.
+   */
+  refunded: boolean;
   contributedMembers: string[];
   /** Full rotation member list from the frozen snapshot (includes the
    *  recipient). The UI uses this to render a per-member progress ring. */
@@ -413,10 +433,12 @@ export async function findCurrentCycleEscrow(
   const history = await readCircleEscrowHistory(client, circleId);
   let historyUnknown = history.kind === 'unknown';
   if (history.kind === 'found') {
-    // Newest last on chain. Without a cycle filter only the last id can be
-    // the current round, so only it is read; with one, walk back to the
-    // newest escrow of that cycle (a cycle number spans a whole rotation
-    // lap, so several escrows share it).
+    // Newest last on chain, and newest wins — see the tie-break in the
+    // header: an older unfinalized entry is an orphan, not the round.
+    // Without a cycle filter only the last id can be the current round, so
+    // only it is read; with one, walk back to the newest escrow of that
+    // cycle (a cycle number spans a whole rotation lap, so several escrows
+    // share it).
     const newestFirst = [...history.escrowIds].reverse();
     const candidates = wantedCycle === undefined ? newestFirst.slice(0, 1) : newestFirst;
     for (const escrowId of candidates) {
@@ -536,6 +558,7 @@ export async function readCycleEscrowState(
     assetType: bytesToCanonicalType(assetBytes),
     finalized: Boolean(fields.finalized),
     claimed: Boolean(fields.claimed),
+    refunded: Boolean(fields.refunded),
     contributedMembers,
     members,
     requiresAttestation: Boolean(fields.requires_attestation),
@@ -675,6 +698,43 @@ export async function listContributors(
     );
   }
   return contributors;
+}
+
+/**
+ * Whether the circle is active on chain, as a tri-state:
+ *   true  — `is_active` is set;
+ *   false — the circle has never been activated (or was deactivated), so no
+ *           round can be live and nothing is due from anyone;
+ *   null  — the object could not be read or is not a Circle. NOT "inactive":
+ *           a caller must keep looking rather than conclude nothing is due.
+ *
+ * One `getObject` on any RPC. Used by the dashboard's round scanner to skip
+ * the escrow discovery (whose event tier only blockvision serves, and
+ * rate-limits) for dormant circles — a member's old, never-activated circle
+ * was making the whole "this round's pot" card report an unreadable circle
+ * on every dashboard load.
+ */
+export async function readCircleIsActive(
+  circleId: string,
+  network: NetworkType,
+  client?: SuiClient,
+): Promise<boolean | null> {
+  const rpcClient =
+    client ??
+    getPooledSuiClient({
+      network,
+      rpcUrl: getNetworkConfig(network).rpcUrl,
+    });
+  try {
+    const obj = await rpcClient.getObject({ id: circleId, options: { showContent: true } });
+    if (!obj.data?.content || obj.data.content.dataType !== 'moveObject') return null;
+    const fields = (obj.data.content as { fields: Record<string, unknown> }).fields;
+    if (typeof fields.is_active !== 'boolean') return null;
+    return fields.is_active;
+  } catch (err) {
+    console.warn('[cycle-escrow-discovery] could not read is_active for', circleId, err);
+    return null;
+  }
 }
 
 /**

@@ -40,7 +40,7 @@ const FAQS = [
   {
     question: 'Do chamas need to be registered?',
     answer:
-      'Not to exist. Many run on trust and a minute book with no legal status at all. A chama that wants to hold a bank account, sign a contract or own property in the group\'s name registers with the state — commonly as a self-help group, sometimes as a co-operative or a limited company, depending on how far it has grown.',
+      'Not to exist. Many run on trust and a minute book with no legal status at all. A chama that wants a bank account in the group\'s name usually registers with the state as a self-help or community group; one that wants to own property or sign contracts in its own name registers as a co-operative society or a limited company.',
   },
   {
     question: 'How is a chama different from a merry-go-round?',
@@ -117,9 +117,9 @@ export default function ChamaPage() {
         title="What is a chama?"
         standfirst={
           <p>
-            A chama is a Kenyan savings group — and the one tradition on this list that routinely
-            outgrows the rotating pot it started with. Plenty of chamas that began by passing a
-            small sum around now own land together.
+            A chama is a Kenyan savings group, and one that often outgrows the rotating pot it
+            started with. Plenty of chamas that began by passing a small sum around now own land
+            together.
           </p>
         }
         breadcrumbs={[
@@ -196,8 +196,7 @@ export default function ChamaPage() {
 
         <Section id="growth" title="What chamas become">
           <p>
-            The chama is the tradition most likely to stop being a savings circle and start being
-            something else. A group that begins by passing a modest sum around often ends up buying
+            A chama often stops being just a savings circle and starts being something else. A group that begins by passing a modest sum around often ends up buying
             a plot of land together, acquiring equipment, or running a business as a group — with
             the rotation continuing underneath as the mechanism that keeps everyone paying in.
           </p>
@@ -209,24 +208,22 @@ export default function ChamaPage() {
             alone is an ordinary expectation rather than a novelty.
           </p>
           <p>
-            A chama that wants to hold a bank account, sign a contract or own property in the
-            group&rsquo;s name registers with the state, commonly as a self-help group. Plenty never
-            register and run on trust and the minute book indefinitely.
+            A chama that wants a bank account in the group&rsquo;s name usually registers with the
+            state as a self-help or community group; to own property or sign contracts in its own
+            name, it registers as a co-operative society or a company. Plenty never register and
+            run on trust and the minute book indefinitely.
           </p>
         </Section>
 
         <Section id="diaspora" title="Chamas abroad">
           <p>
             Kenyan communities in the United Kingdom, the United States and the Gulf run chamas
-            widely, very often pooling towards a house or a business back home. Diaspora chamas
-            tend to carry larger amounts than local ones, which raises the stakes on record-keeping
-            considerably — and they are frequently the vehicle through which a group of people in
-            three countries buys one piece of land in a fourth.
+            widely, very often pooling towards a house or a business back home.
           </p>
           <p>
-            Related groups run across East Africa under their own names: kikoba in Tanzania, and
-            the village savings groups found throughout Uganda and Rwanda, all sharing the same
-            rotate-and-lend structure.
+            Related rotating groups run across East Africa under their own names, such as upatu in
+            Tanzania. The village savings-and-loan groups found throughout Tanzania, Uganda and
+            Rwanda are different: they build up a fund and lend from it rather than rotating a pot.
           </p>
         </Section>
 

@@ -8,8 +8,14 @@
 //
 // Key management: the AES-256-GCM master key is sourced from the
 // WALRUS_PII_MASTER_KEY environment variable (32 bytes, hex or base64).
-// Rotate it by deploying a new master key + re-encrypting any blobs that
-// must remain accessible. Walrus blobs themselves are immutable.
+// Envelopes carry no key id and Walrus blobs are immutable, so a blob opens
+// only with the key that sealed it. To rotate, set
+// WALRUS_PII_PREVIOUS_MASTER_KEY to the old key and WALRUS_PII_MASTER_KEY
+// to the new one: decryption tries the current key, then the previous one
+// (the GCM tag tells which one sealed the envelope), and every encryption,
+// renewals included, uses the current key. Old blobs move to the new key as
+// /api/cron/walrus-renewal re-stores them. Procedure: docs/environment.md,
+// "Rotating the WhatsApp PII keys".
 
 import { createCipheriv, createDecipheriv, randomBytes } from 'crypto';
 
@@ -48,14 +54,7 @@ const DEFAULT_TESTNET_AGGREGATOR = 'https://aggregator.walrus-testnet.walrus.spa
 const DEFAULT_MAINNET_PUBLISHER = 'https://publisher.walrus.space';
 const DEFAULT_MAINNET_AGGREGATOR = 'https://aggregator.walrus.space';
 
-function loadMasterKey(): Buffer {
-  const raw = process.env.WALRUS_PII_MASTER_KEY;
-  if (!raw) {
-    throw new Error(
-      'WALRUS_PII_MASTER_KEY is not set. Generate 32 random bytes (hex or base64) and add it to .env.local before linking WhatsApp circles.',
-    );
-  }
-
+function decodeKey(name: string, raw: string): Buffer {
   let key: Buffer;
   if (/^[0-9a-fA-F]+$/.test(raw) && raw.length === KEY_BYTES * 2) {
     key = Buffer.from(raw, 'hex');
@@ -64,11 +63,31 @@ function loadMasterKey(): Buffer {
   }
 
   if (key.length !== KEY_BYTES) {
-    throw new Error(
-      `WALRUS_PII_MASTER_KEY must decode to exactly ${KEY_BYTES} bytes (got ${key.length}).`,
-    );
+    throw new Error(`${name} must decode to exactly ${KEY_BYTES} bytes (got ${key.length}).`);
   }
   return key;
+}
+
+function loadMasterKey(): Buffer {
+  const raw = process.env.WALRUS_PII_MASTER_KEY;
+  if (!raw) {
+    throw new Error(
+      'WALRUS_PII_MASTER_KEY is not set. Generate 32 random bytes (hex or base64) and add it to .env.local before linking WhatsApp circles.',
+    );
+  }
+  return decodeKey('WALRUS_PII_MASTER_KEY', raw);
+}
+
+/**
+ * The key WALRUS_PII_MASTER_KEY held before a rotation, or null when no
+ * rotation is in progress. Decrypt-only: nothing is ever sealed with it.
+ * Read only after the current key fails, so a malformed value breaks the
+ * blobs that need it and never the ones the current key opens.
+ */
+function loadPreviousMasterKey(): Buffer | null {
+  const raw = process.env.WALRUS_PII_PREVIOUS_MASTER_KEY;
+  if (!raw) return null;
+  return decodeKey('WALRUS_PII_PREVIOUS_MASTER_KEY', raw);
 }
 
 function walrusEndpoints(): { publisher: string; aggregator: string } {
@@ -103,18 +122,50 @@ export function encryptPiiPayload(payload: WhatsAppPiiPayload): EncryptedEnvelop
   };
 }
 
+/**
+ * Opens an envelope with one key. Returns null when GCM authentication
+ * fails: this key did not seal the envelope, or the envelope was altered.
+ * The unauthenticated output of update() is dropped in that case.
+ */
+function openWithKey(key: Buffer, iv: Buffer, ct: Buffer, tag: Buffer): Buffer | null {
+  const decipher = createDecipheriv(AES_ALGO, key, iv, { authTagLength: GCM_TAG_BYTES });
+  decipher.setAuthTag(tag);
+  const head = decipher.update(ct);
+  try {
+    return Buffer.concat([head, decipher.final()]);
+  } catch {
+    return null;
+  }
+}
+
 export function decryptPiiPayload(envelope: EncryptedEnvelope): WhatsAppPiiPayload {
   if (envelope.v !== 1) {
     throw new Error(`Unsupported envelope version: ${envelope.v}`);
   }
-  const key = loadMasterKey();
   const iv = Buffer.from(envelope.iv, 'base64');
   const ct = Buffer.from(envelope.ct, 'base64');
   const tag = Buffer.from(envelope.tag, 'base64');
-  const decipher = createDecipheriv(AES_ALGO, key, iv);
-  decipher.setAuthTag(tag);
-  const plaintext = Buffer.concat([decipher.update(ct), decipher.final()]).toString('utf8');
-  const parsed = JSON.parse(plaintext) as WhatsAppPiiPayload;
+
+  // The envelope names no key, so try the current one, then the
+  // pre-rotation key when one is configured.
+  let plaintext = openWithKey(loadMasterKey(), iv, ct, tag);
+  if (!plaintext) {
+    const previousKey = loadPreviousMasterKey();
+    if (!previousKey) {
+      throw new Error(
+        'PII envelope does not open with WALRUS_PII_MASTER_KEY (wrong key, or the envelope was altered). ' +
+          'If the key was changed, set WALRUS_PII_PREVIOUS_MASTER_KEY to the old key (docs/environment.md).',
+      );
+    }
+    plaintext = openWithKey(previousKey, iv, ct, tag);
+    if (!plaintext) {
+      throw new Error(
+        'PII envelope opens with neither WALRUS_PII_MASTER_KEY nor WALRUS_PII_PREVIOUS_MASTER_KEY ' +
+          '(wrong keys, or the envelope was altered).',
+      );
+    }
+  }
+  const parsed = JSON.parse(plaintext.toString('utf8')) as WhatsAppPiiPayload;
   if (parsed.schema_version !== SCHEMA_VERSION) {
     throw new Error(`Unsupported PII schema version: ${parsed.schema_version}`);
   }
@@ -248,12 +299,14 @@ export async function fetchAndDecryptPII(blobId: string): Promise<WhatsAppPiiPay
 }
 
 /**
- * Re-stores an existing PII blob: fetch + decrypt with the CURRENT master
- * key, re-encrypt (a fresh IV, and the active key — so this doubles as
- * key-rotation-by-renewal), and upload a fresh copy. Returns the new blob
- * id and storage end epoch. Used by /api/cron/walrus-renewal to keep blobs
- * alive past their original storage lease before the on-chain anchors —
- * which never expire — outlive them.
+ * Re-stores an existing PII blob: fetch + decrypt (current master key,
+ * else WALRUS_PII_PREVIOUS_MASTER_KEY during a rotation), re-encrypt under
+ * the CURRENT key with a fresh IV, and upload a fresh copy. Returns the new
+ * blob id and storage end epoch. Used by /api/cron/walrus-renewal to keep
+ * blobs alive past their original storage lease before the on-chain
+ * anchors — which never expire — outlive them. Because the copy is always
+ * sealed with the current key, renewal is what moves blobs off a rotated
+ * key; it cannot rescue a blob whose key is no longer configured.
  *
  * The decrypt step also validates the blob is still readable and not
  * corrupted before we commit a new lease for it.

@@ -59,6 +59,16 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
       "This round hasn't been opened yet. Once the circle admin opens it, members can pay their share and the first person on the list will be ready to collect.",
     'escrow.openRound': 'Open this round',
     'escrow.openingRound': 'Opening round…',
+    'escrow.confirmingRound': 'Confirming the round opened…',
+    'escrow.confirmingRoundNotice':
+      'Your transaction to open this round went through. Waiting for the network to show the new pot — opening stays off until it does, so the round cannot be opened twice.',
+    'escrow.confirmTimedOut':
+      "We still can't see the new pot. Refresh and check that the round isn't already open before opening it again.",
+    'escrow.roundAlreadyOpen':
+      'A pot for this round is already open on the blockchain. Refreshing so you can see it.',
+    'escrow.refunded':
+      'Round {cycle} was cancelled and every contribution went back to the member who paid it. The circle admin can open this round again.',
+    'escrow.reopenRound': 'Open this round again',
     'escrow.onlyAdminOpens': 'Only the circle admin can open the round.',
     'escrow.yourShare': 'Your share this round',
     'escrow.whoseTurn': 'Whose turn it is',
@@ -115,6 +125,11 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'nav.notifications': 'Notifications',
     // Landing page
     'landing.eyebrow': 'Rotating savings circles — for the global diaspora',
+    'landing.globe.alsoCalled': 'Also called {names}',
+    'landing.globe.nearby': 'Nearby: {names}',
+    'landing.globe.readMore': 'Read about it',
+    'landing.globe.hintHover': 'Hover the globe to see what each place calls its circle',
+    'landing.globe.hintTouch': 'Tap the globe to see what each place calls its circle',
     'landing.heroTitle':
       'The savings circle your family already trusts — now with rules nobody can quietly break.',
     'landing.heroSubtitle':
@@ -169,9 +184,9 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'landing.workflow.step2.title': 'Set the rules once, together',
     'landing.workflow.step2.body':
       "Agree on members, amounts, schedule, and payout order up front. Everyone sees the same terms, so there's nothing to renegotiate later.",
-    'landing.workflow.step3.title': 'Contribute and get paid, on schedule',
+    'landing.workflow.step3.title': 'Pay in, then collect on your turn',
     'landing.workflow.step3.body':
-      "Each turn pays out automatically to the next member's own wallet. Track who's contributed and who's next — no follow-up texts required.",
+      "When everyone has paid in, the member whose turn it is collects the pot straight to their own wallet. Track who's contributed and who's next — no follow-up texts required.",
     'landing.launch.eyebrow': 'Mainnet release',
     'landing.launch.title': 'Follow the launch without following noise.',
     'landing.launch.body':
@@ -205,7 +220,7 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'landing.faq.a4':
       'Your wallet address changes because each network has its own state. The app clears the current session so the selected environment stays clean and consistent.',
     'landing.tradition.eyebrow': 'A global tradition',
-    'landing.tradition.title': 'One tradition, twenty-five names.',
+    'landing.tradition.title': 'One tradition, many names.',
     'landing.tradition.body':
       'Communities across the world already understand rotating savings. Njangi On-Chain is designed to respect that history rather than flatten it into a generic fintech pattern.',
     'landing.footer.tagline':
@@ -213,11 +228,8 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'landing.footer.rights': '© {year} Njangi On-Chain. All rights reserved.',
     // Auth page
     'auth.title': 'Account Authentication',
-    'auth.whatsappTitle': 'WhatsApp Authentication',
     'auth.checking': 'Checking authentication status...',
     'auth.pleaseAuthenticate': 'Please authenticate your account',
-    'auth.pleaseAuthenticateWhatsapp':
-      'Please authenticate your account for WhatsApp ({phone})',
     'auth.alreadyAuthenticated': 'You are already authenticated!',
     'auth.successTitle': 'Authentication Successful!',
     'auth.redirecting': 'Authentication successful! Redirecting...',
@@ -249,6 +261,51 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'create.cancel': 'Cancel',
     'create.nextInvite': 'Next: Invite Members',
     'create.backToDashboard': 'Back to dashboard',
+    // One-screen setup (the quick path a first-time organizer walks)
+    'create.step.setup.label': 'Set up',
+    'create.step.setup.title': 'Set up your circle',
+    'create.step.setup.description':
+      'A name, an amount, and how often. Everything else starts with a sensible default you can change now or later.',
+    'create.amountLabel': 'Contribution per person',
+    'create.amountHint': 'What each member puts in each time.',
+    'create.currencyLabel': 'Currency',
+    'create.frequencyLabel': 'How often',
+    'create.frequency.weekly': 'Every week',
+    'create.frequency.biweekly': 'Every 2 weeks',
+    'create.frequency.monthly': 'Every month',
+    'create.frequency.quarterly': 'Every 3 months',
+    'create.membersLabel': 'How many people',
+    'create.membersHint': 'Counting you. Between {min} and {max}; you can change it before the circle starts.',
+    'create.depositAuto':
+      'Each member also puts down a refundable security deposit of {amount}, half of one contribution. Adjust it under More settings.',
+    'create.depositAutoEmpty':
+      'Each member also puts down a refundable security deposit, half of one contribution. Adjust it under More settings.',
+    'create.moreSettings': 'More settings',
+    'create.lessSettings': 'Fewer settings',
+    'create.submit': 'Create circle',
+    'create.submitting': 'Creating your circle…',
+    'create.altMigrating': "Bringing a circle that's already running?",
+    'create.altMigratingOn':
+      "Good: set it up the same way. Once everyone has joined you'll record who has already collected, and the circle carries on from there.",
+    'create.altMigratingOff': 'Actually, this is a new circle',
+    'create.altGoal': 'Saving toward one goal instead?',
+    'create.altBackToCircle': 'Back to a rotating circle',
+    'create.needsFundsTitle': 'This account has no test SUI yet.',
+    'create.needsFundsBody':
+      'You are on Sui Testnet. Open the faucet, come back to this tab, and press Create circle.',
+    'create.openFaucet': 'Open faucet',
+    'create.doneTitle': '{name} is ready.',
+    'create.doneTitleNoName': 'Your circle is ready.',
+    'create.doneBody': 'Share this link with your group. Anyone who opens it can ask to join.',
+    'create.copyInvite': 'Copy invite link',
+    'create.copied': 'Invite link copied',
+    'create.shareWhatsApp': 'Share on WhatsApp',
+    'create.openCircle': 'Open your circle',
+    'create.linkPending': 'Preparing your invite link…',
+    'create.linkFailed': "We couldn't fetch your invite link yet.",
+    'create.linkRetry': 'Try again',
+    'create.whatsappText': 'Join my circle "{name}" on Njangi On-Chain: {link}',
+    'create.moreInviteOptions': 'Invite by email or phone instead',
     // Join / discovery
     'join.eyebrow': 'Join circle',
     'join.reviewTerms':
@@ -279,6 +336,7 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     // Dashboard chrome
     'dashboard.eyebrow': 'Njangi On-Chain Dashboard',
     'dashboard.welcome': 'Welcome back{name}.',
+    'dashboard.welcomeFirst': 'Welcome{name}.',
     'dashboard.blurb':
       'Keep your circles, contributions, and cash movement organized in one quiet workspace.',
     'dashboard.refreshCircles': 'Refresh circles',
@@ -296,8 +354,8 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'pricing.eyebrow': 'Pricing',
     'pricing.title': 'Simple pricing that never touches your savings',
     'pricing.subtitle':
-      'Run a circle for free, forever. Premium adds coordination conveniences for larger groups — your contributions, payouts, and recovery stay self-custodied and free on every plan.',
-    'pricing.comingSoonBanner': 'Premium is launching soon — every plan keeps your funds self-custodied and free.',
+      'Run a circle for free, forever. Premium adds coordination conveniences for larger groups — your contributions, payouts, and recovery stay non-custodial and free on every plan.',
+    'pricing.comingSoonBanner': 'Premium is launching soon — every plan keeps your funds non-custodial and free.',
     'pricing.breadcrumbHome': 'Home',
     'pricing.breadcrumbPricing': 'Pricing',
     'pricing.free': 'Free',
@@ -326,37 +384,35 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
       'Checkout was cancelled — nothing was charged. You can upgrade whenever you’re ready.',
     'pricing.assuranceTitle': 'Your money is never behind a paywall',
     'pricing.assuranceBody':
-      'Njangi On-Chain is non-custodial: contributions sit in per-circle escrow on Sui, payouts go straight to members’ own wallets, and recovery is member-initiated. Contributing, collecting a payout, recovering access, and withdrawing funds work the same on the Free and Premium plans — a subscription only adds coordination conveniences, never access to your savings.',
+      'Njangi On-Chain is non-custodial: contributions sit in per-circle escrow on Sui, payouts go straight to members’ own wallets, and stopping a circle early goes to a member vote. Contributing, collecting a payout, taking part in recovery, and withdrawing funds work the same on the Free and Premium plans — a subscription only adds coordination conveniences, never access to your savings.',
     'pricing.faqTitle': 'Common questions',
     'pricing.faq.whoPays.q': 'Who pays for Premium?',
     'pricing.faq.whoPays.a':
-      'The circle admin. One subscription covers every circle they run — members never need to pay anything.',
+      'The circle admin. One subscription covers every circle they run — members never pay for it.',
     'pricing.faq.cancel.q': 'What happens if I cancel?',
     'pricing.faq.cancel.a':
       'Your circles keep running and every member keeps full access to their funds. You simply return to the Free plan limits for new circles and features.',
     'pricing.faq.fees.q': 'Are there other fees?',
     'pricing.faq.fees.a':
-      'Only standard Sui network fees (typically a few cents), paid to the blockchain — not to us. On Premium, we cover those network fees for your members’ contributions and claims (fair use), so they never need to hold crypto for gas. On the Free plan members simply pay their own small network fee.',
-    'pricing.faq.gasFree.q': 'What is “gas-free for members”?',
-    'pricing.faq.gasFree.a':
-      'Every Sui transaction needs a tiny network fee (“gas”), normally paid in SUI. When you subscribe to Premium, your subscription covers that fee for your members’ contributions and claims — so someone can join and pay into your circle with only USDC, without first buying SUI for gas. Fair-use limits apply to prevent abuse; the money flow itself is never blocked.',
+      'Only standard Sui network fees (typically a few cents), paid to the blockchain — not to us. Members pay their own small network fee, on every plan.',
+    'pricing.faq.gas.q': 'Do members need SUI for gas?',
+    'pricing.faq.gas.a':
+      'Yes. Every Sui transaction needs a tiny network fee (“gas”), paid in SUI, so each member keeps a little SUI in their wallet — even in a circle that settles in USDC.',
     'pricing.footerDisclaimer':
       'Premium covers coordination features only. It is not financial advice, custody, or a guarantee of returns. Cryptocurrency use carries risk — check the rules that apply in your country.',
     'pricing.free.feature.circles': '{count} savings circle',
     'pricing.free.feature.members': 'Up to {count} members per circle',
     'pricing.free.feature.escrow': 'Core escrow rounds — contribute and collect on rotation',
-    'pricing.free.feature.recovery': 'Member-initiated recovery, always included',
+    'pricing.free.feature.recovery': 'Emergency stop by member vote, always included',
     'pricing.free.feature.zklogin': 'zkLogin sign-in with self-custodied wallets',
     'pricing.premium.feature.members': 'Up to {count} members per circle',
     'pricing.premium.feature.circles': 'Run up to {count} circles at once',
     'pricing.premium.feature.whatsapp': 'WhatsApp linking + turn and payout notifications',
     'pricing.premium.feature.goals': 'Smart savings goals for your circles',
-    'pricing.premium.feature.gasFree': 'Gas-free contributions for all your members (fair use)',
-    'pricing.premium.feature.analytics': 'Circle analytics and contribution insights',
     'pricing.premium.feature.everything': 'Everything in Free',
     'pricing.alwaysFreeNoteLabel': 'Always free, on every plan:',
     'pricing.alwaysFreeNoteBody':
-      'collecting your payout, member-initiated recovery, and withdrawing your funds never require a subscription.',
+      'collecting your payout, recovery, and withdrawing your funds never require a subscription.',
     // Billing upsell modal
     'billing.notNow': 'Not now',
     'billing.seePlans': 'See plans',
@@ -453,6 +509,22 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'record.share.createFailed': 'Could not create the link. Please try again.',
     'record.share.revoked': 'Link turned off',
     'record.share.revokeFailed': 'Could not turn off that link.',
+    'record.badges.heading': 'Facts about your history',
+    'record.badges.foundingCircle.title': 'Founding Circle',
+    'record.badges.foundingCircle.body':
+      'You started {circle}, and it completed its first full round on {date}.',
+    'record.badges.note':
+      'This is a fact from your own history, shown only to you. It is not a score or a rating, and it never appears on a shared link.',
+    'record.stories.heading': 'Your stories',
+    'record.stories.blurb':
+      'Stories you chose to share at a payout moment. A person reads each one before it is used anywhere. Withdraw one at any time and it will not be used after that.',
+    'record.stories.withdraw': 'Withdraw',
+    'record.stories.withdrawn': 'Story withdrawn.',
+    'record.stories.withdrawFailed': 'Could not withdraw that story.',
+    'record.stories.status.pending': 'awaiting review',
+    'record.stories.status.approved': 'approved',
+    'record.stories.status.used': 'used',
+    'record.stories.status.withdrawn': 'withdrawn',
     'record.shared.missingTitle': 'This link isn’t available',
     'record.shared.missingBody':
       'It may have expired or been turned off by the person who shared it. Ask them for a new link.',
@@ -478,6 +550,16 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
       "Ce tour n'est pas encore ouvert. Une fois que l'administrateur du cercle l'ouvre, les membres peuvent verser leur part et la première personne de la liste sera prête à recevoir.",
     'escrow.openRound': 'Ouvrir ce tour',
     'escrow.openingRound': 'Ouverture en cours…',
+    'escrow.confirmingRound': "Confirmation de l'ouverture du tour…",
+    'escrow.confirmingRoundNotice':
+      "Votre transaction pour ouvrir ce tour est passée. En attente que le réseau affiche la nouvelle cagnotte — l'ouverture reste désactivée jusque-là, pour que le tour ne puisse pas être ouvert deux fois.",
+    'escrow.confirmTimedOut':
+      "Nous ne voyons toujours pas la nouvelle cagnotte. Actualisez et vérifiez que le tour n'est pas déjà ouvert avant de l'ouvrir à nouveau.",
+    'escrow.roundAlreadyOpen':
+      'Une cagnotte est déjà ouverte pour ce tour sur la blockchain. Actualisation pour vous la montrer.',
+    'escrow.refunded':
+      "Le tour {cycle} a été annulé et chaque versement est revenu au membre qui l'avait fait. L'administrateur du cercle peut rouvrir ce tour.",
+    'escrow.reopenRound': 'Rouvrir ce tour',
     'escrow.onlyAdminOpens': "Seul l'administrateur du cercle peut ouvrir le tour.",
     'escrow.yourShare': 'Votre part ce tour',
     'escrow.whoseTurn': "C'est le tour de",
@@ -537,6 +619,11 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'nav.notifications': 'Notifications',
     // Page d'accueil
     'landing.eyebrow': "Cercles d'épargne tournante — pour la diaspora mondiale",
+    'landing.globe.alsoCalled': 'Aussi appelé {names}',
+    'landing.globe.nearby': 'À proximité : {names}',
+    'landing.globe.readMore': 'En savoir plus',
+    'landing.globe.hintHover': 'Survolez le globe pour découvrir le nom local de chaque cercle',
+    'landing.globe.hintTouch': 'Touchez le globe pour découvrir le nom local de chaque cercle',
     'landing.heroTitle':
       "Le cercle d'épargne auquel votre famille fait déjà confiance — désormais avec des règles que personne ne peut contourner en silence.",
     'landing.heroSubtitle':
@@ -591,9 +678,9 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'landing.workflow.step2.title': 'Fixez les règles une fois, ensemble',
     'landing.workflow.step2.body':
       "Convenez des membres, des montants, du calendrier et de l'ordre des versements dès le départ. Tout le monde voit les mêmes règles, il n'y a donc rien à renégocier ensuite.",
-    'landing.workflow.step3.title': 'Cotisez et soyez payé, selon le calendrier',
+    'landing.workflow.step3.title': 'Cotisez, puis récupérez la cagnotte à votre tour',
     'landing.workflow.step3.body':
-      "À chaque tour, le versement part automatiquement vers le portefeuille du membre suivant. Suivez qui a cotisé et qui est le prochain — sans aucun message de relance.",
+      "Quand tout le monde a cotisé, le membre dont c'est le tour récupère la cagnotte directement dans son propre portefeuille. Suivez qui a cotisé et qui est le prochain — sans aucun message de relance.",
     'landing.launch.eyebrow': 'Lancement mainnet',
     'landing.launch.title': 'Suivez le lancement sans subir le bruit.',
     'landing.launch.body':
@@ -627,7 +714,7 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'landing.faq.a4':
       "Votre adresse de portefeuille change car chaque réseau a son propre état. L'application efface la session en cours pour que l'environnement sélectionné reste propre et cohérent.",
     'landing.tradition.eyebrow': 'Une tradition mondiale',
-    'landing.tradition.title': 'Une tradition, vingt-cinq noms.',
+    'landing.tradition.title': 'Une tradition, de nombreux noms.',
     'landing.tradition.body':
       "Partout dans le monde, les communautés connaissent déjà l'épargne tournante. Njangi On-Chain est conçu pour respecter cette histoire plutôt que de l'aplatir en un schéma fintech générique.",
     'landing.footer.tagline':
@@ -635,11 +722,8 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'landing.footer.rights': '© {year} Njangi On-Chain. Tous droits réservés.',
     // Page d'authentification
     'auth.title': 'Authentification du compte',
-    'auth.whatsappTitle': 'Authentification WhatsApp',
     'auth.checking': "Vérification du statut d'authentification...",
     'auth.pleaseAuthenticate': 'Veuillez authentifier votre compte',
-    'auth.pleaseAuthenticateWhatsapp':
-      'Veuillez authentifier votre compte pour WhatsApp ({phone})',
     'auth.alreadyAuthenticated': 'Vous êtes déjà authentifié !',
     'auth.successTitle': 'Authentification réussie !',
     'auth.redirecting': 'Authentification réussie ! Redirection...',
@@ -671,6 +755,51 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'create.cancel': 'Annuler',
     'create.nextInvite': 'Suivant : inviter des membres',
     'create.backToDashboard': 'Retour au tableau de bord',
+    // Configuration en un écran (le chemin rapide d'un premier organisateur)
+    'create.step.setup.label': 'Configurer',
+    'create.step.setup.title': 'Configurez votre cercle',
+    'create.step.setup.description':
+      'Un nom, un montant et une fréquence. Tout le reste part d’une valeur raisonnable que vous pouvez modifier maintenant ou plus tard.',
+    'create.amountLabel': 'Versement par personne',
+    'create.amountHint': 'Ce que chaque membre verse à chaque fois.',
+    'create.currencyLabel': 'Devise',
+    'create.frequencyLabel': 'À quelle fréquence',
+    'create.frequency.weekly': 'Chaque semaine',
+    'create.frequency.biweekly': 'Toutes les 2 semaines',
+    'create.frequency.monthly': 'Chaque mois',
+    'create.frequency.quarterly': 'Tous les 3 mois',
+    'create.membersLabel': 'Combien de personnes',
+    'create.membersHint': 'Vous compris. Entre {min} et {max} ; modifiable avant le démarrage du cercle.',
+    'create.depositAuto':
+      'Chaque membre verse aussi un dépôt de garantie remboursable de {amount}, soit la moitié d’un versement. Ajustez-le sous Plus de réglages.',
+    'create.depositAutoEmpty':
+      'Chaque membre verse aussi un dépôt de garantie remboursable, soit la moitié d’un versement. Ajustez-le sous Plus de réglages.',
+    'create.moreSettings': 'Plus de réglages',
+    'create.lessSettings': 'Moins de réglages',
+    'create.submit': 'Créer le cercle',
+    'create.submitting': 'Création de votre cercle…',
+    'create.altMigrating': 'Vous transférez un cercle déjà en cours ?',
+    'create.altMigratingOn':
+      'Parfait : configurez-le de la même façon. Une fois tout le monde inscrit, vous indiquerez qui a déjà collecté, et le cercle reprend là où il en était.',
+    'create.altMigratingOff': 'En fait, c’est un nouveau cercle',
+    'create.altGoal': 'Vous épargnez plutôt vers un objectif ?',
+    'create.altBackToCircle': 'Revenir à un cercle rotatif',
+    'create.needsFundsTitle': 'Ce compte n’a pas encore de SUI de test.',
+    'create.needsFundsBody':
+      'Vous êtes sur le Testnet Sui. Ouvrez le robinet, revenez sur cet onglet, puis appuyez sur Créer le cercle.',
+    'create.openFaucet': 'Ouvrir le robinet',
+    'create.doneTitle': '{name} est prêt.',
+    'create.doneTitleNoName': 'Votre cercle est prêt.',
+    'create.doneBody': 'Partagez ce lien avec votre groupe. Toute personne qui l’ouvre peut demander à rejoindre.',
+    'create.copyInvite': 'Copier le lien d’invitation',
+    'create.copied': 'Lien d’invitation copié',
+    'create.shareWhatsApp': 'Partager sur WhatsApp',
+    'create.openCircle': 'Ouvrir votre cercle',
+    'create.linkPending': 'Préparation de votre lien d’invitation…',
+    'create.linkFailed': 'Nous n’avons pas encore pu récupérer votre lien d’invitation.',
+    'create.linkRetry': 'Réessayer',
+    'create.whatsappText': 'Rejoins mon cercle « {name} » sur Njangi On-Chain : {link}',
+    'create.moreInviteOptions': 'Inviter par e-mail ou par téléphone',
     // Adhésion / découverte
     'join.eyebrow': 'Rejoindre le cercle',
     'join.reviewTerms':
@@ -701,6 +830,7 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     // Habillage du tableau de bord
     'dashboard.eyebrow': 'Tableau de bord Njangi On-Chain',
     'dashboard.welcome': 'Bon retour{name}.',
+    'dashboard.welcomeFirst': 'Bienvenue{name}.',
     'dashboard.blurb':
       "Gardez vos cercles, vos versements et vos mouvements d'argent organisés dans un espace de travail apaisé.",
     'dashboard.refreshCircles': 'Actualiser les cercles',
@@ -719,8 +849,8 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'pricing.eyebrow': 'Tarifs',
     'pricing.title': "Une tarification simple qui ne touche jamais à votre épargne",
     'pricing.subtitle':
-      "Gérez un cercle gratuitement, pour toujours. Premium ajoute des facilités de coordination pour les groupes plus importants — vos versements, vos paiements et la récupération restent en autodétention et gratuits sur tous les forfaits.",
-    'pricing.comingSoonBanner': "Premium arrive bientôt — chaque forfait garde vos fonds en autodétention et gratuits.",
+      "Gérez un cercle gratuitement, pour toujours. Premium ajoute des facilités de coordination pour les groupes plus importants — vos versements, vos paiements et la récupération restent sans dépositaire et gratuits sur tous les forfaits.",
+    'pricing.comingSoonBanner': "Premium arrive bientôt — chaque forfait garde vos fonds sans dépositaire et gratuits.",
     'pricing.breadcrumbHome': 'Accueil',
     'pricing.breadcrumbPricing': 'Tarifs',
     'pricing.free': 'Gratuit',
@@ -749,37 +879,35 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
       "Le paiement a été annulé — rien n'a été débité. Vous pouvez passer à Premium quand vous le souhaitez.",
     'pricing.assuranceTitle': "Votre argent n'est jamais derrière un péage",
     'pricing.assuranceBody':
-      "Njangi On-Chain est non dépositaire : les versements sont conservés en séquestre par cercle sur Sui, les paiements vont directement vers les portefeuilles des membres, et la récupération est initiée par les membres. Verser, recevoir un paiement, récupérer l'accès et retirer des fonds fonctionnent de la même façon sur les forfaits Gratuit et Premium — un abonnement n'ajoute que des facilités de coordination, jamais l'accès à votre épargne.",
+      "Njangi On-Chain est non dépositaire : les versements sont conservés en séquestre par cercle sur Sui, les paiements vont directement vers les portefeuilles des membres, et l'arrêt anticipé d'un cercle est soumis au vote des membres. Verser, recevoir un paiement, participer à la récupération et retirer des fonds fonctionnent de la même façon sur les forfaits Gratuit et Premium — un abonnement n'ajoute que des facilités de coordination, jamais l'accès à votre épargne.",
     'pricing.faqTitle': 'Questions fréquentes',
     'pricing.faq.whoPays.q': 'Qui paie Premium ?',
     'pricing.faq.whoPays.a':
-      "L'administrateur du cercle. Un seul abonnement couvre tous les cercles qu'il gère — les membres n'ont jamais rien à payer.",
+      "L'administrateur du cercle. Un seul abonnement couvre tous les cercles qu'il gère — les membres ne le paient jamais.",
     'pricing.faq.cancel.q': "Que se passe-t-il si j'annule ?",
     'pricing.faq.cancel.a':
       "Vos cercles continuent de fonctionner et chaque membre conserve un accès complet à ses fonds. Vous revenez simplement aux limites du forfait Gratuit pour les nouveaux cercles et fonctionnalités.",
     'pricing.faq.fees.q': "Y a-t-il d'autres frais ?",
     'pricing.faq.fees.a':
-      "Uniquement les frais de réseau Sui standard (généralement quelques centimes), versés à la blockchain — pas à nous. Avec Premium, nous prenons en charge ces frais de réseau pour les cotisations et les retraits de vos membres (usage raisonnable), afin qu'ils n'aient jamais besoin de détenir de crypto pour le gaz. Sur le forfait Gratuit, les membres paient simplement leur petit frais de réseau.",
-    'pricing.faq.gasFree.q': "Qu'est-ce que « sans frais de gaz pour les membres » ?",
-    'pricing.faq.gasFree.a':
-      "Chaque transaction Sui nécessite un petit frais de réseau (« gaz »), normalement payé en SUI. Lorsque vous souscrivez à Premium, votre abonnement couvre ce frais pour les cotisations et retraits de vos membres — ainsi une personne peut rejoindre votre cercle et y cotiser avec uniquement de l'USDC, sans avoir à acheter d'abord du SUI pour le gaz. Des limites d'usage raisonnable s'appliquent pour éviter les abus ; le flux d'argent lui-même n'est jamais bloqué.",
+      "Uniquement les frais de réseau Sui standard (généralement quelques centimes), versés à la blockchain — pas à nous. Les membres paient eux-mêmes leur petit frais de réseau, sur tous les forfaits.",
+    'pricing.faq.gas.q': 'Les membres ont-ils besoin de SUI pour le gaz ?',
+    'pricing.faq.gas.a':
+      "Oui. Chaque transaction Sui nécessite un petit frais de réseau (« gaz »), payé en SUI : chaque membre garde donc un peu de SUI dans son portefeuille — même dans un cercle réglé en USDC.",
     'pricing.footerDisclaimer':
       "Premium couvre uniquement les fonctionnalités de coordination. Ce n'est pas un conseil financier, ni de la conservation, ni une garantie de rendement. L'usage de cryptomonnaies comporte des risques — vérifiez les règles applicables dans votre pays.",
     'pricing.free.feature.circles': "{count} cercle d'épargne",
     'pricing.free.feature.members': "Jusqu'à {count} membres par cercle",
     'pricing.free.feature.escrow': 'Tours de séquestre essentiels — verser et recevoir à tour de rôle',
-    'pricing.free.feature.recovery': 'Récupération initiée par les membres, toujours incluse',
+    'pricing.free.feature.recovery': "Arrêt d'urgence par vote des membres, toujours inclus",
     'pricing.free.feature.zklogin': 'Connexion zkLogin avec portefeuilles en autodétention',
     'pricing.premium.feature.members': "Jusqu'à {count} membres par cercle",
     'pricing.premium.feature.circles': "Gérez jusqu'à {count} cercles à la fois",
     'pricing.premium.feature.whatsapp': 'Liaison WhatsApp + notifications de tour et de paiement',
     'pricing.premium.feature.goals': "Objectifs d'épargne intelligents pour vos cercles",
-    'pricing.premium.feature.gasFree': 'Cotisations sans frais de gaz pour tous vos membres (usage raisonnable)',
-    'pricing.premium.feature.analytics': 'Analyses du cercle et aperçus des versements',
     'pricing.premium.feature.everything': 'Tout ce qui est inclus dans Gratuit',
     'pricing.alwaysFreeNoteLabel': 'Toujours gratuit, sur tous les forfaits :',
     'pricing.alwaysFreeNoteBody':
-      "recevoir votre paiement, la récupération initiée par les membres et le retrait de vos fonds ne nécessitent jamais d'abonnement.",
+      "recevoir votre paiement, la récupération et le retrait de vos fonds ne nécessitent jamais d'abonnement.",
     // Fenêtre d'incitation à l'abonnement
     'billing.notNow': 'Pas maintenant',
     'billing.seePlans': 'Voir les forfaits',
@@ -872,6 +1000,22 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'record.share.createFailed': 'Impossible de créer le lien. Veuillez réessayer.',
     'record.share.revoked': 'Lien désactivé',
     'record.share.revokeFailed': 'Impossible de désactiver ce lien.',
+    'record.badges.heading': 'Faits sur votre parcours',
+    'record.badges.foundingCircle.title': 'Cercle fondateur',
+    'record.badges.foundingCircle.body':
+      'Vous avez lancé {circle}, qui a terminé son premier tour complet le {date}.',
+    'record.badges.note':
+      'Ceci est un fait tiré de votre propre historique, visible par vous seul. Ce n’est ni une note ni un classement, et cela n’apparaît jamais sur un lien partagé.',
+    'record.stories.heading': 'Vos témoignages',
+    'record.stories.blurb':
+      'Les témoignages que vous avez choisi de partager lors d’un versement. Une personne lit chacun d’eux avant toute utilisation. Retirez-en un à tout moment : il ne sera plus utilisé ensuite.',
+    'record.stories.withdraw': 'Retirer',
+    'record.stories.withdrawn': 'Témoignage retiré.',
+    'record.stories.withdrawFailed': 'Impossible de retirer ce témoignage.',
+    'record.stories.status.pending': 'en attente de relecture',
+    'record.stories.status.approved': 'approuvé',
+    'record.stories.status.used': 'utilisé',
+    'record.stories.status.withdrawn': 'retiré',
     'record.shared.missingTitle': 'Ce lien n’est pas disponible',
     'record.shared.missingBody':
       'Il a peut-être expiré ou été désactivé par la personne qui l’a partagé. Demandez-lui un nouveau lien.',

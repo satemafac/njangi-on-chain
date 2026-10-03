@@ -3,6 +3,7 @@ import {
   buildContributeWithAttestationTx,
   buildFinalizeAndRedeemWithAttestationTx,
   buildOpenCycleTx,
+  buildReleaseOpenRoundTx,
 } from '@/services/cycle-escrow-service';
 
 jest.mock('@/services/network-config', () => ({
@@ -193,5 +194,79 @@ describe('buildFinalizeAndRedeemWithAttestationTx', () => {
         complianceConfigId: '',
       }),
     ).toThrow('Missing required argument: complianceConfigId');
+  });
+});
+
+describe('buildOpenCycleTx release chaining (Circle Record v1.2)', () => {
+  // Once the duplicate-open guard is published, a refunded escrow keeps its
+  // round pinned until release_open_round clears the marker; the release
+  // must land in the same PTB, ahead of the open, or the open aborts 234.
+  const FLAG = 'NEXT_PUBLIC_ESCROW_ROUND_GUARD_ENABLED';
+  let original: string | undefined;
+
+  beforeEach(() => {
+    original = process.env[FLAG];
+    delete process.env[FLAG];
+  });
+
+  afterEach(() => {
+    if (original === undefined) delete process.env[FLAG];
+    else process.env[FLAG] = original;
+  });
+
+  it('chains release_open_round ahead of the open when the guard flag is on', () => {
+    process.env[FLAG] = 'true';
+    const { txb, calls } = makeFakeTxb();
+    buildOpenCycleTx({ ...BASE, stableDecimals: 6, releaseEscrowId: '0xrefunded' })(txb);
+
+    expect(calls.map((c) => c.target)).toEqual([
+      '0xpkg::njangi_cycle_escrow::release_open_round',
+      '0xpkg::njangi_cycle_escrow::open_cycle_stable',
+    ]);
+    expect(calls[0].typeArguments).toEqual([BASE.coinType]);
+    expect(calls[0].arguments).toEqual([
+      { kind: 'object', id: '0xcircle' },
+      { kind: 'object', id: '0xrefunded' },
+      { kind: 'object', id: '0x6' },
+    ]);
+  });
+
+  it('drops the release while the flag is off: the published package may not carry it', () => {
+    const { txb, calls } = makeFakeTxb();
+    buildOpenCycleTx({ ...BASE, stableDecimals: 6, releaseEscrowId: '0xrefunded' })(txb);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].target).toBe('0xpkg::njangi_cycle_escrow::open_cycle_stable');
+  });
+
+  it('never adds a release without an escrow to release, flag or no flag', () => {
+    process.env[FLAG] = 'true';
+    const { txb, calls } = makeFakeTxb();
+    buildOpenCycleTx({ ...BASE, stableDecimals: 6 })(txb);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].target).toBe('0xpkg::njangi_cycle_escrow::open_cycle_stable');
+  });
+});
+
+describe('buildReleaseOpenRoundTx', () => {
+  it('builds the standalone release call (circle, escrow, clock)', () => {
+    const { txb, calls } = makeFakeTxb();
+    buildReleaseOpenRoundTx({ ...BASE, escrowId: '0xabandoned' })(txb);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].target).toBe('0xpkg::njangi_cycle_escrow::release_open_round');
+    expect(calls[0].typeArguments).toEqual([BASE.coinType]);
+    expect(calls[0].arguments).toEqual([
+      { kind: 'object', id: '0xcircle' },
+      { kind: 'object', id: '0xabandoned' },
+      { kind: 'object', id: '0x6' },
+    ]);
+  });
+
+  it('fails at build time with a named error when the escrow id is missing', () => {
+    expect(() => buildReleaseOpenRoundTx({ ...BASE, escrowId: '' })).toThrow(
+      'Missing required argument: escrowId',
+    );
   });
 });

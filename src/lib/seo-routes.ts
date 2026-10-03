@@ -28,7 +28,6 @@ export const APP_ROUTE_PREFIXES = [
   '/pool',
   '/auth',
   '/admin',
-  '/automation',
 ] as const;
 
 export const NOINDEX_PREFIXES = [...APP_ROUTE_PREFIXES, '/restricted'] as const;

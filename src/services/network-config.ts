@@ -262,7 +262,7 @@ export function validateNetworkConfig(network: NetworkType): { isValid: boolean;
     }
     
     if (config.enoki.apiKey === getNetworkConfig('testnet').enoki.apiKey) {
-      errors.push('Mainnet is using testnet Enoki API key - please update NEXT_PUBLIC_ENOKI_MAINNET');
+      errors.push('Mainnet is using testnet Enoki API key - please update ENOKI_API_KEY_MAINNET');
     }
   }
 

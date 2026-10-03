@@ -1,0 +1,120 @@
+{
+  "name": "poverty-tax-reel",
+  "intro": 4.2,
+  "gap": 0.55,
+  "outro": 19.5,
+  "clips": [
+    {
+      "id": "tax",
+      "start": 436.5,
+      "end": 443.7,
+      "eyebrow": "The poverty tax",
+      "visual": "quote",
+      "keywords": [
+        "poverty",
+        "tax",
+        "poorer",
+        "expensive"
+      ]
+    },
+    {
+      "id": "unbanked",
+      "start": 120.95,
+      "end": 133.75,
+      "eyebrow": "Who the bank leaves out",
+      "visual": "stat",
+      "stat": "70%",
+      "stat_label": "of Africans, no bank account \u00b7 rural: 95%",
+      "stat_at": 1.4,
+      "keywords": [
+        "70",
+        "95",
+        "%",
+        "banked",
+        "excluded",
+        "rural"
+      ]
+    },
+    {
+      "id": "route",
+      "start": 307.05,
+      "end": 320.9,
+      "eyebrow": "Togo to Ghana. Neighbours.",
+      "visual": "route",
+      "keywords": [
+        "togo",
+        "ghana",
+        "europe",
+        "intermediary",
+        "time",
+        "money",
+        "neighboring"
+      ]
+    },
+    {
+      "id": "fees",
+      "start": 333.4,
+      "end": 348.65,
+      "eyebrow": "What moving money costs",
+      "visual": "fees",
+      "keywords": [
+        "17",
+        "billion",
+        "2%",
+        "16%",
+        "remittance",
+        "fees"
+      ]
+    },
+    {
+      "id": "own",
+      "start": 549.9,
+      "end": 554.65,
+      "eyebrow": "What Africa already had",
+      "visual": "quote",
+      "keywords": [
+        "solution",
+        "own",
+        "way"
+      ]
+    }
+  ],
+  "outro_cards": [
+    {
+      "eyebrow": "The answer was never new",
+      "h": "A circle of people who trust each other.",
+      "sub": "Everyone pays in. One takes the whole pot. It goes round. Njangi, tontine, susu: the same idea, for generations, with no bank between neighbours.",
+      "dur": 3.6
+    },
+    {
+      "eyebrow": "Njangi On-Chain",
+      "h": "The same circle. <em style=\"font-style:normal;color:var(--gold)\">Across borders.</em>",
+      "sub": "Contribute from Douala or Dallas. The pot goes straight to whoever's turn it is. No bank in Europe in between, no cut taken from the pot, and no function that lets us move a circle's money.",
+      "dur": 8.0,
+      "viz": "pot"
+    },
+    {
+      "eyebrow": "Why it matters",
+      "h": "Nobody holds the pot. <em style=\"font-style:normal;color:var(--gold)\">Not even us.</em>",
+      "sub": "The poverty tax is what the middle charges. We built the circle without a middle.",
+      "foot": "njangionchain.com/learn \u00b7 link in bio",
+      "dur": 3.6
+    },
+    {
+      "eyebrow": "Credit",
+      "h": "Voice: Farida Nabourema",
+      "sub": "Founder of the Africa Bitcoin Conference. Interviewed on Simply Bitcoin, episode 1583, from 46:00. The figures are hers, as stated. Full link in the comments.",
+      "foot": "njangionchain.com/learn \u00b7 link in bio",
+      "dur": 4.0
+    }
+  ],
+  "intro_cards": [
+    {
+      "eyebrow": "In her own words",
+      "h": "Farida Nabourema",
+      "sub": "Togolese human-rights activist. Founder of the Africa Bitcoin Conference. From her interview on the Simply Bitcoin podcast, episode 1583.",
+      "foot": "audio excerpts, used with attribution",
+      "dur": 1
+    }
+  ]
+}

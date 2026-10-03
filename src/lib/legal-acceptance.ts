@@ -7,9 +7,10 @@
 // it through `parseLegalMarkdown` at build time, while client components
 // (footer, acceptance modal) import only the constants below.
 //
-// Versioning: bumping a version here + adding the new markdown file is the
-// whole release procedure for a new document version. The server always
-// resolves versions from CURRENT_LEGAL_VERSIONS — never from client input.
+// Versioning: bumping a version here, updating the markdown frontmatter and
+// adding a LEGAL_CHANGE_NOTES entry is the whole release procedure for a new
+// document version. The server always resolves versions from
+// CURRENT_LEGAL_VERSIONS — never from client input.
 
 export const LEGAL_DOC_IDS = ['terms', 'privacy', 'risk'] as const;
 export type LegalDocId = (typeof LEGAL_DOC_IDS)[number];
@@ -34,9 +35,62 @@ export const CURRENT_LEGAL_VERSIONS: Record<LegalDocId, string> = {
   terms: '1.0.0',
   // 1.1.0 (2026-07-05): named Vercel + Neon explicitly in the processor
   // table (GDPR transparency — roadmap A2/A4).
-  privacy: '1.1.0',
+  // 1.2.0 (2026-10-01): named Enoki (Mysten Labs) as the zkLogin salt and
+  // proof processor, dropped the retired salt-server and recovery-code
+  // claims, and stopped describing deletion as locking the wallet. Terms
+  // and risk changed in the same release WITHOUT a bump (owner's call).
+  privacy: '1.2.0',
   risk: '1.0.0',
 };
+
+/**
+ * The "what changed" line the acceptance modal shows when a version bump
+ * re-prompts someone who accepted an earlier version (ACCEPTANCE-GATE-SPEC.md,
+ * "When the gate triggers"). Each note names the version it describes and is
+ * shown only while that version is current, so a later bump can never inherit
+ * a stale note. Add one with every bump: legal-change-notes.test.ts fails for
+ * any doc past 1.0.0 without a note for its current version.
+ */
+export const LEGAL_CHANGE_NOTES: Partial<
+  Record<LegalDocId, { version: string } & Record<LegalLocale, string>>
+> = {
+  privacy: {
+    version: '1.2.0',
+    en: 'Enoki (Mysten Labs), which helps sign you in, is now listed among the services that process your data. Recovery codes, which the app does not offer, are no longer mentioned. Deleting your data does not affect your wallet.',
+    fr: "Enoki (Mysten Labs), qui intervient dans votre connexion, figure désormais parmi les services qui traitent vos données. Les codes de récupération, que l'application ne propose pas, ne sont plus mentionnés. La suppression de vos données n'affecte pas votre portefeuille.",
+  },
+};
+
+/** The doc's "what changed" line for its current version, or null if none. */
+export function getLegalChangeNote(
+  doc: LegalDocId,
+  locale: LegalLocale,
+  versions: Record<LegalDocId, string> = CURRENT_LEGAL_VERSIONS,
+): string | null {
+  const note = LEGAL_CHANGE_NOTES[doc];
+  return note && note.version === versions[doc] ? note[locale] : null;
+}
+
+/**
+ * Of the docs the user must accept (`missing`), the ones they accepted in an
+ * earlier version: a version bump rather than a first acceptance. `required`
+ * is the list /api/legal/status returns ({ doc, acceptedVersion }), read
+ * defensively because it arrives over the network.
+ */
+export function legalDocsUpdatedSinceAcceptance(
+  missing: readonly LegalDocId[],
+  required: unknown,
+): LegalDocId[] {
+  if (!Array.isArray(required)) return [];
+  return missing.filter((doc) =>
+    required.some(
+      (entry) =>
+        entry?.doc === doc &&
+        typeof entry.acceptedVersion === 'string' &&
+        entry.acceptedVersion.length > 0,
+    ),
+  );
+}
 
 /** Markdown basenames inside docs/legal-drafts (suffix `.{en,fr}.md`). */
 export const LEGAL_DOC_SOURCE_BASENAMES: Record<LegalDocId, string> = {

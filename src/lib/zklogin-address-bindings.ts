@@ -333,7 +333,7 @@ export async function alertDrift(
     console.error(
       '[address-drift] DRIFT DETECTED — a returning identity resolved to a new address. ' +
         'If this is happening to more than one user, an address-affecting env var or the ' +
-        'Enoki key almost certainly changed; see docs/incident-playbook.md.',
+        'Enoki application almost certainly changed; see docs/incident-playbook.md.',
       {
         provider: identity.provider ?? 'unknown',
         iss: identity.iss ?? null,

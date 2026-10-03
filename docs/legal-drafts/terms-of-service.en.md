@@ -44,12 +44,13 @@ You are solely responsible for determining whether your participation in a savin
 
 ## 3. Your Account and Wallet (zkLogin)
 
-The Service uses zkLogin: your Sui blockchain wallet address is derived from your Google, Facebook, or Apple account. There is no separate password and **we do not hold your private keys**.
+The Service uses zkLogin: your Sui blockchain wallet address is derived from your Google, Facebook, or Apple account and from a cryptographic salt that our zkLogin provider, Enoki (operated by Mysten Labs, Inc.), supplies each time you sign in. There is no separate password and **we do not hold your private keys**.
 
 You acknowledge and agree that:
 
-- **if you lose access to the social account used to sign in, you may permanently lose access to your wallet and any funds it controls.** Recovery codes offered by the Service mitigate this risk only if you generate and store them safely;
-- you are solely responsible for the security of your social account (strong password, two-factor authentication) and of your recovery codes;
+- **if you lose access to the social account used to sign in, you may permanently lose access to your wallet and any funds it controls.** The Service does not offer recovery codes or any other way to restore access without that account;
+- you are solely responsible for the security of your social account (strong password, two-factor authentication);
+- access to your wallet also depends on Enoki continuing to supply your salt to the Service; if it stops doing so, you may lose access to your wallet and any funds it controls (see Section 11);
 - all transactions signed from your wallet are deemed authorized by you;
 - we cannot reset, restore, or transfer your wallet for you.
 
@@ -119,7 +120,7 @@ The Service's software, branding, and content are owned by Njangi On-Chain or it
 
 ## 11. Third-Party Services
 
-The Service interoperates with third parties we do not control, including the Sui network and its validators, Walrus decentralized storage, OAuth providers (Google, Facebook, Apple), Meta's WhatsApp Business Platform, Stripe, fiat-ramp partners, and price oracles. Their availability and conduct are outside our control, and your use of them may be subject to their own terms. To the maximum extent permitted by law, we are not liable for third-party services.
+The Service interoperates with third parties we do not control, including the Sui network and its validators, Walrus decentralized storage, OAuth providers (Google, Facebook, Apple), our zkLogin provider Enoki (Mysten Labs, Inc.), Meta's WhatsApp Business Platform, Stripe, fiat-ramp partners, and price oracles. Their availability and conduct are outside our control, and your use of them may be subject to their own terms. To the maximum extent permitted by law, we are not liable for third-party services.
 
 ## 12. Suspension and Termination
 
@@ -134,7 +135,7 @@ THE SERVICE, INCLUDING THE SMART CONTRACTS AND ANY INFORMATION DISPLAYED (INCLUD
 To the maximum extent permitted by applicable law:
 
 - Njangi On-Chain, its officers, employees, and agents are **not liable for indirect, incidental, special, consequential, or punitive damages**, or for loss of profits, data, goodwill, or crypto assets, arising from or related to the Service;
-- Njangi On-Chain is **not liable for**: losses caused by the conduct of circle members (including non-contribution or fraud); blockchain network or validator failures; smart-contract defects or exploits; oracle or price-feed errors; loss of access to your social login or recovery codes; acts or omissions of third-party services (Section 11); or events beyond our reasonable control;
+- Njangi On-Chain is **not liable for**: losses caused by the conduct of circle members (including non-contribution or fraud); blockchain network or validator failures; smart-contract defects or exploits; oracle or price-feed errors; loss of access to your social login; acts or omissions of third-party services (Section 11); or events beyond our reasonable control;
 - **Njangi On-Chain's aggregate liability** for all claims arising out of or relating to the Service is limited to the **greater of (a) the subscription fees you paid to Njangi On-Chain in the twelve (12) months preceding the event giving rise to the claim, and (b) one hundred (100) US dollars**.
 
 Nothing in these Terms excludes or limits liability that cannot be excluded or limited under applicable law, including liability for fraud, willful misconduct, or gross negligence where such limitation is not permitted.

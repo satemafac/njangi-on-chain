@@ -317,7 +317,7 @@ After a successful upgrade:
 - confirm `move/Published.toml` has the new `published-at`
 - update `.env.local` network package IDs
 - update `src/lib/circle-chain.ts` so `publishedAt` matches the new package and `originalId` preserves the package lineage root
-- redeploy app config, including Heroku vars if that environment serves the updated frontend
+- set the new package id in the Vercel Production env and redeploy: a Move publish never redeploys the web app, and `NEXT_PUBLIC_*` values are inlined at build time
 
 The `build_and_test.sh` script will now warn when you hit an upgrade-only path, but the upgrade transaction itself is still executed separately with `sui client upgrade`.
 

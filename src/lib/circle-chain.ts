@@ -78,7 +78,14 @@ const PACKAGE_LINEAGE_BY_NETWORK: Record<NetworkType, PublishedPackageMetadata> 
   // circle that was already running elsewhere join mid-rotation; v6
   // (2026-08-22) added the Circle Record v1.1 entries — open_cycle*_indexed
   // (escrow-history dynamic field on the Circle) and contribute_timed*
-  // (per-member contribution timestamps).
+  // (per-member contribution timestamps); v7 (2026-09-06) stopped
+  // `resume_cycle` from clearing held security deposits and added the
+  // permissionless `reconcile_deposit_paid` repair (PR #19); v8 (2026-09-06)
+  // added the open-round marker so a round cannot be opened twice, plus
+  // `release_open_round` for abandoned escrows (PR #20); v9 (2026-09-06)
+  // made `create_circle` store the real custody wallet id instead of the
+  // circle's own id (PR #14) — circles created from v9 on resolve their
+  // wallet from the `wallet_id` field alone.
   //
   // published-at = latest package (move-call target); original-id stays v1
   // (type identity + event filters). Every version since has been an UPGRADE,
@@ -89,7 +96,7 @@ const PACKAGE_LINEAGE_BY_NETWORK: Record<NetworkType, PublishedPackageMetadata> 
   // Either would have been upgrade-incompatible and forced a new lineage,
   // stranding every existing circle.
   testnet: {
-    publishedAt: '0x859e3add80ce891423d49702b2b3350addf1726ca634000c7394748c0c416c8e',
+    publishedAt: '0xf8afd3dfcf94f152ec9d1f8cb870b77525353a20564bb0224bcad5520d621614',
     originalId: '0x89cddf4dfe654e7c7b16333096d9e750cf04bb96f7de934403a512d460594f02',
     // v6 introduced the timed-escrow types; they stay anchored here even
     // after future upgrades move published-at.
@@ -172,7 +179,8 @@ export function getPackageLookupIds(args: {
   const { network, packageId, currentPackageId } = args;
   const normalizedPackageId = normalizePackageId(packageId);
   const normalizedCurrentPackageId = normalizePackageId(currentPackageId);
-  const { publishedAt, originalId } = getPublishedPackageMetadata(network);
+  const { publishedAt, originalId, timedEntriesPackageId } =
+    getPublishedPackageMetadata(network);
   const lookupIds = new Set<string>();
   const add = (value: string | null | undefined) => {
     const normalized = normalizePackageId(value);
@@ -185,12 +193,17 @@ export function getPackageLookupIds(args: {
     normalizedPackageId == null ||
     normalizedPackageId === normalizedCurrentPackageId ||
     normalizedPackageId === publishedAt ||
-    normalizedPackageId === originalId;
+    normalizedPackageId === originalId ||
+    normalizedPackageId === timedEntriesPackageId;
 
   if (isCurrentLineagePackage) {
     add(normalizedCurrentPackageId);
     add(publishedAt);
     add(originalId);
+    // Intermediate version that DEFINED types/events (the timed entries,
+    // v6). Event filters key on the defining package, so a lineage lookup
+    // must keep returning it after published-at moves past it.
+    add(timedEntriesPackageId);
   } else {
     add(normalizedPackageId);
   }
