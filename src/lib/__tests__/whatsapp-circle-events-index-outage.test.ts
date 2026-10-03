@@ -9,6 +9,7 @@
  * phone up again, and the next run delivers the event once the index
  * answers. A Walrus aggregator outage (5xx, 429, network error) on the
  * renewed blob used to be skipped the same way and now halts the same way,
+ * as does a refused read (401/403) behind a misconfigured aggregator URL,
  * while a blob that is gone for good (404) is still skipped and advanced.
  *
  * Only Postgres persistence, the Sui-first probe, the outbound send, the
@@ -80,6 +81,7 @@ import {
 import { CIRCLE_EVENT_STREAMS, circleEventCursorKey } from '../whatsapp-bot/circle-events';
 import { sendMemberNotification } from '../whatsapp-notifier';
 import { fetchAndDecryptPII } from '../walrus-pii';
+import type * as WalrusPii from '../walrus-pii';
 import { WalrusReadError } from '../walrus-read-error';
 import { lookupBlobsForCircle } from '../whatsapp-link-index';
 import { getPooledSuiClient } from '../../services/sui-rpc-failover';
@@ -249,6 +251,31 @@ function expired(blobId: string): WalrusReadError {
   });
 }
 
+/**
+ * The error the REAL fetchEnvelopeFromWalrus throws when the aggregator
+ * refuses the read, as it does behind a misconfigured
+ * WALRUS_AGGREGATOR_URL (walrus-pii is mocked here, so it is loaded
+ * actual).
+ */
+async function refusal(status: 401 | 403): Promise<WalrusReadError> {
+  const { fetchEnvelopeFromWalrus } = jest.requireActual<typeof WalrusPii>('../walrus-pii');
+  const realFetch = global.fetch;
+  global.fetch = (async () => ({
+    ok: false,
+    status,
+    text: async () => 'forbidden',
+  })) as unknown as typeof fetch;
+  try {
+    await fetchEnvelopeFromWalrus(RENEWED_BLOB);
+  } catch (err) {
+    if (err instanceof WalrusReadError) return err;
+    throw err;
+  } finally {
+    global.fetch = realFetch;
+  }
+  throw new Error('expected the aggregator to refuse the read');
+}
+
 afterAll(() => {
   if (ORIGINAL_CRON_SECRET === undefined) delete process.env.CRON_SECRET;
   else process.env.CRON_SECRET = ORIGINAL_CRON_SECRET;
@@ -353,6 +380,49 @@ describe('circle events during a Walrus aggregator outage', () => {
       expect(appLogger.error).toHaveBeenCalledWith(
         '[cycle-finalized-cron] notify threw; halting drain',
         expect.objectContaining({ txDigest: 'tx-join', error: outage.message }),
+      );
+      expect(sendMock).not.toHaveBeenCalled();
+      // No cursor moved, so the next run starts at the same event.
+      expect(saveCursorMock).not.toHaveBeenCalled();
+
+      decryptMock.mockImplementation(walrusServesRenewedCopy);
+      const recovered = await run();
+
+      expect(recovered.statusCode).toBe(200);
+      expect(sendMock).toHaveBeenCalledTimes(1);
+      expect(sendMock.mock.calls[0][0]).toMatchObject({
+        phoneOverride: PHONE,
+        dedupeKey: 'member_joined:tx-join:0',
+      });
+      expect(saveCursorMock).toHaveBeenCalledWith(CURSOR_KEY, EVENT_CURSOR, 'lease-token');
+    },
+  );
+
+  it.each([401, 403] as const)(
+    'halts on a refused read (%i), logged as an error, then delivers once the aggregator serves it',
+    async (status) => {
+      clientMock.mockReturnValue(makeClient(['member_joined']));
+      indexMock.mockResolvedValue([RENEWED_BLOB]);
+      const refused = await refusal(status);
+      // A refusal turns every read away, the anchored blob's included.
+      decryptMock.mockRejectedValue(refused);
+
+      const down = await run();
+
+      expect(down.statusCode).toBe(500);
+      expect(down.body.halted).toBe(true);
+      expect(summaryOf(down, 'member_joined')).toMatchObject({
+        halted: true,
+        processed: 0,
+        skipped: 0,
+      });
+      expect(appLogger.error).toHaveBeenCalledWith(
+        '[circle-phone] Walrus aggregator refused the read',
+        expect.objectContaining({ circleId: CIRCLE, error: refused.message }),
+      );
+      expect(appLogger.error).toHaveBeenCalledWith(
+        '[cycle-finalized-cron] notify threw; halting drain',
+        expect.objectContaining({ txDigest: 'tx-join', error: refused.message }),
       );
       expect(sendMock).not.toHaveBeenCalled();
       // No cursor moved, so the next run starts at the same event.
