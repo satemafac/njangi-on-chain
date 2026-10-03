@@ -447,10 +447,21 @@ def main() -> int:
     print("[3/5] audio")
     master, vo_only = build_audio(tl, clips, out, a.engine)
 
-    plate = out / "plate-douala.png"
+    # The legacy 2D page needs a painted plate (Ep. 1 only). 3D episodes are
+    # rendered by build-circles-film.py, so without a plate we stop here.
+    plate_src = spec["params"].get("plate")
+    if not plate_src:
+        if a.probe or not a.no_render:
+            sys.exit("this spec has no params.plate, so there is no 2D page: render it with build-circles-film.py")
+        print("[4/5] no 2D plate in this spec: skipping the legacy 2D page")
+        return 0
+    plate = out / f"plate-{Path(plate_src).stem}.png"
+    legacy = out / "plate-douala.png"            # Ep. 1 renders cached under the old name
+    if not plate.exists() and legacy.exists() and "douala" in plate_src:
+        plate = legacy
     if not plate.exists():
         tmp = out / "plate-tmp"
-        capture(ROOT / "marketing" / "assets" / spec["params"]["plate"], tmp, width=1296, height=2304, probe="0")
+        capture(ROOT / "marketing" / "assets" / plate_src, tmp, width=1296, height=2304, probe="0")
         shutil.move(str(tmp / "probe-0.00s.png"), plate)
         tmp.rmdir()
     html = write_page(spec, tl, out, master, plate)

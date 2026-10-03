@@ -85,7 +85,9 @@ shot draws it), `headline` (`*gold*` markup, `\n` for a break), `vo`
 TTS), `delivery` (a note to the voice), `lead`/`tail` (seconds of picture
 before/after the line), `keywords`, optional `cut: true` (hard cut in),
 `headline_at` (a word that triggers the headline), `captions: false`.
-Also set `film_page` and `packet`.
+Also set `film_page` and `packet`, and optionally a `score` block
+(`cues` per scene `visual`, `shift` in seconds) to colour the music for
+this episode (Ep. 2 gave the Trinidad scene steelpan).
 
 Keep scenes to one idea. If the voiceover runs long, trim holds, never the
 voiceover.
@@ -134,8 +136,11 @@ $PY .claude/skills/cinematic-reel/scripts/score_qa.py \
 ```
 
 Lyria RealTime is the only Lyria model on the free tier (`lyria-3.x` need a
-paid plan). Cues live in `CUES` inside the script, keyed by scene `visual`.
-Accept a take when QA shows no vocals and the brightness follows the story.
+paid plan). Series cues live in `CUES` inside the script, keyed by scene
+`visual`; pass `--spec` and the spec's `score.cues` override them per episode.
+Accept a take when QA shows no vocals and the brightness follows the story;
+if a take fails, rerun with another `--seed`. Set `score.shift` to the
+measured median lag.
 Details and the mix chain: `references/audio.md`.
 
 ### 5. Render and deliver

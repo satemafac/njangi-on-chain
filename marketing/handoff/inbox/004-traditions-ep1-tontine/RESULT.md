@@ -39,9 +39,7 @@ Step 0 check: the Reel was not already posted or scheduled. No duplicate.
 
 ## After it goes live
 
-Post link: to be added once the Reel publishes (status read
-"Instagram Processing..." at schedule time, which is normal for a fresh
-upload and should clear before publish).
+Post link: https://www.instagram.com/reel/DdwTzhblpd0/ (verified live 2026-10-01). Status was "Instagram Processing..." at schedule time and cleared before publish.
 
 Per JOB.md, Muse does not post the first comment; Claude handles comments
 once the live URL is known.

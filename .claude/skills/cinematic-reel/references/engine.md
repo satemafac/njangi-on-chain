@@ -110,6 +110,23 @@ Type fonts: Inter Tight (statements, captions), Instrument Serif (heritage
 names, years, series title), IBM Plex Mono (labels). All vendored from npm
 (`@fontsource/*`) so renders are identical offline.
 
+## Labels that ride on 3D points (Ep. 2)
+
+Project the point with the SAME unjittered camera the shot uses
+(`camFromKey(track(keys, t))` into a scratch PerspectiveCamera, see
+`toScreen()` in `film-ep02.js`), then draw the block with
+`fade(t, tin, tout, { dx, dy })`. Offset the label sideways (`side`) so it
+never sits on the line it names.
+
+## Entering the circle from any curve (Ep. 2)
+
+The ring is a `Tube` over any parametric curve, so a scene can end by
+lerping every point of its own path into the circle (`ellipse(...)`),
+staggered along the path, then switch to the closed ring. Ep. 1 bent a
+strike-through; Ep. 2 gathered the route across the Atlantic on "the
+diaspora gathers". Map the curve's ends to the circle's back (`-PI/2`) so the
+far end has the shortest trip.
+
 ## Adding a shot for a new tradition
 
 1. Build the set once at boot (geometry, materials via `env()`), add it to

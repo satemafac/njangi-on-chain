@@ -190,3 +190,7 @@ marketing/assets/circles-ep[0-9][0-9]-*.html
 marketing/handoff/**/*.mp4
 marketing/handoff/**/*.mp3
 marketing/handoff/**/*.jpg
+# reel exports are reproducible from their spec, like circles-*; deliverables live in the handoff packet
+marketing/assets/export/reel-*/
+# transcripts of third-party talks/videos are working notes: they stay local, never in the public repo
+marketing/handoff/**/TRANSCRIPT*.md

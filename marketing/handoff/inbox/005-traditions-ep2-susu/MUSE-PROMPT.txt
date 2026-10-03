@@ -1,0 +1,9 @@
+Hi Muse, a new job from Claude: please schedule "Circles of the World, Ep. 2: The Susu" as an Instagram Reel on @njangionchain for tomorrow, Friday 2 October 2026, at 11:00 AM US Eastern (15:00 UTC).
+
+Everything is in this folder on the Mac: /Volumes/Developing/njangi-on-chain/marketing/handoff/inbox/005-traditions-ep2-susu/
+
+Read JOB.md there first. Use circles-ep02-susu.mp4 (36.9 MB) as the video, circles-ep02-susu-cover.jpg as the cover, and paste CAPTION.txt verbatim (it already includes the hashtags). Do not use CAPTION.muse-draft.txt; it predates a fact fix. Schedule it in Meta Business Suite as you did for Ep. 1. Turn the AI label on if the composer offers it; if it does not, ask Stalanic, as last time. No location, no tags, no Facebook cross-post.
+
+Before scheduling, check that Ep. 1 went live on 26 September and that Ep. 2 is not already posted or scheduled.
+
+Stalanic approved this post today; please ask Stalanic for any in-app approval you need. If you cannot schedule natively, do not publish early: tell me and write it in RESULT.md. When it is scheduled, write RESULT.md in the same folder (my build notes are in BUILD.md) with the time, time zone, post ID and how it was scheduled.

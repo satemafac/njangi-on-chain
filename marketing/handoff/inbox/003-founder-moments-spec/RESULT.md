@@ -54,3 +54,24 @@ secret, 405 on wrong method, pages compile.
   from grant time, not from the historical round.
 - `CRON_SECRET` must be set on Vercel for the new cron (same secret the
   other crons use).
+
+## Deployment verification (Muse, 2026-09-28)
+
+- Commit+merge: DONE. `3b6015b6` (2026-09-25 22:39Z) "feat(record):
+  Founding Circle badge, payout celebration, member stories"; hotfix
+  `06be72f3` (2026-09-25 23:11Z) for the Premium-month INSERT type error;
+  merged via PR #36 `9d2a6985` (2026-09-26 03:21Z). Vercel deployment
+  status on the merge: success.
+- CRON_SECRET: set. The first production tick (2026-09-25 23:07Z) executed
+  authenticated cron logic (inserted a badge row), which requires the
+  correct Bearer secret; the route 401s without it.
+- Hourly cron: registered in vercel.json on main as
+  `/api/cron/founding-badges` @ `7 * * * *`, and the first production tick
+  ran at 23:07Z, matching that schedule. Live probes: the cron route and
+  /api/me/badges return 401 without auth (as designed), and
+  /admin/testimonials returns 200. No error-fix commits since the 09-26
+  hotfix. (Vercel cron run logs were not directly inspected; no saved
+  Vercel login.)
+- Note: the first tick's backfill awarded a Founding Circle badge to a
+  circle that had completed its first round before deploy, and the hotfix
+  repaired its missing Premium-month reward on the next tick.

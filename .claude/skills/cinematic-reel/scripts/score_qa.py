@@ -5,8 +5,9 @@ score_qa.py — objective checks on a generated score (you cannot listen to it).
   marketing/tools/.venv/bin/python score_qa.py <score.wav> <timeline.json> [--shift 0.8]
 
 Reports:
-  * vocals    Whisper over the score; any speech segment means the take has a
-              voice or lyrics -> reject it.
+  * vocals    Whisper (medium) over the score; a confident speech segment means
+              the take has a voice or lyrics -> reject it. Music hallucinations are shown
+              but ignored.
   * peak / RMS per 2 s, so you can see the dynamics follow the scenes.
   * brightness (spectral centroid) per scene: it should move with the story
     (dark on heritage/tension beats, brighter on the lift / brand beat).
@@ -61,10 +62,22 @@ def main() -> int:
     print(f"median lag {np.median(lags):+.2f}s (mix shift in use: {a.shift}s)")
 
     import whisper  # noqa: E402
-    res = whisper.load_model("base").transcribe(a.score, language="en", fp16=False, no_speech_threshold=0.5,
-                                                condition_on_previous_text=False)
-    speech = [s["text"].strip() for s in res["segments"] if s.get("no_speech_prob", 1) < 0.5]
-    print("vocals: " + ("NONE (ok)" if not speech else f"FOUND {speech[:5]} -> reject this take"))
+    # Whisper hallucinates on music ("Thanks for watching!", stray single words in
+    # other languages). Count a segment as a voice only when Whisper is confident
+    # there is speech AND confident in the words; the medium model hallucinates less.
+    HALLUCINATIONS = {"thanks for watching", "thank you", "thank you for watching", "you", "bye"}
+    res = whisper.load_model("medium").transcribe(a.score, language="en", fp16=False, no_speech_threshold=0.5,
+                                                  condition_on_previous_text=False)
+    speech = []
+    for seg in res["segments"]:
+        text = seg["text"].strip()
+        norm = "".join(ch for ch in text.lower() if ch.isalpha() or ch == " ").strip()
+        real = seg.get("no_speech_prob", 1) < 0.5 and seg.get("avg_logprob", -9) > -1.0 and norm not in HALLUCINATIONS
+        tag = "VOICE" if real else "ignored (music hallucination)"
+        print(f"  whisper {seg['start']:6.2f}-{seg['end']:6.2f}  no_speech {seg.get('no_speech_prob', 0):.2f}  logprob {seg.get('avg_logprob', 0):.2f}  {tag}: {text[:60]!r}")
+        if real:
+            speech.append(text)
+    print("vocals: " + ("NONE (ok)" if not speech else f"FOUND {speech[:5]} -> listen, then reject this take"))
     return 0
 
 

@@ -30,10 +30,10 @@ from google.genai import types
 
 HERE = Path(__file__).resolve().parent
 SR, CH, BYTES = 48000, 2, 2
-LEAD = 1.8   # seconds early to send a cue; the model eases into it
+LEAD = 3.0   # seconds early to send a cue: chunks arrive every ~2 s and the model eases in over ~1-2 s
 
 # Circles of the World house style (MOTION-BRIEF: 60-80 BPM, cinematic heritage lane)
-STYLE = "Cinematic heritage documentary score, instrumental, no vocals, warm and restrained, premium, spacious mix"
+STYLE = "Cinematic heritage documentary score, purely instrumental: no voices, no choir, no humming, no vocal samples; warm and restrained, premium, spacious mix"
 CUES = {
     "year":    ([("Somber low cello drone with sparse distant felt piano notes, D minor, quiet, weighty, historical", 1.0)], dict(density=0.18, brightness=0.3, mute_drums=True)),
     "rewrite": ([("Warm kora arpeggios enter with a gentle hopeful lift, felt piano, soft strings, turning toward major", 1.0)], dict(density=0.3, brightness=0.45, mute_drums=True)),
@@ -43,6 +43,21 @@ CUES = {
     "nobody":  ([("Confident warm resolution in D major, open uplifting strings, kora figure returns with a gentle talking drum pulse, assured", 1.0)], dict(density=0.45, brightness=0.55, mute_drums=False)),
     "title":   ([("Gentle ending, one sustained warm major chord on strings and felt piano, fading out", 1.0)], dict(density=0.12, brightness=0.4, mute_drums=True)),
 }
+# series scene names from Ep. 2 on (opening word + a journey beat) share the Ep. 1 moods by default
+CUES.setdefault("word", CUES["year"])
+CUES.setdefault("ocean", CUES["rewrite"])
+
+
+def apply_spec(spec: dict) -> None:
+    """An episode can colour its own beats: spec["score"] = {"style": str, "cues": {visual:
+    {"prompt": str, "density": f, "brightness": f, "mute_drums": bool}}}. Unlisted beats keep
+    the series default, so the family stays the same from episode to episode."""
+    global STYLE
+    sc = spec.get("score") or {}
+    STYLE = sc.get("style", STYLE)
+    for visual, c in (sc.get("cues") or {}).items():
+        base = CUES.get(visual, CUES["payin"])[1]
+        CUES[visual] = ([(c["prompt"], 1.0)], {**base, **{k: c[k] for k in ("density", "brightness", "mute_drums") if k in c}})
 
 
 def key() -> str:
@@ -104,7 +119,10 @@ def main() -> int:
     ap.add_argument("--timeline", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--seed", type=int, default=7)
+    ap.add_argument("--spec", default=None, help="episode spec; its optional 'score' block colours the cues")
     a = ap.parse_args()
+    if a.spec:
+        apply_spec(json.loads(Path(a.spec).read_text()))
     asyncio.run(run(json.loads(Path(a.timeline).read_text()), Path(a.out), a.seed))
     return 0
 

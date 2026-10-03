@@ -78,9 +78,54 @@ below cost a render pass in Ep. 1.
   the width without distortion. Title card: straight down, ~12.5 units, the
   mark shifted into the upper third by moving the target +z.
 
+## Ep. 2 additions
+
+- Portrait frames are only ~17° wide at FOV 30. A long route has to recede
+  in DEPTH (far end near the horizon, near end low in frame) and stay
+  within about +-8.6° sideways, or its ends fall out of frame.
+- Coin stack: camera ~15° above, ~2.5 units away, target just above the
+  stack so it sits between the title band and the captions.
+- Louvre light = a SpotLight with a slatted `map` (needs `castShadow`). Keep
+  it as its own light at intensity 0 elsewhere: toggling a map or shadow on
+  a shared light changes shader defines and recompiles mid-render.
+- Wood read as orange at `#5a3419`; `#3f2616` to `#2e1b0f` reads as varnished
+  hardwood under warm light.
+
 ## Render budget
 
 M1 Pro, 1080×1920, 16 samples: ~4.7 frames/s → a 78 s film in ~8.5 min.
 Probe sets (~27 stills) take under a minute. CRF 15 master ≈ 290 MB (the
 grain is expensive); CRF 16 upload ≈ 215 MB; CRF 20 review ≈ 40 MB at
 43 dB PSNR vs the master.
+
+## Reel 008 additions (Move. Transact. Save.)
+
+- **Orbits push the subject sideways.** A camera key whose target sits at
+  a fixed +z offset centres the circle at azimuth 0. At 40-70 degrees the
+  same offset turns sideways and pushes the circle off the frame edge. Put
+  the offset along the key's own azimuth instead:
+  `tx = d*sin(az), tz = d*cos(az)` (`kk()` in `film-008.js`).
+- **Black glass reflects only what is in its mirror direction.**
+  - A phone screen at el 35-42 degrees sees the dark band of the studio
+    environment, so it reads as a void.
+  - A punctual spot light makes a point highlight on it that blooms into a
+    flare.
+  - What worked: no spot, a key light from behind and high (its reflection
+    never reaches the lens), and the phone's own PMREM with a 2 x 12 strip
+    light raised ~37 degrees behind it, plus a dim spill panel.
+  - Sweep the strip across the glass with `material.envMapRotation`
+    (-0.3 to 0.6 rad over ~4 s). A 5-unit panel filled the whole glass
+    (a grey slab); 1.3 units crossed it in 0.4 s (missed by the probes).
+- **A phone pointed at the lens** (long axis toward the camera): at about
+  4.3 units it fills ~57% of the frame width. At 3 units it overflows.
+  Aim ~0.35 behind it so it sits under the hook type.
+- **Routes over water.**
+  - Lifts of 0.4-0.6 near the camera read as hoops; 0.15-0.22 skims the
+    water like a flight path.
+  - Keep far ends within +-1.1 at z -10.
+  - A small additive glowing tip at the drawing end sells "money moving".
+- **An empty stretch of picture under an introduction** (6 s of water while
+  the voice names the speaker) needs a documentary name card: the name in
+  Instrument Serif and the role in mono gold.
+- **Floor rings that mark beats** (one per name): use a thin ring (0.985-1.0)
+  at ~0.45 opacity. The standard pulse ring reads as a second circle.
