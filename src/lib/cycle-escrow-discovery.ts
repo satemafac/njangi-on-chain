@@ -10,16 +10,23 @@
 //      first, so the LAST id is the current round. One object read, served
 //      by every RPC endpoint, immune to event retention.
 //
-//      Tie-break: the NEWEST entry wins, unconditionally — never an older
-//      entry that happens to be unfinalized. Production 2026-08-30 (circle
-//      0xa3fada…675ed) minted two escrows for one round 34 seconds apart; the
-//      newer one is the admin's latest intent, and resolving to it converges
-//      every member's page onto a single pot, while "prefer the unfinalized
-//      one" would resurrect the empty orphan the moment the real round
-//      settled. The orphan reads as abandoned and its funds (if any) go back
-//      through the ordinary cancel path. Once the package carrying the
-//      duplicate-open guard (`E_ROUND_ALREADY_OPEN`) is published, two live
-//      escrows for one round cannot exist and the tie-break is moot.
+//      Tie-break: the NEWEST entry wins — never an older entry that happens
+//      to be unfinalized. Production 2026-08-30 (circle 0xa3fada…675ed)
+//      minted two escrows for one round 34 seconds apart; the newer one is
+//      the admin's latest intent, and resolving to it converges every
+//      member's page onto a single pot, while "prefer the unfinalized one"
+//      would resurrect the empty orphan the moment the real round settled.
+//      The orphan reads as abandoned and its funds (if any) go back through
+//      the ordinary cancel path.
+//
+//      One exception, from Circle Record v1.2: the circle's open-round
+//      marker. Every indexed open writes it, naming the escrow the contract
+//      now holds the round open for, and the duplicate-open guard
+//      (`E_ROUND_ALREADY_OPEN`) refuses a second open of that round. When
+//      the newest history entry is a DIFFERENT escrow for the marked round
+//      (same cycle, same recipient), the marker's escrow is the members'
+//      round and the newer one is the duplicate, however it got into the
+//      history. A marker for another round leaves newest-wins alone.
 //   2. `CycleEscrowOpened` events — the historical path, kept as the fallback
 //      for circles whose history field does not exist: they predate the
 //      indexed opens, or their rounds were opened through the original
@@ -49,7 +56,7 @@ import { getPooledSuiClient, withSuiRpcFailover } from '../services/sui-rpc-fail
 import type { CircleRotationPointer } from './cycle-round-progression';
 
 /** Which discovery tier produced a summary. */
-export type CycleEscrowDiscoverySource = 'escrow_history' | 'events';
+export type CycleEscrowDiscoverySource = 'escrow_history' | 'open_round' | 'events';
 
 export interface CycleEscrowSummary {
   escrowId: string;
@@ -226,6 +233,111 @@ export async function readCircleEscrowHistory(
     console.warn('[cycle-escrow-discovery] escrow_history read failed', { circleId, err });
     return { kind: 'unknown' };
   }
+}
+
+// ---------------------------------------------------------------------------
+// The open-round marker (Circle Record v1.2)
+// ---------------------------------------------------------------------------
+
+/**
+ * `njangi_circles::FIELD_OPEN_ROUND` is `b"open_round"`, keyed by the raw
+ * `vector<u8>` like `escrow_history`. Read it by name, never by type: its
+ * `OpenRound` value type is anchored to the package version that introduced
+ * it, not to the original id.
+ */
+export const OPEN_ROUND_FIELD_NAME: { type: string; value: number[] } = {
+  type: 'vector<u8>',
+  value: Array.from(new TextEncoder().encode('open_round')),
+};
+
+export type CircleOpenRoundRead =
+  /**
+   * The round the contract holds open: written by every indexed open and
+   * cleared once that round pays out and rotates the circle
+   * (`advance_circle_after_claim`) or is released (`release_open_round`).
+   */
+  | { kind: 'found'; cycleNo: number; recipient: string; escrowId: string }
+  /** No marker: never written (older circles, un-indexed opens) or cleared. */
+  | { kind: 'absent' }
+  /** The read failed. Nothing may be inferred. */
+  | { kind: 'unknown' };
+
+/** The circle's open-round marker, tri-state like the escrow history. */
+export async function readCircleOpenRound(
+  client: SuiClient,
+  circleId: string,
+): Promise<CircleOpenRoundRead> {
+  try {
+    const field = await client.getDynamicFieldObject({
+      parentId: circleId,
+      name: OPEN_ROUND_FIELD_NAME,
+    });
+    if (field.error) {
+      const code = (field.error as { code?: string }).code ?? '';
+      return code === 'dynamicFieldNotFound' ? { kind: 'absent' } : { kind: 'unknown' };
+    }
+    const content = field.data?.content;
+    if (!content || content.dataType !== 'moveObject') return { kind: 'unknown' };
+    const marker = unwrapStruct((content.fields as { value?: unknown }).value);
+    const cycleNo = Number(marker?.cycle_no);
+    const recipient = marker?.recipient;
+    const escrowId = marker?.escrow_id;
+    if (!Number.isSafeInteger(cycleNo) || typeof recipient !== 'string' || typeof escrowId !== 'string') {
+      return { kind: 'unknown' };
+    }
+    return { kind: 'found', cycleNo, recipient, escrowId };
+  } catch (err) {
+    console.warn('[cycle-escrow-discovery] open_round read failed', { circleId, err });
+    return { kind: 'unknown' };
+  }
+}
+
+/**
+ * Newest wins, except against the marker: a different escrow for the round
+ * the marker names (same cycle, same recipient) is a duplicate, and the
+ * members' round is the marked one. Throws when that question cannot be
+ * answered — an unreadable marker, or a marked escrow that cannot be
+ * verified — rather than guessing that the newest entry is the round.
+ */
+async function preferMarkedEscrow(
+  client: SuiClient,
+  circleId: string,
+  newest: CycleEscrowSummary,
+  marker: CircleOpenRoundRead,
+): Promise<CycleEscrowSummary> {
+  if (marker.kind === 'absent') return newest;
+  if (marker.kind === 'unknown') {
+    throw new Error(
+      `[cycle-escrow-discovery] Could not read the open-round marker of ${circleId}, so whether its newest escrow is the open round is unknown.`,
+    );
+  }
+  if (normalizeAddress(marker.escrowId) === normalizeAddress(newest.escrowId)) return newest;
+  const sameRound =
+    marker.cycleNo === newest.cycleNo &&
+    normalizeAddress(marker.recipient) === normalizeAddress(newest.recipient);
+  // A marker for another round says nothing about this one.
+  if (!sameRound) return newest;
+
+  const verified = await verifyCycleEscrowForCircle(client, marker.escrowId, circleId);
+  if (verified.verdict === null) {
+    throw new Error(
+      `[cycle-escrow-discovery] Could not verify the escrow ${marker.escrowId} that the open-round marker of ${circleId} names.`,
+    );
+  }
+  if (verified.verdict === false) {
+    // Cannot happen by construction: only the package writes the marker,
+    // naming an escrow it just minted for this circle.
+    console.warn(
+      '[cycle-escrow-discovery] open-round marker names an escrow that is not this circle’s; ignoring it',
+      { circleId, escrowId: marker.escrowId },
+    );
+    return newest;
+  }
+  console.warn(
+    '[cycle-escrow-discovery] newest escrow_history entry is a second escrow for the open round; following the open-round marker',
+    { circleId, marked: marker.escrowId, newest: newest.escrowId },
+  );
+  return { ...verified.summary, source: 'open_round' };
 }
 
 // ---------------------------------------------------------------------------
@@ -433,6 +545,9 @@ export async function findCurrentCycleEscrow(
   const history = await readCircleEscrowHistory(client, circleId);
   let historyUnknown = history.kind === 'unknown';
   if (history.kind === 'found') {
+    // Only the current round has a marker to consult; read it alongside
+    // the newest entry's verification.
+    const markerRead = wantedCycle === undefined ? readCircleOpenRound(client, circleId) : null;
     // Newest last on chain, and newest wins — see the tie-break in the
     // header: an older unfinalized entry is an orphan, not the round.
     // Without a cycle filter only the last id can be the current round, so
@@ -459,7 +574,8 @@ export async function findCurrentCycleEscrow(
         continue;
       }
       if (wantedCycle !== undefined && verified.summary.cycleNo !== wantedCycle) continue;
-      return { ...verified.summary, source: 'escrow_history' };
+      const newest: CycleEscrowSummary = { ...verified.summary, source: 'escrow_history' };
+      return markerRead ? preferMarkedEscrow(client, circleId, newest, await markerRead) : newest;
     }
   }
   if (historyUnknown) {
