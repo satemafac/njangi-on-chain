@@ -123,6 +123,23 @@ export function isEscrowRoundGuardEnabled(): boolean {
   return flagEnabled(process.env.NEXT_PUBLIC_ESCROW_ROUND_GUARD_ENABLED);
 }
 
+/**
+ * Collecting a round that is already finalized. The package version carrying
+ * it lets `finalize_and_redeem*` pay out an escrow someone else finalized
+ * (`finalize_to_recipient` is permissionless) straight from the escrow, so
+ * Collect is one call whatever the round's finalize state and never needs
+ * the recipient's `Claim<T>` object.
+ *
+ * Same rule as the flags above: this says which transaction the client
+ * BUILDS. Flip it on only after that package is published on the active
+ * network — before then `finalize_and_redeem` on a finalized escrow aborts
+ * 205 E_ALREADY_FINALIZED. Left off, Collect on a finalized escrow redeems
+ * the Claim from the recipient's wallet instead (cycle-escrow-collect.ts).
+ */
+export function isFinalizedEscrowCollectEnabled(): boolean {
+  return flagEnabled(process.env.NEXT_PUBLIC_ESCROW_FINALIZED_COLLECT_ENABLED);
+}
+
 export function isRampEnabled(provider: 'coinbase' | 'moonpay' | 'transak'): boolean {
   switch (provider) {
     case 'coinbase':

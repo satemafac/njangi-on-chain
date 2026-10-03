@@ -49,7 +49,10 @@ import {
   isComplianceGateEnabled,
   resolveComplianceConfigId,
 } from '@/lib/compliance-gate';
-import { isTimedEscrowEntriesEnabled } from '@/config/feature-flags';
+import {
+  isFinalizedEscrowCollectEnabled,
+  isTimedEscrowEntriesEnabled,
+} from '@/config/feature-flags';
 import VerificationRequiredModal from '@/components/VerificationRequiredModal';
 import PayoutCelebration from '@/components/PayoutCelebration';
 import {
@@ -708,9 +711,13 @@ export function CycleEscrowPanel({
     }
     setCollectIssue(null);
     // Someone else may already have finalized this round
-    // (`finalize_to_recipient` is permissionless); finalize_and_redeem*
-    // would then abort 205. See cycle-escrow-collect.ts.
-    const route = resolveCollectRoute(liveState);
+    // (`finalize_to_recipient` is permissionless). Until the package that
+    // collects a finalized escrow is live, finalize_and_redeem* would then
+    // abort 205, so the route redeems the Claim instead. See
+    // cycle-escrow-collect.ts.
+    const route = resolveCollectRoute(liveState, {
+      finalizedCollect: isFinalizedEscrowCollectEnabled(),
+    });
     if (route.kind === 'none') {
       if (route.reason === 'gated-claim') {
         toast.error(
