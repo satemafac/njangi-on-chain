@@ -393,7 +393,8 @@ Heroku is retired: Vercel is the only deploy target. The `Procfile`,
    bootstrap. Answer `y` so the script auto-calls
    `whatsapp_integration::init_registry`,
    `njangi_price_validator::init_registry`, and captures the
-   `AttestorCap` object id minted by `njangi_compliance::init`.
+   `AttestorCap` object id minted by `njangi_compliance::init` and the
+   `ComplianceConfig` id that `init` shared.
 7. `npm run validate:env` — confirms every required active-network id is
    populated, including the new `NEXT_PUBLIC_TESTNET_NJANGI_ATTESTOR_CAP_ID`
    and `NEXT_PUBLIC_TESTNET_NJANGI_ASSET_REGISTRY_ID`.
@@ -426,7 +427,15 @@ it points at a live shared registry of `<packageId>`'s lineage. The expected
 type comes from the package's type origin table, so passing the latest
 upgraded id keeps the live registries. A `0xyour_…` placeholder, an id
 missing on that network, or a previous lineage's registry (the `link_circle`
-TypeMismatch) gets a fresh `init_registry` and is overwritten. Every check
+TypeMismatch) gets a fresh `init_registry` and is overwritten. The
+`ComplianceConfig` id is kept by the same rule, but anything else is
+replaced by the lineage's EXISTING config (the one `init` shared at the
+publish, or the one the first `ComplianceConfigCreated` event names), never
+by a second one: gated escrows accept only the config they pinned. Only a
+lineage with no config (it gained `njangi_compliance` through an upgrade,
+where `init` never runs) gets `njangi_compliance::create_config`, signed
+with the UpgradeCap from `NJANGI_BOOTSTRAP_UPGRADE_CAP_ID` or
+`move/Published.toml`, which the active address must hold. Every check
 runs before the first signed call; when a read fails, the script stops with
 nothing signed or written. Reads go to `NEXT_PUBLIC_<NET>_RPC_URL` (override:
 `NJANGI_BOOTSTRAP_RPC_URL`). `npm run validate:env` rejects placeholder ids

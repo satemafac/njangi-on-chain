@@ -10,6 +10,8 @@
 //   2. Finds the `AttestorCap` that `njangi_compliance::init` minted to the
 //      deployer. Writes `NEXT_PUBLIC_<NETWORK>_NJANGI_ATTESTOR_CAP_ID` and the
 //      public `NEXT_PUBLIC_NJANGI_ATTESTATION_ISSUER` (the cap-holder address).
+//      It never mints a cap: a lineage that gained njangi_compliance through
+//      an upgrade has none until someone calls `mint_attestor_cap`.
 //   3. Keeps `NEXT_PUBLIC_<NETWORK>_WHATSAPP_REGISTRY_ID` only if it points at
 //      a live shared `WhatsAppLinksRegistry` of this package's lineage on this
 //      network. Otherwise it calls `whatsapp_integration::init_registry` and
@@ -18,7 +20,17 @@
 //      lineage's registry are all replaced.
 //   4. Same rule for `NEXT_PUBLIC_<NETWORK>_NJANGI_ASSET_REGISTRY_ID` and
 //      `njangi_price_validator::init_registry`.
-//   5. Patches `.env.local` with those ids without touching anything else.
+//   5. Keeps `NEXT_PUBLIC_<NETWORK>_NJANGI_COMPLIANCE_CONFIG_ID` only if it
+//      points at a live shared `ComplianceConfig` of this lineage. Otherwise
+//      it records the lineage's existing config: the one `init` shared in the
+//      publish transaction, or the one the first `ComplianceConfigCreated`
+//      event names. Only a lineage without any config (it gained
+//      njangi_compliance through an upgrade, and `init` never runs on one)
+//      gets `njangi_compliance::create_config(upgrade_cap)`; a second config
+//      would take revocations away from the one gated escrows pinned
+//      (planComplianceConfig in scripts/lib/registry-bootstrap.ts). The
+//      UpgradeCap must be owned by the active address.
+//   6. Patches `.env.local` with those ids without touching anything else.
 //
 // Every read happens before the first signed call. If one cannot be
 // answered (RPC error, rate limit), the script stops without signing or
@@ -50,6 +62,9 @@
 //   NJANGI_BOOTSTRAP_ENV_FILE  override .env.local path
 //   NJANGI_BOOTSTRAP_RPC_URL  JSON-RPC endpoint for the reads (default: the
 //     env file's NEXT_PUBLIC_<NETWORK>_RPC_URL, else publicnode)
+//   NJANGI_BOOTSTRAP_UPGRADE_CAP_ID  the UpgradeCap, read only when
+//     create_config must run (default: move/Published.toml's
+//     upgrade-capability for the network)
 
 import { execFile, execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
@@ -62,7 +77,9 @@ import {
   definingType,
   isSuiObjectId,
   normalizeStructType,
+  planComplianceConfig,
   planRegistry,
+  planUpgradeCap,
 } from './lib/registry-bootstrap.ts';
 
 const exec = promisify(execFile);
@@ -93,15 +110,20 @@ const ENV_KEYS = {
   attestorIssuer: 'NEXT_PUBLIC_NJANGI_ATTESTATION_ISSUER',
   whatsappRegistry: `NEXT_PUBLIC_${NETWORK_UPPER}_WHATSAPP_REGISTRY_ID`,
   assetRegistry: `NEXT_PUBLIC_${NETWORK_UPPER}_NJANGI_ASSET_REGISTRY_ID`,
+  complianceConfig: `NEXT_PUBLIC_${NETWORK_UPPER}_NJANGI_COMPLIANCE_CONFIG_ID`,
 };
 
-// [module, struct] of every object the bootstrap looks for. The full types
+// [module, struct] of every type the bootstrap looks for. The full types
 // come from the package's type origin table (resolveStructTypes).
 const STRUCTS = {
   attestorCap: ['njangi_compliance', 'AttestorCap'],
   whatsappRegistry: ['whatsapp_integration', 'WhatsAppLinksRegistry'],
   assetRegistry: ['njangi_price_validator', 'AssetRegistry'],
+  complianceConfig: ['njangi_compliance', 'ComplianceConfig'],
+  complianceConfigCreated: ['njangi_compliance', 'ComplianceConfigCreated'],
 };
+
+const PUBLISHED_TOML = resolve(repoRoot, 'move', 'Published.toml');
 
 const REGISTRIES = [
   {
@@ -251,6 +273,7 @@ async function resolveStructTypes() {
 
 async function callMoveAndCaptureSharedObject(target, structType) {
   log(`calling ${target.module}::${target.fn}`);
+  const args = target.args?.length ? ['--args', ...target.args] : [];
   const result = await suiCallJson([
     'call',
     '--package',
@@ -259,9 +282,17 @@ async function callMoveAndCaptureSharedObject(target, structType) {
     target.module,
     '--function',
     target.fn,
+    ...args,
     '--gas-budget',
     GAS_BUDGET,
   ]);
+  // An aborted transaction can still come back as JSON (create_config aborts
+  // with 306, E_FOREIGN_UPGRADE_CAP, when the package's compiled
+  // njangi_upgrade_cap pin does not name the UpgradeCap).
+  const status = result?.effects?.status;
+  if (status && status.status !== 'success') {
+    throw new Error(`${target.module}::${target.fn} failed on chain: ${status.error ?? JSON.stringify(status)}`);
+  }
   const changes = result?.objectChanges ?? [];
   for (const change of changes) {
     if (change?.type === 'created' && normalizeStructType(change?.objectType ?? '') === structType) {
@@ -301,7 +332,7 @@ async function main() {
   const deployer = await activeAddress();
   log(`deployer=${deployer}`);
 
-  // Reads only until every registry has a plan.
+  // Reads only until every id has a plan.
   const types = await resolveStructTypes();
 
   // 1. AttestorCap (auto-minted by njangi_compliance::init at publish)
@@ -323,15 +354,41 @@ async function main() {
     plans.push({ registry, configured, plan });
   }
 
-  const stopped = plans.filter(({ plan }) => plan.action === 'stop');
+  // 4. ComplianceConfig: kept, recorded from the chain, or created.
+  const configKey = ENV_KEYS.complianceConfig;
+  const configuredConfig = map.get(configKey);
+  const configPlan = await planComplianceConfig(
+    configuredConfig,
+    { config: types.complianceConfig, createdEvent: types.complianceConfigCreated },
+    rpcCall,
+  );
+  const capPlan =
+    configPlan.action === 'create'
+      ? await planUpgradeCap(
+          {
+            override: process.env.NJANGI_BOOTSTRAP_UPGRADE_CAP_ID,
+            publishedToml: existsSync(PUBLISHED_TOML) ? readFileSync(PUBLISHED_TOML, 'utf8') : '',
+            network: NETWORK,
+          },
+          { owner: deployer, packageId: PACKAGE_ID },
+          (id) => rpcCall('sui_getObject', [id, { showType: true, showOwner: true, showContent: true }]),
+        )
+      : null;
+
+  const stopped = plans
+    .filter(({ plan }) => plan.action === 'stop')
+    .map(({ registry, plan }) => `${registry.envKey}: ${plan.reason}`);
+  if (configPlan.action === 'stop') stopped.push(`${configKey}: ${configPlan.reason}`);
+  if (capPlan?.action === 'stop') stopped.push(`${configKey}: ${configPlan.reason}, but ${capPlan.reason}`);
   if (stopped.length > 0) {
-    for (const { registry, plan } of stopped) log(`${registry.envKey}: ${plan.reason}`);
+    for (const reason of stopped) log(reason);
     throw new Error(
-      `could not check every registry, so nothing was signed and ${envLabel} is unchanged. ` +
-        'Re-run when the RPC answers, or point NJANGI_BOOTSTRAP_RPC_URL at another JSON-RPC endpoint.',
+      `stopped before signing anything; ${envLabel} is unchanged. Fix the cause above and re-run. ` +
+        'If a read failed, re-run when the RPC answers, or point NJANGI_BOOTSTRAP_RPC_URL at another JSON-RPC endpoint.',
     );
   }
 
+  if (configPlan.action === 'record') updates.set(configKey, configPlan.id);
   patchEnv(updates);
   let written = updates.size;
 
@@ -352,6 +409,27 @@ async function main() {
     patchEnv(new Map([[registry.envKey, created]]));
     written += 1;
     log(`${registry.envKey}=${created}`);
+  }
+
+  if (configPlan.action === 'keep') {
+    log(`${configKey}=${configuredConfig} is a live ${types.complianceConfig}; keeping it`);
+  } else if (configPlan.action === 'record') {
+    log(`${configKey}: ${configPlan.reason}; recorded ${configPlan.id}`);
+  } else {
+    log(`${configKey}: ${configPlan.reason}; creating one with UpgradeCap ${capPlan.id}`);
+    const created = await callMoveAndCaptureSharedObject(
+      { module: 'njangi_compliance', fn: 'create_config', args: [capPlan.id] },
+      types.complianceConfig,
+    );
+    if (!created) {
+      throw new Error(
+        `no ${types.complianceConfig} in the njangi_compliance::create_config output. ` +
+          `If that transaction succeeded, set ${configKey} to the shared object it created.`,
+      );
+    }
+    patchEnv(new Map([[configKey, created]]));
+    written += 1;
+    log(`${configKey}=${created}`);
   }
 
   log(`patched ${written} env entries in ${envLabel}`);
