@@ -576,6 +576,37 @@ describe('scrubSentryEvent', () => {
     expect(scrubbed.spans?.[1].description).toBe('GET /api/record/shared/[token]');
   });
 
+  it("scrubs the transaction name in the envelope's trace header without changing the SDK's copy", () => {
+    // Seen end to end on `next dev`: the page transaction was named
+    // "GET /record/s/[token]" in the payload, but the trace header kept the
+    // raw path it was frozen with.
+    const dsc = {
+      trace_id: 'trace',
+      public_key: 'public',
+      sampled: 'true',
+      transaction: `GET /record/s/${FAKE_SHARE_TOKEN}`,
+    };
+    const event: Event = {
+      type: 'transaction',
+      transaction: 'GET /record/s/[token]',
+      sdkProcessingMetadata: { dynamicSamplingContext: dsc },
+    };
+
+    const scrubbed = scrubSentryEvent(event);
+
+    expect(scrubbed.sdkProcessingMetadata?.dynamicSamplingContext).toEqual({
+      ...dsc,
+      transaction: `GET /record/s/${FILTERED}`,
+    });
+    expect(dsc.transaction).toBe(`GET /record/s/${FAKE_SHARE_TOKEN}`);
+    // Names that need nothing keep the same object.
+    const route = { trace_id: 'trace', transaction: 'GET /api/health' };
+    expect(
+      scrubSentryEvent({ sdkProcessingMetadata: { dynamicSamplingContext: route } })
+        .sdkProcessingMetadata?.dynamicSamplingContext,
+    ).toBe(route);
+  });
+
   it('scrubs captured messages', () => {
     expect(scrubSentryEvent({ message: `Login failed for ${FAKE_JWT}` }).message).toBe(
       `Login failed for ${FILTERED}`,

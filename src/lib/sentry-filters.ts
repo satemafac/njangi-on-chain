@@ -442,9 +442,10 @@ function noteDropped(event: Event, field: string): void {
  * KEPT_REQUEST_HEADERS, and the matching span attributes.
  *
  * Secrets in URLs and text: request.url, query_string, Referer, the
- * onRequestError context's request_path, the transaction name, messages,
- * exception values, breadcrumbs, span descriptions and span data lose
- * their fragments, query values, share tokens and token-shaped strings.
+ * onRequestError context's request_path, the transaction name (and its copy
+ * in the envelope's trace header), messages, exception values, breadcrumbs,
+ * span descriptions and span data lose their fragments, query values, share
+ * tokens and token-shaped strings.
  */
 export function scrubSentryEvent<T extends Event>(event: T): T {
   attempt(
@@ -476,6 +477,27 @@ export function scrubSentryEvent<T extends Event>(event: T): T {
     },
     () => {
       if (event.transaction !== undefined) event.transaction = FILTERED;
+    },
+  );
+  attempt(
+    event,
+    'dynamicSamplingContext',
+    () => {
+      // The envelope header's trace context carries its own copy of the
+      // transaction name, frozen before Next parameterizes it, e.g.
+      // "GET /record/s/<token>".
+      const metadata = event.sdkProcessingMetadata;
+      const dsc = metadata?.dynamicSamplingContext;
+      if (dsc && typeof dsc.transaction === 'string') {
+        const transaction = scrubString(dsc.transaction);
+        // A copy: the SDK can share this object with the span.
+        if (transaction !== dsc.transaction) {
+          metadata.dynamicSamplingContext = { ...dsc, transaction };
+        }
+      }
+    },
+    () => {
+      if (event.sdkProcessingMetadata) delete event.sdkProcessingMetadata.dynamicSamplingContext;
     },
   );
   attempt(
