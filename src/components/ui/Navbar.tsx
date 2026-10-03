@@ -191,46 +191,6 @@ export const Navbar: React.FC = () => {
     }
   }, [account, router.query.id, router.pathname, lastFetchTime]);
 
-  // Clear all notifications
-  const clearAllNotifications = useCallback(async () => {
-    if (!account) return;
-    
-    try {
-      setLoading(true);
-      console.log('[Navbar] Clearing all notifications...');
-      
-      // Check if we're on localhost
-      const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-      
-      if (isLocalhost) {
-        // For localhost, call the clear API for any circle (the API will clear all)
-        const response = await fetch('/api/join-requests/pending/mock-circle-1?clear=all', {
-          method: 'GET',
-          signal: AbortSignal.timeout(5000)
-        });
-        
-        if (response.ok) {
-          console.log('[Navbar] Successfully cleared all notifications');
-          setPendingRequests([]);
-          setShowNotifications(false);
-        } else {
-          console.error('[Navbar] Failed to clear notifications');
-          setFetchError('Failed to clear notifications');
-        }
-      } else {
-        // For production, you might want to implement actual clearing logic
-        console.log('[Navbar] Clear function not implemented for production');
-        setFetchError('Clear function not available in production');
-      }
-      
-    } catch (error) {
-      console.error('[Navbar] Error clearing notifications:', error);
-      setFetchError('Failed to clear notifications');
-    } finally {
-      setLoading(false);
-    }
-  }, [account]);
-
   // Reset retry count when account changes
   useEffect(() => {
     retryCount.current = 0;
@@ -446,27 +406,6 @@ export const Navbar: React.FC = () => {
                         <p className="text-xs text-slate-500 sm:text-sm">Join requests for your circles</p>
                       </div>
                       <div className="flex items-center gap-1">
-                        {pendingRequests.length > 0 && (
-                          <button
-                            onClick={clearAllNotifications}
-                            disabled={loading}
-                            className={`inline-flex h-9 w-9 items-center justify-center rounded-full transition-colors ${
-                              loading
-                                ? 'text-stone-300'
-                                : 'text-red-500 hover:bg-red-50 hover:text-red-600'
-                            }`}
-                            title="Clear all notifications"
-                          >
-                            <svg
-                              className="h-4 w-4"
-                              fill="none"
-                              stroke="currentColor"
-                              viewBox="0 0 24 24"
-                            >
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1-1H8a1 1 0 00-1 1v3M4 7h16" />
-                            </svg>
-                          </button>
-                        )}
                         <button
                           onClick={() => fetchPendingRequests()}
                           disabled={loading}

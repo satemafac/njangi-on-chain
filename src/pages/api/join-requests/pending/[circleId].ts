@@ -21,7 +21,6 @@ export default async function handler(
   res: NextApiResponse<ResponseData>
 ) {
   const { circleId } = req.query;
-  const { clear } = req.query; // Support ?clear=all parameter
 
   // Validate required parameter
   if (!circleId || typeof circleId !== 'string') {
@@ -32,17 +31,6 @@ export default async function handler(
   }
 
   if (req.method === 'GET') {
-    // `?clear=all` (the Navbar's localhost "Clear all") clears nothing and
-    // returns no rows, so it reads no data and needs no session.
-    if (clear === 'all') {
-      console.log('[DEBUG] Clear parameter not implemented');
-      return res.status(200).json({
-        success: true,
-        data: [],
-        message: 'Clear function not implemented for SQLite database'
-      });
-    }
-
     // The pending queue lists applicants' addresses and names: only the
     // circle's on-chain admin may read it.
     const auth = await requireCircleAdmin(req, circleId);
@@ -95,30 +83,6 @@ export default async function handler(
       return res.status(500).json({
         success: false,
         message: 'Failed to fetch pending join requests'
-      });
-    }
-  } else if (req.method === 'DELETE') {
-    // Handle clearing notifications
-    try {
-      if (isLocalhost()) {
-        // For SQLite, we could implement a clear method if needed
-        console.log('[DEBUG] Clear function not implemented for SQLite database');
-        return res.status(200).json({
-          success: true,
-          message: 'Clear function not implemented for SQLite database'
-        });
-      } else {
-        // For production, you might want to implement actual clearing logic
-        return res.status(200).json({
-          success: true,
-          message: 'Clear functionality not implemented for production'
-        });
-      }
-    } catch (error) {
-      console.error('Error clearing notifications:', error);
-      return res.status(500).json({
-        success: false,
-        message: 'Failed to clear notifications'
       });
     }
   } else {
