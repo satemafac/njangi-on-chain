@@ -5,6 +5,7 @@
 // browser DSN must be NEXT_PUBLIC_SENTRY_DSN. DSNs are write-only ingest
 // keys, not secrets.
 import * as Sentry from '@sentry/nextjs';
+import { scrubSentryBreadcrumb, scrubSentryEvent } from './src/lib/sentry-filters';
 
 const dsn = process.env.NEXT_PUBLIC_SENTRY_DSN;
 
@@ -17,6 +18,14 @@ if (dsn) {
     tracesSampleRate: Number(process.env.NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE ?? '0.1'),
     // zkLogin/PII hygiene: never attach request bodies, cookies, or user IP.
     sendDefaultPii: false,
+    // sendDefaultPii does not cover URLs or log lines: every event carries
+    // location.href, fragment included (the OAuth id_token on /auth/callback
+    // wherever the inline script that parks it did not run), and breadcrumbs
+    // keep URLs and console arguments. The scrubber strips fragments, query
+    // values, share tokens and token-shaped strings (src/lib/sentry-filters.ts).
+    beforeSend: scrubSentryEvent,
+    beforeSendTransaction: scrubSentryEvent,
+    beforeBreadcrumb: scrubSentryBreadcrumb,
     // Next's post-hydration middleware re-check throws this when its data
     // fetch fails, although the page itself is fine. It is handled in
     // useSameUrlNavigationRecovery (silenced, or one reload after a real
