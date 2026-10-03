@@ -22,9 +22,7 @@ import { join, relative } from 'path';
 const SWAP_SOURCES = [
   'src/services/cetus-service.ts',
   'src/lib/cetus-service.ts',
-  'src/services/sui-swap-router.ts',
   'src/services/swap-service.ts',
-  'src/lib/swap-service.ts',
 ];
 
 const read = (rel: string) => {
