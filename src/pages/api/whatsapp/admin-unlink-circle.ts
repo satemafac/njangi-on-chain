@@ -28,6 +28,7 @@ import {
 } from '../../../middleware/admin-auth.middleware';
 import { getActiveWhatsAppRegistries } from '../../../services/whatsapp-registry-service';
 import { deindexWhatsAppLinksForCircle } from '../../../lib/whatsapp-link-index';
+import { markCircleLinkKeysUnlinked } from '../../../lib/whatsapp-pii-keys';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -112,6 +113,18 @@ async function handlePost(req: AuthenticatedRequest, res: NextApiResponse) {
       await deindexWhatsAppLinksForCircle(circleId);
     } catch (indexError) {
       console.warn('[admin-unlink-circle] Failed to deindex WhatsApp link', indexError);
+    }
+
+    // Mark the link's data key for deletion. It outlives the unlink only
+    // until the "Circle disconnected" message has gone out: the
+    // whatsapp-circle-events cron deletes it then, and the daily
+    // walrus-renewal cron deletes any marked key it missed
+    // (src/lib/whatsapp-pii-keys.ts). Non-fatal like the deindex: the cron
+    // finds the key by the unlink event's nonce either way.
+    try {
+      await markCircleLinkKeysUnlinked(circleId);
+    } catch (keyError) {
+      console.warn('[admin-unlink-circle] Failed to mark the link data key unlinked', keyError);
     }
 
     logAdminAction('UNLINK_CIRCLE_SUCCESS', adminAddr, {

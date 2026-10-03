@@ -1,6 +1,6 @@
 # Records of Processing Activities (GDPR Art. 30 — internal)
 
-_Last updated: 2026-10-01. Owner: founder. Controller: {{COMPANY_LEGAL_NAME}}
+_Last updated: 2026-10-03. Owner: founder. Controller: {{COMPANY_LEGAL_NAME}}
 (placeholder pending counsel — same entity as the ToS). Scope: the Njangi
 On-Chain web app. Companion: [dpa-inventory.md](dpa-inventory.md),
 [compliance-roadmap-cex-dex-non-kyc.md](compliance-roadmap-cex-dex-non-kyc.md)._
@@ -17,7 +17,7 @@ yet: `mainnet_signups`, `compliance_attestation_queue`,
 |---|----------|------|----------|--------------|---------|-----------|
 | 1 | Social sign-in (zkLogin) | OAuth ID token (`iss`/`sub`/`aud`, plus email, name and picture where the provider includes them); zkLogin salt; derived wallet address | Users | Contract (providing the service) | Enoki (Mysten Labs) derives the salt and generates the zkProof at every sign-in (processor, see [dpa-inventory.md](dpa-inventory.md)); Postgres `zklogin_sessions` (session payload incl. a copy of the salt + proof, AES-256-GCM; `sub`/`aud`/address in plain columns); browser `sessionStorage` (tab-scoped signer, incl. the salt) | Sessions: 24h TTL, then deleted (lazily, on the next session read; a new login also deletes the user's older sessions), and the salt copy goes with them. Browser copy: until sign-out (incl. the 15-min idle auto-logout) or tab close. Enoki side: no retention term stated (☐ dpa-inventory) |
 | 2 | Legacy salt records (retired) | Encrypted salts (`salts`) and salted hashes of recovery codes (`recovery_codes`) from the self-hosted salt service | Anyone who signed in through that service before 2025-05-24, if rows remain | None ongoing: the purpose ended when salts moved to Enoki (2025-05-24) | Postgres `salts`, `recovery_codes`; nothing has written or read them since (see [zklogin-salt-source.md](zklogin-salt-source.md)) | No new rows. Remaining rows are deleted on a verified request (executor step 3). ☐ Owner: count them and decide on a purge |
-| 3 | WhatsApp notifications | Phone number / group id (AES-256-GCM encrypted on Walrus; HMAC index in Postgres); message content at send time | Circle admins/members who opt in | Consent (explicit link action) | Walrus (ciphertext) + Postgres `whatsapp_phone_index` (HMAC only) | Until unlink or deletion request; blobs expire unrenewed after deletion |
+| 3 | WhatsApp notifications | Phone number / group id (AES-256-GCM encrypted on Walrus under a per-link data key; HMAC index in Postgres); message content at send time | Circle admins/members who opt in | Consent (explicit link action) | Walrus (ciphertext) + Postgres `whatsapp_phone_index` (HMAC only) + Postgres `whatsapp_pii_keys` (the per-link data keys, wrapped under the master key, with the HMAC and circle id) | Until unlink or deletion request. Erasure deletes the link's data key, after which no copy of its blob opens; on unlink that happens once the disconnection message is sent (48 hours at most). The blobs then expire unrenewed. Links made before per-link keys have no data key: their blobs expire unrenewed after deletion |
 | 4 | Join requests | Wallet address, chosen display name, circle id | Prospective members | Contract | Postgres `join_requests` | Until processed + deletion request |
 | 5 | Subscription billing | Email + billing details (held BY STRIPE); we store customer/subscription ids + status | Paying admins | Contract | Stripe; Postgres `subscriptions` | Stripe retention; ids kept for accounting (legal hold) |
 | 6 | Legal acceptance log | `sub`/`aud`, doc id/version, locale, HMAC'd IP | Users | Legal obligation / legitimate interest (defense of claims) | Postgres `legal_acceptances` (append-only) | Retained (documented legal hold) |
@@ -37,9 +37,11 @@ except Enoki (Mysten Labs, US), which has no DPA on file yet (☐ in the
 inventory).
 
 **Erasure path:** public form `/legal/data-deletion` → `deletion_requests`
-row → operator runs `scripts/process-deletion-request.mjs` (deletes rows,
-records phone HMAC so Walrus blobs are never renewed again and expire
-on-network). On-chain data cannot be erased; disclosed in the policy.
+row → operator runs `scripts/process-deletion-request.mjs` (deletes rows; for
+WhatsApp, the number's link data keys and index rows in one transaction, so no
+copy of its encrypted blobs opens any more and none is renewed; records the
+phone HMAC as the record of what was erased). On-chain data cannot be erased;
+disclosed in the policy.
 
 **Identity verification before erasure (mandatory):** the public form is
 unauthenticated by design (a locked-out user must still be able to request

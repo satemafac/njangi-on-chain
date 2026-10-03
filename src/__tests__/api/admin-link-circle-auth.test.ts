@@ -49,6 +49,9 @@ jest.mock('@/lib/whatsapp-link-index', () => ({
   deindexWhatsAppLinksForCircle: jest.fn(),
   lookupBlobsForCircle: jest.fn(),
 }));
+jest.mock('@/lib/whatsapp-pii-keys', () => ({
+  markCircleLinkKeysUnlinked: jest.fn(async () => 1),
+}));
 jest.mock('@/lib/circle-admin-verification', () => {
   const actual = jest.requireActual('@/lib/circle-admin-verification');
   return {
@@ -71,6 +74,7 @@ import {
   deindexWhatsAppLinksForCircle,
   lookupBlobsForCircle,
 } from '@/lib/whatsapp-link-index';
+import { markCircleLinkKeysUnlinked } from '@/lib/whatsapp-pii-keys';
 
 const ADMIN_ADDRESS = '0x' + 'a1'.repeat(32);
 const OTHER_ADDRESS = '0x' + 'b2'.repeat(32);
@@ -556,8 +560,12 @@ describe('admin-link-circle POST authorization ordering', () => {
 
     expect(res.statusCode).toBe(200);
     expect((res.jsonBody as { data: Record<string, unknown> }).data.status).toBe('pending');
-    // The PII is stored — that is the part only the server can do.
-    expect(encryptAndStorePII).toHaveBeenCalled();
+    // The PII is stored — that is the part only the server can do — under a
+    // data key bound to the circle the middleware verified.
+    expect(encryptAndStorePII).toHaveBeenCalledWith(
+      expect.objectContaining({ phone_e164: PHONE }),
+      { circleId: CIRCLE_ID },
+    );
     // The anchor inputs come back so the browser can build the call itself.
     expect((res.jsonBody as { data: Record<string, unknown> }).data).toEqual(
       expect.objectContaining({
@@ -730,6 +738,7 @@ describe('admin-unlink-circle POST authorization binding', () => {
     expect(moveCalls).toHaveLength(0);
     expect(enokiZkLoginService.sendTransaction).not.toHaveBeenCalled();
     expect(deindexWhatsAppLinksForCircle).not.toHaveBeenCalled();
+    expect(markCircleLinkKeysUnlinked).not.toHaveBeenCalled();
   });
 
   it('deindexes only once the client reports the unlink landed', async () => {
@@ -750,6 +759,29 @@ describe('admin-unlink-circle POST authorization binding', () => {
     expect(res.statusCode).toBe(200);
     expect((res.jsonBody as { data: Record<string, unknown> }).data.status).toBe('confirmed');
     expect(deindexWhatsAppLinksForCircle).toHaveBeenCalledWith(CIRCLE_ID);
+    // The link's data key is marked for deletion once the unlink confirmation is out.
+    expect(markCircleLinkKeysUnlinked).toHaveBeenCalledWith(CIRCLE_ID);
     expect(enokiZkLoginService.sendTransaction).not.toHaveBeenCalled();
+  });
+
+  it('still confirms the unlink when the data key cannot be marked', async () => {
+    getZkLoginSessionStore().set(SESSION_ID, buildSessionRecord(ADMIN_ADDRESS));
+    (fetchCircleAdminAddress as jest.Mock).mockResolvedValue(ADMIN_ADDRESS);
+    (markCircleLinkKeysUnlinked as jest.Mock).mockRejectedValueOnce(new Error('db down'));
+    jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const res = createMockRes();
+
+    await unlinkHandler(
+      createPostReq(
+        '/api/whatsapp/admin-unlink-circle',
+        { circleId: CIRCLE_ID, network: 'testnet', anchoredDigest: '0xdigest' },
+        {},
+        { 'session-id': SESSION_ID },
+      ),
+      res,
+    );
+
+    expect(res.statusCode).toBe(200);
+    expect((res.jsonBody as { data: Record<string, unknown> }).data.status).toBe('confirmed');
   });
 });

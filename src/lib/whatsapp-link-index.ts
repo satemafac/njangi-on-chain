@@ -16,6 +16,7 @@ import type { Pool } from 'pg';
 import { normalizePhone } from '../../scripts/lib/whatsapp-phone';
 import { computeLookupHash } from './walrus-pii';
 import { getSharedPgPool, isPostgresConfigured } from './pg-pool';
+import { ensureLinkKeyTable, hasLiveLinkKeyInMemory } from './whatsapp-pii-keys';
 
 let setupPromise: Promise<void> | null = null;
 
@@ -87,6 +88,14 @@ function warnFallbackOnce() {
  * Records a (phone_hmac, circle_id, blob_id) tuple at link time. Idempotent
  * via the unique (phone_hmac, circle_id) constraint, so repeated calls for
  * the same link are safe.
+ *
+ * Only a link with a live data key is indexed (src/lib/whatsapp-pii-keys.ts):
+ * the prepare call stored one for this number and circle, and it has not
+ * been unlinked or erased since. The check runs in the same statement as
+ * the write, so a late or replayed confirmation can't put an erased number
+ * back in the index, and a confirmation can't index a number the prepare
+ * call never sealed. Returns false when nothing was indexed for that
+ * reason.
  */
 export async function indexWhatsAppLink(params: {
   phoneOrGroup: string;
@@ -95,7 +104,7 @@ export async function indexWhatsAppLink(params: {
   linkType: 1 | 2;
   /** Walrus storage end epoch, when the link flow captured it. */
   walrusEndEpoch?: number | null;
-}): Promise<void> {
+}): Promise<boolean> {
   const phoneHmac = await computeLookupHash(normalizePhone(params.phoneOrGroup));
   const row: WhatsAppPhoneIndexRow = {
     circleId: params.circleId,
@@ -105,12 +114,13 @@ export async function indexWhatsAppLink(params: {
 
   if (!isPostgresAvailable()) {
     warnFallbackOnce();
+    if (!hasLiveLinkKeyInMemory(phoneHmac, params.circleId)) return false;
     const existing = memoryFallback.get(phoneHmac) ?? [];
     if (!existing.some((r) => r.circleId === row.circleId)) {
       existing.push(row);
       memoryFallback.set(phoneHmac, existing);
     }
-    return;
+    return true;
   }
 
   const endEpoch =
@@ -119,15 +129,23 @@ export async function indexWhatsAppLink(params: {
       : null;
 
   await ensureTable();
-  await getPool().query(
+  await ensureLinkKeyTable();
+  const result = await getPool().query(
     `INSERT INTO whatsapp_phone_index (phone_hmac, circle_id, walrus_blob_id, link_type, walrus_end_epoch)
-     VALUES ($1, $2, $3, $4, $5)
+     SELECT $1::text, $2::text, $3::text, $4::smallint, $5::bigint
+      WHERE EXISTS (
+              SELECT 1 FROM whatsapp_pii_keys k
+               WHERE k.phone_hmac = $1::text
+                 AND k.circle_id = $2::text
+                 AND k.unlinked_at IS NULL
+            )
      ON CONFLICT (phone_hmac, circle_id) DO UPDATE
        SET walrus_blob_id = EXCLUDED.walrus_blob_id,
            link_type = EXCLUDED.link_type,
            walrus_end_epoch = EXCLUDED.walrus_end_epoch`,
     [phoneHmac, params.circleId, params.walrusBlobId, params.linkType, endEpoch],
   );
+  return (result.rowCount ?? 0) > 0;
 }
 
 /**
@@ -261,13 +279,15 @@ function ensureRenewalAuditTable(): Promise<void> {
  * and is dev-only); throws when unavailable so the cron fails closed rather
  * than silently renewing nothing.
  *
- * GDPR exclusion (roadmap A4): rows whose phone matches a COMPLETED
- * deletion request are never renewed — the deletion executor
- * (scripts/process-deletion-request.mjs) both deletes the rows and
- * records the phone_hmac on the request, so even a stale re-index can't
- * resurrect a deleted user's blob renewals. The NOT EXISTS tolerates the
- * column not existing yet only via migration ordering — run
- * `npm run migrate:postgres` before deploying this code.
+ * Erased numbers need no filter here (roadmap A4). The deletion executor
+ * (scripts/process-deletion-request.mjs) deletes a number's rows in the
+ * same transaction as its data keys, and indexWhatsAppLink indexes only a
+ * link whose key is live, so an erased number returns to the index only by
+ * being linked again: new consent, renewed like any other link. A row whose
+ * key is gone anyway can't be renewed: restorePiiBlob throws
+ * PiiKeyErasedError and the cron drops the row. (Before per-link keys this
+ * query skipped every number with a completed deletion request, which also
+ * stopped renewing a number linked again after its erasure.)
  */
 export async function listActiveLinksForRenewal(): Promise<RenewableLinkRow[]> {
   if (!isPostgresAvailable()) {
@@ -284,11 +304,6 @@ export async function listActiveLinksForRenewal(): Promise<RenewableLinkRow[]> {
   }>(
     `SELECT idx.id, idx.circle_id, idx.walrus_blob_id, idx.walrus_end_epoch
        FROM whatsapp_phone_index idx
-      WHERE NOT EXISTS (
-              SELECT 1 FROM deletion_requests dr
-               WHERE dr.phone_hmac = idx.phone_hmac
-                 AND dr.status = 'completed'
-            )
       ORDER BY idx.id ASC`,
   );
   return result.rows.map((row) => ({
@@ -381,6 +396,29 @@ export async function applyWalrusRenewal(params: {
   } finally {
     client.release();
   }
+}
+
+/**
+ * Deletes index row `id` once the renewal cron finds its link's data key
+ * deleted (the link was erased or unlinked): the blob no longer opens, so
+ * the row could only keep matching inbound messages to the circle. Deletes
+ * only while the row still references `expectedBlobId`, so a row that a
+ * newer link of the same number and circle has taken over stays. Returns
+ * whether a row was deleted.
+ */
+export async function deleteIndexRowForErasedLink(params: {
+  id: number;
+  expectedBlobId: string;
+}): Promise<boolean> {
+  if (!isPostgresAvailable()) {
+    throw new Error('deleteIndexRowForErasedLink requires Postgres.');
+  }
+  await ensureTable();
+  const result = await getPool().query(
+    'DELETE FROM whatsapp_phone_index WHERE id = $1 AND walrus_blob_id = $2',
+    [params.id, params.expectedBlobId],
+  );
+  return (result.rowCount ?? 0) > 0;
 }
 
 /** Test helper — resets the renewal-audit table-creation latch. */

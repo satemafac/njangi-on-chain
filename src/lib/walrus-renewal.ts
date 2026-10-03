@@ -12,11 +12,13 @@
 // silently dies on a timer.
 //
 // THE FIX: a daily cron re-stores (re-uploads) any blob within
-// RENEWAL_THRESHOLD_EPOCHS of expiry. Re-storing decrypts the envelope (with
-// the current master key, or WALRUS_PII_PREVIOUS_MASTER_KEY during a key
-// rotation) and re-encrypts it under the current key before upload, so blobs
-// move onto a new key as they cycle. The new (blob id, end epoch) is written
-// back to the authoritative Postgres index row.
+// RENEWAL_THRESHOLD_EPOCHS of expiry. Re-storing opens the envelope and
+// re-seals it with a fresh IV before upload: a v2 envelope under the same
+// per-link data key (so deleting that key still covers every copy), a
+// legacy v1 envelope under the current master key (the previous one still
+// opens it during a key rotation). The new (blob id, end epoch) is written
+// back to the authoritative Postgres index row. A link whose data key was
+// deleted (erased or unlinked) is not renewed: its row is dropped instead.
 //
 // EPOCHS: end epochs and the current epoch are WALRUS epochs (a day on
 // testnet, two weeks on mainnet), read from the Walrus System object by
@@ -51,6 +53,7 @@
 // __tests__/walrus-renewal.test.ts). The cron route wires the real deps.
 
 import { appLogger } from '../utils/logger';
+import { isErasedPiiKeyError } from './pii-key-errors';
 
 export const DEFAULT_RENEWAL_THRESHOLD_EPOCHS = 2;
 
@@ -152,10 +155,10 @@ export interface RenewalDeps {
    */
   getCurrentWalrusEpoch(): Promise<number>;
   /**
-   * Fetches blob `blobId`, decrypts it (current master key, else the previous
-   * one during a rotation), re-encrypts under the current key, uploads a fresh
-   * copy, and returns the new blob id + end epoch. Throwing is treated as a
-   * per-link failure (recorded, the run continues).
+   * Fetches blob `blobId`, opens it, re-seals it (restorePiiBlob), uploads a
+   * fresh copy, and returns the new blob id + end epoch. Throwing is treated
+   * as a per-link failure (recorded, the run continues), except
+   * PiiKeyErasedError, which counts the link as erased (see dropErasedLink).
    */
   restoreBlob(blobId: string): Promise<RestoreResult>;
   /**
@@ -172,6 +175,13 @@ export interface RenewalDeps {
     newBlobId: string;
     newEndEpoch: number;
   }): Promise<boolean>;
+  /**
+   * Called when restoreBlob finds the link's data key deleted (the link was
+   * erased or unlinked; PiiKeyErasedError): deletes index row `id`, but only
+   * while it still references `expectedBlobId`. Nothing is renewed for that
+   * link either way. Optional; a throw is logged and the run continues.
+   */
+  dropErasedLink?(params: { id: number; expectedBlobId: string }): Promise<boolean>;
   thresholdEpochs?: number;
   /** Safety cap on blobs re-stored per run (default 200). */
   maxRenewalsPerRun?: number;
@@ -195,6 +205,12 @@ export interface RenewalRunResult {
   failed: number;
   /** Renewals that lost the compare-and-set to an overlapping run. */
   raced: number;
+  /**
+   * Due links whose data key was deleted (erased or unlinked): their blobs
+   * no longer open, so nothing was renewed and their index rows were
+   * dropped. Not failures.
+   */
+  erased: number;
   /** Due links this run left for a later one (cap or time budget). */
   deferred: number;
   /**
@@ -250,6 +266,7 @@ export async function runWalrusRenewal(
     renewed: 0,
     failed: 0,
     raced: 0,
+    erased: 0,
     deferred: 0,
     leaseMismatches: 0,
     capped: false,
@@ -268,7 +285,8 @@ export async function runWalrusRenewal(
 
   for (let i = 0; i < due.length; i += 1) {
     const outOfTime = deps.deadlineMs !== undefined && now() >= deps.deadlineMs;
-    if (outOfTime || result.renewed + result.failed + result.raced >= maxRenewals) {
+    const attempted = result.renewed + result.failed + result.raced + result.erased;
+    if (outOfTime || attempted >= maxRenewals) {
       // Leave the rest for the next daily tick rather than run past the
       // function's time limit. They are still due tomorrow, and the rows
       // renewed today no longer are.
@@ -309,6 +327,27 @@ export async function runWalrusRenewal(
         });
       }
     } catch (err) {
+      if (isErasedPiiKeyError(err)) {
+        // The link was erased or unlinked: its key is gone, so no copy of
+        // the blob opens and there is nothing to keep alive.
+        result.erased += 1;
+        appLogger.info('[walrus-renewal] data key deleted (link erased or unlinked); not renewing', {
+          id: link.id,
+          circleId: link.circleId,
+        });
+        if (deps.dropErasedLink) {
+          try {
+            await deps.dropErasedLink({ id: link.id, expectedBlobId: link.walrusBlobId });
+          } catch (dropErr) {
+            appLogger.warn('[walrus-renewal] could not drop the index row of an erased link', {
+              id: link.id,
+              circleId: link.circleId,
+              error: dropErr instanceof Error ? dropErr.message : String(dropErr),
+            });
+          }
+        }
+        continue;
+      }
       result.failed += 1;
       appLogger.warn('[walrus-renewal] blob renewal failed (recorded, continuing)', {
         id: link.id,

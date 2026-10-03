@@ -4,9 +4,16 @@
 //
 // /api/legal/data-deletion-request only RECORDS requests; this script is
 // the operator-run step that actually erases. What it deletes:
-//   - whatsapp_phone_index rows for the requester's phone (stops the
-//     walrus-renewal cron from renewing their encrypted blobs, which then
-//     expire on-network; the lookup pointer is gone immediately)
+//   - whatsapp_pii_keys rows for the requester's phone: the per-link data
+//     keys their WhatsApp envelopes are sealed with (src/lib/whatsapp-pii-keys.ts).
+//     Each row is the only copy of its key, so from this moment no copy of
+//     those envelopes opens: not the blob anchored on chain, not a renewed
+//     copy, not a copy kept elsewhere, and nothing is sent to the number.
+//   - whatsapp_phone_index rows for the requester's phone (the lookup
+//     pointer; the walrus-renewal cron stops renewing their blobs). Both
+//     deletes run in one transaction. A link made before per-link keys
+//     (envelope v1, sealed with the master key) has no key row: its blobs
+//     stop being renewed and expire on-network.
 //   - join_requests rows for the wallet address
 //   - zklogin_sessions rows for the wallet address
 //   - legacy salts + recovery_codes rows for the OAuth identity. Nothing
@@ -57,8 +64,8 @@
 // Runs before scripts/lib/whatsapp-phone.ts existed hashed --phone as typed.
 // The index never holds the documented form (with its "+") or a spaced one,
 // so such runs deleted no whatsapp_phone_index row, and the phone_hmac they
-// recorded excludes nothing from blob renewal. Every request that had a
-// phone_hmac recorded before the fix is a candidate:
+// recorded names no number. Every request that had a phone_hmac recorded
+// before the fix is a candidate:
 //   SELECT id, status, updated_at FROM deletion_requests
 //    WHERE phone_hmac IS NOT NULL ORDER BY id;
 // To repair one, re-run it with the same --request-id and --phone. The
@@ -93,14 +100,32 @@ const pool = new Pool({
   ssl: DATABASE_URL.includes('sslmode=require') ? { rejectUnauthorized: false } : undefined,
 });
 
-async function run(label, sql, params) {
+async function run(label, sql, params, db = pool) {
   if (DRY_RUN) {
     console.log(`[dry-run] ${label}`);
     return { rowCount: 0 };
   }
-  const result = await pool.query(sql, params);
+  const result = await db.query(sql, params);
   console.log(`[deletion] ${label}: ${result.rowCount ?? 0} row(s)`);
   return result;
+}
+
+// Runs `steps` in one transaction, so they all land or none does. Each step
+// is a run() call made with the `db` it receives. A dry run writes nothing
+// and opens no transaction.
+async function inTransaction(steps) {
+  if (DRY_RUN) return steps(pool);
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await steps(client);
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 async function main() {
@@ -193,7 +218,8 @@ async function main() {
     );
   }
 
-  // 1. WhatsApp index rows (stops blob renewal; pointer gone immediately).
+  // 1. WhatsApp: the number's data keys (every copy of its envelopes stops
+  //    opening) and its index rows (pointer gone, renewal stops).
   let phoneHmac = null;
   if (phone) {
     const hmac = (value) => createHmac('sha256', salt).update(value).digest('hex');
@@ -206,8 +232,7 @@ async function main() {
           ? '[deletion] this request records the hash of this number WITH its "+", from a run before ' +
               'the fix, which deleted no index row. Replacing that hash.'
           : '[deletion] this request records the hash of another value: a different number, or this one ' +
-              'formatted differently by a run before the fix. Replacing it (the renewal exclusion keeps ' +
-              'one number per request).',
+              'formatted differently by a run before the fix. Replacing it (a request records one number).',
       );
     }
     // Read-only, so a dry run shows it too: a deletion that matches nothing
@@ -224,20 +249,44 @@ async function main() {
           'already gone (unlinked, or erased by an earlier run), or --phone is not the number that was linked.',
       );
     }
-    await run(
-      'whatsapp_phone_index rows for phone',
-      `DELETE FROM whatsapp_phone_index WHERE phone_hmac = $1`,
-      [phoneHmac],
-    );
-    // Recorded on the request row so listActiveLinksForRenewal() can
-    // permanently exclude this phone even if something re-indexes it.
-    await run(
-      'record phone_hmac on request',
-      `UPDATE deletion_requests SET phone_hmac = $1, updated_at = NOW() WHERE id = $2`,
-      [phoneHmac, request.id],
-    );
+    // The key table exists once the app has stored a data key or
+    // `npm run migrate:postgres` has run; before that there is no key to delete.
+    const keyTable = await pool.query(`SELECT to_regclass('whatsapp_pii_keys') IS NOT NULL AS present`);
+    const keyTablePresent = keyTable.rows[0]?.present === true;
+    if (keyTablePresent) {
+      const { rows: keyRows } = await pool.query(
+        `SELECT COUNT(*)::int AS matches FROM whatsapp_pii_keys WHERE phone_hmac = $1`,
+        [phoneHmac],
+      );
+      console.log(`[deletion] whatsapp_pii_keys rows (link data keys) matching the phone: ${keyRows[0]?.matches ?? 0}`);
+    } else {
+      console.log('[deletion] no whatsapp_pii_keys table yet, so no link data key to delete');
+    }
+    await inTransaction(async (db) => {
+      if (keyTablePresent) {
+        await run(
+          'whatsapp_pii_keys rows for phone',
+          `DELETE FROM whatsapp_pii_keys WHERE phone_hmac = $1`,
+          [phoneHmac],
+          db,
+        );
+      }
+      await run(
+        'whatsapp_phone_index rows for phone',
+        `DELETE FROM whatsapp_phone_index WHERE phone_hmac = $1`,
+        [phoneHmac],
+        db,
+      );
+      // The record of which number this request erased (RoPA row 7).
+      await run(
+        'record phone_hmac on request',
+        `UPDATE deletion_requests SET phone_hmac = $1, updated_at = NOW() WHERE id = $2`,
+        [phoneHmac, request.id],
+        db,
+      );
+    });
   } else {
-    console.log('[deletion] no --phone given — skipping whatsapp_phone_index (nothing to match on)');
+    console.log('[deletion] no --phone given — skipping WhatsApp keys and index rows (nothing to match on)');
   }
 
   // 2. Address-keyed deletes. NOTE: we deliberately do NOT resolve the OAuth
@@ -287,8 +336,7 @@ async function main() {
   //    no wallet reference have nothing further to erase and are completed.
   //    A request that is already completed stays completed: the run that
   //    completed it erased its identity-keyed rows, and a re-run for the
-  //    phone alone must not reopen it. Reopening would also drop its phone
-  //    from the renewal exclusion, which only honours completed requests.
+  //    phone alone must not reopen it.
   const identityDeletesRan = Boolean(sub && aud);
   const walletReferenced = Boolean(
     request.user_address || request.verified_sub || arg('address') || argSub,

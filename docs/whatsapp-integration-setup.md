@@ -66,13 +66,25 @@ says no circle is linked only when every lookup answered.
   [`WhatsAppCircleIntegration`](../src/components/WhatsAppCircleIntegration.tsx)
   calls `POST /api/whatsapp/admin-link-circle`. The route checks that the
   caller is the circle's on-chain admin and runs the sanctions, address-drift
-  and plan checks. It then encrypts the number with AES-256-GCM
+  and plan checks. It then stores a random data key for the link in
+  `whatsapp_pii_keys`, wrapped under `WALRUS_PII_MASTER_KEY`
+  ([`src/lib/whatsapp-pii-keys.ts`](../src/lib/whatsapp-pii-keys.ts)),
+  encrypts the number under that key with AES-256-GCM
   ([`src/lib/walrus-pii.ts`](../src/lib/walrus-pii.ts)) and stores the
   ciphertext on Walrus. The admin's browser signs
   `whatsapp_integration::link_circle`, which anchors the Walrus blob id and a
   random nonce on chain, never the number itself. A confirm call then adds
   the link to the `whatsapp_phone_index` table, keyed by an HMAC of the
-  number. `POST /api/whatsapp/admin-unlink-circle` removes a link.
+  number, if the link's data key is still live.
+- **Unlinking and erasure.** `POST /api/whatsapp/admin-unlink-circle` removes
+  a link: its index row at once, and its data key once the "Circle
+  disconnected" message has gone out (the circle-events cron deletes it by the
+  unlink event's nonce; the daily renewal cron deletes any it missed after 48
+  hours). An erasure request
+  ([`scripts/process-deletion-request.mjs`](../scripts/process-deletion-request.mjs))
+  deletes the number's data keys and index rows together. With the key gone,
+  no copy of the blob opens any more, and every lookup treats the link as
+  having no number, so nothing more is sent to it.
 - **Showing the link.** The card reads
   `GET /api/whatsapp/admin-link-circle`. For the circle admin it adds
   `includeRecipient=true`, and the route decrypts the number only for a
@@ -90,10 +102,12 @@ says no circle is linked only when every lookup answered.
   replies call the Cloud API directly.
 - **Blob renewal.** Walrus keeps a blob for `WALRUS_STORAGE_EPOCHS` epochs,
   but the on-chain anchor never expires. Before a blob's storage runs out,
-  the daily `/api/cron/walrus-renewal` stores the number again as a new blob
-  and records the new blob id in `whatsapp_phone_index`. The on-chain anchor
-  keeps the original blob id, so every lookup reads the index first and
-  uses the anchored blob id only when the index has no row for the link.
+  the daily `/api/cron/walrus-renewal` stores the number again as a new blob,
+  sealed under the same data key, and records the new blob id in
+  `whatsapp_phone_index`. The on-chain anchor keeps the original blob id, so
+  every lookup reads the index first and uses the anchored blob id only when
+  the index has no row for the link. A link whose data key was deleted is not
+  renewed.
 
 ## Known gaps
 
@@ -134,12 +148,13 @@ says no circle is linked only when every lookup answered.
    `NEXT_PUBLIC_<NETWORK>_WHATSAPP_REGISTRY_ID` pair to `.env.local`. The same
    guide explains how to copy it to Vercel.
 3. **Postgres.** `npm run migrate:postgres` creates `whatsapp_phone_index`,
-   `whatsapp_notifications`, `cycle_finalized_cursor` and
-   `walrus_renewal_audit`.
-4. **PII keys.** `WALRUS_PII_MASTER_KEY` encrypts linked numbers, and
-   `WALRUS_LOOKUP_SALT` keys the lookup index. `npm run generate:secrets`
-   fills both. Once numbers are linked, never just replace the master key:
-   each stored number opens only with the key that sealed it. Rotate it as
+   `whatsapp_pii_keys`, `whatsapp_notifications`, `cycle_finalized_cursor`
+   and `walrus_renewal_audit`.
+4. **PII keys.** `WALRUS_PII_MASTER_KEY` wraps the per-link data keys that
+   encrypt linked numbers, and `WALRUS_LOOKUP_SALT` keys the lookup index.
+   `npm run generate:secrets` fills both. Once numbers are linked, never just
+   replace the master key: each data key opens only with the key that wrapped
+   it. Rotate it as
    [Rotating the WhatsApp PII keys](environment.md#rotating-the-whatsapp-pii-keys)
    describes. The salt can't be rotated yet; that section explains why.
 5. **Crons.** Set `CRON_SECRET`. Vercel sends it with each cron call, and the

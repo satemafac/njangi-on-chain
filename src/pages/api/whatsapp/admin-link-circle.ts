@@ -403,13 +403,18 @@ async function handlePost(req: AuthenticatedRequest, res: NextApiResponse) {
         });
       }
       try {
-        await indexWhatsAppLink({
+        const indexed = await indexWhatsAppLink({
           phoneOrGroup,
           circleId,
           walrusBlobId: confirmedBlobId,
           linkType,
           walrusEndEpoch: confirmedEndEpoch,
         });
+        if (!indexed) {
+          // No live data key for this number and circle: the prepare call
+          // never stored one for it, or it was unlinked or erased since.
+          console.warn('[admin-link-circle] Not indexing a link with no live data key', { circleId });
+        }
       } catch (indexError) {
         console.warn('[admin-link-circle] Failed to populate WhatsApp link index', indexError);
       }
@@ -449,9 +454,13 @@ async function handlePost(req: AuthenticatedRequest, res: NextApiResponse) {
     }
 
     // Encrypt the PII payload and upload to Walrus before touching chain so
-    // a failed upload aborts the link before consuming gas.
+    // a failed upload aborts the link before consuming gas. The link's own
+    // data key is stored first (src/lib/whatsapp-pii-keys.ts): unlinking or
+    // erasing the number deletes it, and every copy of the blob goes dark.
     const payload = buildPayload(phoneOrGroup);
-    const { walrusBlobId, linkNonce, walrusEndEpoch } = await encryptAndStorePII(payload);
+    const { walrusBlobId, linkNonce, walrusEndEpoch } = await encryptAndStorePII(payload, {
+      circleId,
+    });
 
     // The server's job ends at the Walrus upload. The anchor is signed in
     // the browser (ZkLoginClient.linkCircleToWhatsApp), so the response
