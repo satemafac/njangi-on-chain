@@ -125,6 +125,9 @@ requireValue(`current ${currentNetwork} WhatsApp registry ID`, currentWhatsAppRe
 const networkUpper = currentNetwork === 'mainnet' ? 'MAINNET' : 'TESTNET';
 const attestorCapKey = `NEXT_PUBLIC_${networkUpper}_NJANGI_ATTESTOR_CAP_ID`;
 const assetRegistryKey = `NEXT_PUBLIC_${networkUpper}_NJANGI_ASSET_REGISTRY_ID`;
+// Required only while the compliance gate is on (see below): nothing else
+// reads it.
+const complianceConfigKey = `NEXT_PUBLIC_${networkUpper}_NJANGI_COMPLIANCE_CONFIG_ID`;
 requireValue(attestorCapKey, read(attestorCapKey));
 requireValue(assetRegistryKey, read(assetRegistryKey));
 // Require the Enoki key only for the ACTIVE network, under the one name the
@@ -159,11 +162,12 @@ for (const [key, value] of [
   [`NEXT_PUBLIC_${networkUpper}_WHATSAPP_REGISTRY_ID`, currentWhatsAppRegistryId],
   [attestorCapKey, read(attestorCapKey)],
   [assetRegistryKey, read(assetRegistryKey)],
+  [complianceConfigKey, read(complianceConfigKey)],
 ]) {
   if (value && !/^0x[0-9a-fA-F]{1,64}$/.test(value)) {
     errors.push(
       `${key} is "${value}", not an object id. Replace the .env.example placeholder: move/build_and_test.sh ` +
-        'writes the package ids, scripts/bootstrap-package.mjs the registry and AttestorCap ids.',
+        'writes the package ids, scripts/bootstrap-package.mjs the registry, AttestorCap and ComplianceConfig ids.',
     );
   }
 }
@@ -250,6 +254,17 @@ if (complianceGateEnabled) {
   if (!read('COMPLIANCE_ISSUANCE_SECRET') && !read('INTERNAL_NOTIFY_SECRET')) {
     errors.push(
       'NEXT_PUBLIC_COMPLIANCE_GATE_ENABLED is true but neither COMPLIANCE_ISSUANCE_SECRET nor INTERNAL_NOTIFY_SECRET is set. Ramp-partner webhooks cannot enqueue attestations.',
+    );
+  }
+  // Every gated escrow call (open, contribute, collect) and gated goal pool
+  // passes the shared ComplianceConfig (resolveComplianceConfigId in
+  // src/lib/compliance-gate.ts). Without the pinned id the app falls back to
+  // scanning ComplianceConfigCreated events, which publicnode refuses once
+  // the creating transaction is pruned.
+  if (!read(complianceConfigKey)) {
+    errors.push(
+      `NEXT_PUBLIC_COMPLIANCE_GATE_ENABLED is true but ${complianceConfigKey} is empty. Gated contribute/collect ` +
+        'needs the ComplianceConfig; scripts/bootstrap-package.mjs writes its id.',
     );
   }
 }

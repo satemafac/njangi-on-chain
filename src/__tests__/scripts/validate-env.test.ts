@@ -177,3 +177,39 @@ describe('validate-env Walrus System object overrides', () => {
     ]);
   });
 });
+
+// Only the gated escrow and goal-pool calls read the ComplianceConfig id, so
+// it is required for the ACTIVE network only while
+// NEXT_PUBLIC_COMPLIANCE_GATE_ENABLED is true, and must be an object id
+// whenever it is set.
+describe('validate-env ComplianceConfig id', () => {
+  const configLines = (stderr: string) => stderr.split('\n').filter((line) => line.includes('COMPLIANCE_CONFIG_ID'));
+  const gated = (env: string) => setVar(env, 'NEXT_PUBLIC_COMPLIANCE_GATE_ENABLED', 'true');
+  const TESTNET_KEY = 'NEXT_PUBLIC_TESTNET_NJANGI_COMPLIANCE_CONFIG_ID';
+
+  it('is optional while the compliance gate is off', () => {
+    expect(configLines(validate(template))).toEqual([]);
+  });
+
+  it("requires the active network's id while the gate is on", () => {
+    expect(configLines(validate(gated(template)))).toEqual([
+      expect.stringContaining(`NEXT_PUBLIC_COMPLIANCE_GATE_ENABLED is true but ${TESTNET_KEY} is empty`),
+    ]);
+    expect(configLines(validate(setVar(gated(template), 'NEXT_PUBLIC_SUI_NETWORK', 'mainnet')))).toEqual([
+      expect.stringContaining('but NEXT_PUBLIC_MAINNET_NJANGI_COMPLIANCE_CONFIG_ID is empty'),
+    ]);
+  });
+
+  it('accepts a real id while the gate is on', () => {
+    expect(configLines(validate(setVar(gated(template), TESTNET_KEY, REAL_ID)))).toEqual([]);
+  });
+
+  it('rejects a value that is not an object id, gate on or off', () => {
+    const placeholder = setVar(template, TESTNET_KEY, '0xyour_testnet_compliance_config_id');
+    for (const env of [placeholder, gated(placeholder)]) {
+      expect(configLines(validate(env))).toEqual([
+        expect.stringContaining(`${TESTNET_KEY} is "0xyour_testnet_compliance_config_id", not an object id`),
+      ]);
+    }
+  });
+});
