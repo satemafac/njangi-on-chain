@@ -41,11 +41,41 @@ export type EscrowStage =
   | 'no-round-open'
   | 'in-progress'
   | 'full-waiting-for-claim'
+  /**
+   * Finalized, never collected, and past its claim window on the chain
+   * clock: nobody can collect any more, and `refund_expired_claim` sends the
+   * pot back to the contributors.
+   */
+  | 'claim-expired'
   | 'completed'
   /** Refunds began on chain; only a re-open (by the admin) moves the round on. */
   | 'refunded';
 
-export type EscrowStageState = Pick<CycleEscrowLiveState, 'finalized' | 'claimed' | 'refunded'>;
+export type EscrowStageState = Pick<
+  CycleEscrowLiveState,
+  'finalized' | 'claimed' | 'refunded' | 'claimExpiresAtMs'
+>;
+
+/**
+ * Whether a round's claim window has closed, judged on the CHAIN clock.
+ *
+ * `false` when no window is running (unfinalized, collected or refunded).
+ * `null` when one is running but the answer is unknown: the chain clock could
+ * not be read, or the escrow carries no expiry. Callers must not read null as
+ * either answer. Announcing a closed window on a guess, and offering the
+ * refund that ends it, would take a payout away from its recipient.
+ *
+ * Closed means strictly after the expiry ms, the same boundary as
+ * `refund_expired_claim` (`redeem_claim` still pays on the expiry ms itself).
+ */
+export function claimWindowClosed(
+  state: EscrowStageState,
+  chainNowMs: number | null,
+): boolean | null {
+  if (!state.finalized || state.claimed || state.refunded) return false;
+  if (chainNowMs === null || !(state.claimExpiresAtMs > 0)) return null;
+  return chainNowMs > state.claimExpiresAtMs;
+}
 
 export function resolveEscrowStage(params: {
   loading: boolean;
@@ -53,20 +83,78 @@ export function resolveEscrowStage(params: {
   state: EscrowStageState | null;
   paidSoFar: number;
   totalRequired: number;
+  /** `readChainClockMs`: null when unread, which never closes a window. */
+  chainNowMs?: number | null;
 }): EscrowStage {
-  const { loading, state, paidSoFar, totalRequired } = params;
+  const { loading, state, paidSoFar, totalRequired, chainNowMs = null } = params;
   if (loading) return 'loading';
   if (!state) return 'no-round-open';
   // Checked first: a refunded escrow is unfinalized/unclaimed on chain and
   // would otherwise render as an in-progress round whose "pay" aborts.
   if (state.refunded) return 'refunded';
   if (state.claimed) return 'completed';
+  if (claimWindowClosed(state, chainNowMs) === true) return 'claim-expired';
   // Finalized but unclaimed is waiting on the recipient no matter who
   // finalized it: Collect redeems the Claim already in their wallet (see
   // resolveCollectRoute) instead of minting a second one.
   if (state.finalized) return 'full-waiting-for-claim';
   if (paidSoFar >= totalRequired && totalRequired > 0) return 'full-waiting-for-claim';
   return 'in-progress';
+}
+
+// ---------------------------------------------------------------------------
+// Expired claim — who is offered "Send the contributions back"
+// ---------------------------------------------------------------------------
+
+/**
+ * Whether the panel offers `refund_expired_claim` to the signed-in viewer
+ * once a round's claim window has closed.
+ *
+ * The call is permissionless and can only pay the recorded contributors, so
+ * this is a product rule, not a safety check. Recovery is member-initiated:
+ * every member of the round, the admin included, is offered it, and a
+ * signed-in viewer outside the round is not. It is never admin-only, so
+ * nobody's money waits on one person to act.
+ *
+ * Membership is the escrow's own frozen member list (`snapshot.members`, the
+ * list `contribute` checks; it includes the recipient), which arrives in the
+ * same object read as the stage. A recorded contributor is a member by
+ * construction (`contribute` aborts 200 for anyone off that list), so that
+ * alone settles it even when the list did not come back.
+ */
+export type ExpiredClaimRefundAccess =
+  /** The admin, or a member of this round: offer the refund. */
+  | 'offer'
+  /** Signed in, the member list was read, and this address is not on it. */
+  | 'not-member'
+  /**
+   * The member list did not come back. Neither offer nor hide the refund on
+   * a guess; say it could not be checked, and let a refresh try again.
+   */
+  | 'unknown'
+  /** No signer session, so nobody to check yet; the panel asks them to sign in. */
+  | 'signed-out';
+
+export function resolveExpiredClaimRefundAccess(params: {
+  /** The signer's address (`useZkLoginSigner`), null when signed out. */
+  userAddress: string | null;
+  isAdmin: boolean;
+  /** The escrow snapshot's members; empty or absent when unreadable. */
+  members: readonly string[] | null | undefined;
+  /** Recorded contributors (the escrow's `contributed` table). */
+  contributors: readonly string[];
+}): ExpiredClaimRefundAccess {
+  const { userAddress, isAdmin, members, contributors } = params;
+  if (isAdmin) return 'offer';
+  if (!userAddress) return 'signed-out';
+  const viewer = normalizeAddress(userAddress);
+  const includesViewer = (list: readonly string[]) =>
+    list.some((address) => normalizeAddress(address) === viewer);
+  if (includesViewer(contributors)) return 'offer';
+  // `open_cycle*` refuses to open a round with fewer than two members, so an
+  // empty list is a read that came back unusable, never an empty round.
+  if (!members || members.length === 0) return 'unknown';
+  return includesViewer(members) ? 'offer' : 'not-member';
 }
 
 // ---------------------------------------------------------------------------

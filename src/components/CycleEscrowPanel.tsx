@@ -7,13 +7,16 @@ import {
   buildFinalizeAndRedeemWithAttestationTx,
   buildOpenCycleTx,
   buildRedeemClaimTx,
+  buildRefundExpiredClaimTx,
 } from '@/services/cycle-escrow-service';
 import {
   findRecipientClaim,
   resolveCollectRoute,
   resolveEscrowStage,
+  resolveExpiredClaimRefundAccess,
   type EscrowStage,
 } from '@/lib/cycle-escrow-collect';
+import { readChainClockMs } from '@/lib/chain-clock';
 import { preparePaymentCoin } from '@/lib/payment-coin-builder';
 import { useZkLoginSigner } from '@/hooks/useZkLoginSigner';
 import type { TransactionBuilder } from '@/lib/zklogin-client-signer';
@@ -148,7 +151,7 @@ export function CycleEscrowPanel({
   onAutoOpenFired,
 }: CycleEscrowPanelProps) {
   const { isReady, userAddress, signAndExecute } = useZkLoginSigner();
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   const [summary, setSummary] = useState<CycleEscrowSummary | null>(null);
   const [liveState, setLiveState] = useState<CycleEscrowLiveState | null>(null);
   const [contributors, setContributors] = useState<string[]>([]);
@@ -157,7 +160,7 @@ export function CycleEscrowPanel({
   // it a rate-limited lookup renders as a confident (and wrong) statement
   // that the admin has not opened the round.
   const [loadError, setLoadError] = useState(false);
-  const [busy, setBusy] = useState<null | 'pay' | 'claim' | 'advance'>(null);
+  const [busy, setBusy] = useState<null | 'pay' | 'claim' | 'advance' | 'refund'>(null);
   // Why the last Collect on a finalized round did not sign, keyed to its
   // escrow so a later round never inherits it. `unreadable` is a failed
   // lookup (retry); `missing` means the claim is not in this wallet.
@@ -165,6 +168,10 @@ export function CycleEscrowPanel({
     escrowId: string;
     kind: 'unreadable' | 'missing';
   } | null>(null);
+  // The chain's own clock, read only while a finalized round sits
+  // uncollected, so the claim window is judged the way the contract judges
+  // it. Null is "not read" or "unreadable", and never closes a window.
+  const [chainNowMs, setChainNowMs] = useState<number | null>(null);
   // The one in-flight flag for every control that opens a round. Held past
   // the transaction's resolution until discovery shows the new escrow (or
   // a bounded timeout) — see cycle-open-round-lock.ts for the incident
@@ -233,10 +240,18 @@ export function CycleEscrowPanel({
         } else {
           setRotationPointer(null);
         }
+        // Whether a finalized, uncollected round is past its claim window is
+        // a chain-clock question (chain-clock.ts), asked only in that state.
+        setChainNowMs(
+          state?.finalized && !state.claimed && !state.refunded
+            ? await readChainClockMs(rpcClient)
+            : null,
+        );
       } else {
         setLiveState(null);
         setContributors([]);
         setRotationPointer(null);
+        setChainNowMs(null);
       }
     } catch (err) {
       console.warn('[CycleEscrowPanel] refresh failed', err);
@@ -246,6 +261,7 @@ export function CycleEscrowPanel({
       setLiveState(null);
       setContributors([]);
       setRotationPointer(null);
+      setChainNowMs(null);
     } finally {
       setLoading(false);
       setRefreshSeq((n) => n + 1);
@@ -296,9 +312,36 @@ export function CycleEscrowPanel({
         state: summary ? liveState : null,
         paidSoFar,
         totalRequired,
+        chainNowMs,
       }),
-    [loading, summary, liveState, paidSoFar, totalRequired],
+    [loading, summary, liveState, paidSoFar, totalRequired, chainNowMs],
   );
+
+  // Who may send an expired round's contributions back: every member of the
+  // round, the admin included, never only the admin. An unreadable member
+  // list is 'unknown', which neither offers nor silently hides the control.
+  const refundAccess = useMemo(
+    () =>
+      resolveExpiredClaimRefundAccess({
+        userAddress,
+        isAdmin,
+        members: liveState?.members,
+        contributors,
+      }),
+    [userAddress, isAdmin, liveState?.members, contributors],
+  );
+
+  // The day the claim window closed, in the reader's locale. Only formats
+  // the recorded expiry; whether it has passed is the chain clock's call.
+  const claimClosedOn = useMemo(() => {
+    const ms = liveState?.claimExpiresAtMs ?? 0;
+    if (!ms) return '—';
+    try {
+      return new Intl.DateTimeFormat(locale, { dateStyle: 'medium' }).format(new Date(ms));
+    } catch {
+      return new Date(ms).toISOString().slice(0, 10);
+    }
+  }, [liveState?.claimExpiresAtMs, locale]);
 
   // What a settled round can do next. Only meaningful in the `completed`
   // stage; everywhere else the escrow itself already says what happens.
@@ -377,7 +420,11 @@ export function CycleEscrowPanel({
   const potBase = useMemo(() => (liveState ? potBaseUnits(liveState) : '0'), [liveState]);
 
   const runWithSigner = useCallback(
-    async (action: 'pay' | 'claim' | 'advance', build: TransactionBuilder, gasBudget: number) => {
+    async (
+      action: 'pay' | 'claim' | 'advance' | 'refund',
+      build: TransactionBuilder,
+      gasBudget: number,
+    ) => {
       if (!isReady) {
         toast.error(t('toast.signInAgain'));
         return;
@@ -391,7 +438,9 @@ export function CycleEscrowPanel({
             ? t('toast.sharePaid')
             : action === 'advance'
               ? 'Cycle advanced to the next recipient.'
-              : t('toast.payoutSent'),
+              : action === 'refund'
+                ? t('toast.contributionsSentBack')
+                : t('toast.payoutSent'),
         );
         if (action === 'claim') {
           // The member just collected their own turn: open the payout
@@ -830,6 +879,17 @@ export function CycleEscrowPanel({
     void runWithSigner('advance', build, 60_000_000);
   }, [summary, network, coinType, circleId, runWithSigner]);
 
+  // An expired round's pot can only go back to its contributors, and
+  // refund_expired_claim (permissionless) does exactly that, paying nobody
+  // else. Recovery is member-initiated, so every member of the round runs
+  // it, the admin included: nobody's money should wait on one person, the
+  // recipient or the admin, to act (resolveExpiredClaimRefundAccess).
+  const onSendContributionsBack = useCallback(() => {
+    if (!summary || refundAccess !== 'offer') return;
+    const build = buildRefundExpiredClaimTx({ network, coinType, escrowId: summary.escrowId });
+    void runWithSigner('refund', build, 100_000_000);
+  }, [summary, refundAccess, network, coinType, runWithSigner]);
+
   return (
     <section className="rounded-2xl border border-emerald-200 bg-white p-5 shadow-sm">
       <header className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
@@ -936,7 +996,8 @@ export function CycleEscrowPanel({
               <p className="mt-1 text-lg font-semibold text-slate-900">
                 {recipientLabel}
               </p>
-              {isUserRecipient ? (
+              {/* "Your payout is waiting" only while it can still be collected. */}
+              {isUserRecipient && (stage === 'in-progress' || stage === 'full-waiting-for-claim') ? (
                 <p className="mt-1 text-xs font-medium text-emerald-700">
                   {t('escrow.yourTurn')}
                 </p>
@@ -1125,6 +1186,41 @@ export function CycleEscrowPanel({
               )
             ) : null}
 
+            {/* The claim window closed, on the chain clock, before anyone
+                collected: collecting aborts 211 now, and the pot can only go
+                back to the members who paid in. refund_expired_claim is
+                permissionless and pays nobody else; it is offered to every
+                member of the round, the admin included, and to no one
+                outside it. When the member list could not be read, say so
+                rather than offer or hide the control on a guess. */}
+            {stage === 'claim-expired' ? (
+              <div className="flex w-full flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="sm:max-w-md">
+                  <p className="text-sm font-medium text-amber-700">
+                    {t('escrow.claimExpired', {
+                      cycle: summary?.cycleNo ?? '—',
+                      date: claimClosedOn,
+                    })}
+                  </p>
+                  {refundAccess === 'unknown' ? (
+                    <p role="status" className="mt-2 text-xs text-amber-700">
+                      {t('escrow.sendBack.membershipUnknown')}
+                    </p>
+                  ) : null}
+                </div>
+                {refundAccess === 'offer' ? (
+                  <button
+                    type="button"
+                    onClick={onSendContributionsBack}
+                    disabled={!isReady || busy === 'refund'}
+                    className="inline-flex shrink-0 items-center justify-center rounded-full bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-50"
+                  >
+                    {busy === 'refund' ? t('escrow.action.sendingBack') : t('escrow.action.sendBack')}
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+
             {/* Refunds began on chain (cancelled, or an expired claim): pay,
                 finalize and redeem all abort now, so the only way forward is
                 to open the round again. The refunded escrow still pins its
@@ -1133,7 +1229,9 @@ export function CycleEscrowPanel({
             {stage === 'refunded' ? (
               <div className="flex w-full flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <p className="text-sm font-medium text-amber-700 sm:max-w-md">
-                  {t('escrow.refunded', { cycle: summary?.cycleNo ?? '—' })}
+                  {t(liveState?.finalized ? 'escrow.refundedExpired' : 'escrow.refunded', {
+                    cycle: summary?.cycleNo ?? '—',
+                  })}
                 </p>
                 {showAdminRoundControls ? (
                   <button

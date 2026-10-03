@@ -69,6 +69,14 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'escrow.refunded':
       'Round {cycle} was cancelled and every contribution went back to the member who paid it. The circle admin can open this round again.',
     'escrow.reopenRound': 'Open this round again',
+    'escrow.refundedExpired':
+      "Round {cycle}'s payout wasn't collected within its 30-day window, so every contribution went back to the member who paid it. The circle admin can open this round again.",
+    'escrow.claimExpired':
+      "The window to collect round {cycle}'s payout closed on {date}, so it can no longer be collected. Sending the contributions back gives each member back the share they paid in.",
+    'escrow.action.sendBack': 'Send the contributions back',
+    'escrow.action.sendingBack': 'Sending back…',
+    'escrow.sendBack.membershipUnknown':
+      "We couldn't check whether you're a member of this round, so sending the contributions back isn't offered here yet. Refresh to try again.",
     'escrow.onlyAdminOpens': 'Only the circle admin can open the round.',
     'escrow.yourShare': 'Your share this round',
     'escrow.whoseTurn': 'Whose turn it is',
@@ -106,6 +114,8 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'toast.roundOpened': 'This round is now open — members can pay their share.',
     'toast.sharePaid': 'Thanks! Your share is in the pot.',
     'toast.payoutSent': 'Your payout is on its way to your wallet.',
+    'toast.contributionsSentBack':
+      'The contributions are on their way back to the members who paid in.',
     'toast.signInAgain': 'Please sign in again to continue.',
     'toast.genericError': 'Something went wrong: {error}',
     // Dashboard alerts
@@ -572,6 +582,14 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'escrow.refunded':
       "Le tour {cycle} a été annulé et chaque versement est revenu au membre qui l'avait fait. L'administrateur du cercle peut rouvrir ce tour.",
     'escrow.reopenRound': 'Rouvrir ce tour',
+    'escrow.refundedExpired':
+      "Le versement du tour {cycle} n'a pas été récupéré dans le délai de 30 jours : chaque contribution est revenue au membre qui l'avait versée. L'administrateur du cercle peut rouvrir ce tour.",
+    'escrow.claimExpired':
+      "Le délai pour récupérer le versement du tour {cycle} a pris fin le {date} : il ne peut plus être récupéré. Renvoyer les contributions rend à chaque membre la part qu'il a versée.",
+    'escrow.action.sendBack': 'Renvoyer les contributions',
+    'escrow.action.sendingBack': 'Renvoi en cours…',
+    'escrow.sendBack.membershipUnknown':
+      "Nous n'avons pas pu vérifier si vous faites partie de ce tour : le renvoi des contributions n'est donc pas encore proposé ici. Actualisez pour réessayer.",
     'escrow.onlyAdminOpens': "Seul l'administrateur du cercle peut ouvrir le tour.",
     'escrow.yourShare': 'Votre part ce tour',
     'escrow.whoseTurn': "C'est le tour de",
@@ -612,6 +630,8 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
       'Le tour est ouvert — les membres peuvent maintenant verser leur part.',
     'toast.sharePaid': 'Merci ! Votre part est dans la cagnotte.',
     'toast.payoutSent': 'Votre versement est en route vers votre portefeuille.',
+    'toast.contributionsSentBack':
+      'Les contributions sont en route vers les membres qui les ont versées.',
     'toast.signInAgain': 'Veuillez vous reconnecter pour continuer.',
     'toast.genericError': 'Quelque chose ne va pas : {error}',
     // Dashboard alerts

@@ -430,6 +430,29 @@ export function buildRedeemClaimTx(params: RedeemClaimParams): BuildTransactionF
   };
 }
 
+export interface RefundExpiredClaimParams extends CycleEscrowCallBase {
+  escrowId: string;
+}
+
+/**
+ * `refund_expired_claim`: once a finalized round's claim window has closed
+ * with the pot uncollected, sends every recorded contribution back to the
+ * member who paid it. Permissionless, and it can pay nobody else. Aborts 223
+ * E_CLAIM_NOT_EXPIRED inside the window and 206 E_ALREADY_CLAIMED once the
+ * pot was collected.
+ */
+export function buildRefundExpiredClaimTx(params: RefundExpiredClaimParams): BuildTransactionFn {
+  const packageId = packageIdFor(params.network);
+  const escrowId = requireAddr(params.escrowId, 'escrowId');
+  return (txb: Transaction) => {
+    txb.moveCall({
+      target: `${packageId}::njangi_cycle_escrow::refund_expired_claim`,
+      typeArguments: [params.coinType],
+      arguments: [txb.object(escrowId), txb.object(CLOCK_OBJECT_ID)],
+    });
+  };
+}
+
 /**
  * Convenience reader — fetches the CycleEscrow object state for a given
  * id. Useful for contribute/redeem UIs that need the snapshot's required
