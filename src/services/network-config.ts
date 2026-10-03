@@ -69,7 +69,7 @@ function buildNetworkConfig(network: NetworkType): NetworkConfig {
         globalConfig: process.env.NEXT_PUBLIC_TESTNET_CETUS_GLOBAL_CONFIG || '0xf5ff7d5ba73b581bca6b4b9fa0049cd320360abd154b809f8700a8fd3cfaf7ca',
         pools: {
           SUI_USDC: process.env.NEXT_PUBLIC_TESTNET_CETUS_POOL_SUI_USDC || '0xb01b068bd0360bb3308b81eb42386707e460b7818816709b7f51e1635d542d40',
-          SUI_USDT: '0x2cc7129e25401b5eccfdc678d402e2cc22f688f1c8e5db58c06c3c4e71242eb2',
+          // No SUI_USDT pool on testnet: see `tokens.USDT` below.
         },
         aggregatorRouter: '0xeffc8ae61f439bb34c9b905ff8f29ec56873dcedf81c7123ff2f1f67c45ec302',
         pools_id: '0xdf23f5920fbe7d529ddda0c814efd1c5ab3a4ce67fa34dadf9e135c3d617df25',
@@ -81,7 +81,10 @@ function buildNetworkConfig(network: NetworkType): NetworkConfig {
       tokens: {
         SUI: '0x2::sui::SUI',
         USDC: '0x9e89965f542887a8f0383451ba553fedf62c04e4dc68f60dec5b8d7ad1436bd6::usdc::USDC',
-        USDT: '0xc060006111016b8a020ad5b33834984a437aaa7d3c74c18e09a95d48aceab08::usdt::USDT',
+        // No USDT on testnet. The old entry's package address had 63 hex
+        // digits, and no testnet object exists at it or at any one-digit
+        // repair of it (checked 2026-10); neither does the old SUI_USDT pool.
+        // `USDT` is optional and every caller handles its absence.
         SUI_USDE: process.env.NEXT_PUBLIC_TESTNET_SUI_USDE || '',
       },
       whatsapp: {

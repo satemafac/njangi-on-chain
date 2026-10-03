@@ -323,15 +323,16 @@ const resolveStablecoinMetadata = (
   const normalizedUpper = normalizedTarget.toUpperCase();
 
   const usdcCoinType = coinTypes.USDC || tokens.USDC || normalizedTarget;
-  const usdtCoinType = tokens.USDT || normalizedTarget;
+  // Optional (testnet has none); see src/lib/stablecoin-metadata.ts.
+  const usdtCoinType = tokens.USDT || '';
   const suiUsdeCoinType = coinTypes.SUI_USDE || tokens.SUI_USDE || normalizedTarget;
 
   if (!normalizedTarget || normalizedUpper === 'USDC' || normalizedTarget === usdcCoinType || normalizedTarget === tokens.USDC) {
     return { coinType: usdcCoinType, decimals: 6 };
   }
 
-  if (normalizedUpper === 'USDT' || normalizedTarget === usdtCoinType) {
-    return { coinType: usdtCoinType, decimals: 6 };
+  if (normalizedUpper === 'USDT' || (usdtCoinType && normalizedTarget === usdtCoinType)) {
+    return { coinType: usdtCoinType || normalizedTarget, decimals: 6 };
   }
 
   if (normalizedUpper === 'SUI_USDE' || normalizedTarget === suiUsdeCoinType || normalizedTarget === tokens.SUI_USDE) {

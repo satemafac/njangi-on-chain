@@ -13,7 +13,9 @@ export function resolveStablecoinMetadata(targetCoinType?: string | null): Stabl
   const normalizedUpper = normalizedTarget.toUpperCase();
 
   const usdcCoinType = coinTypes.USDC || tokens.USDC || normalizedTarget;
-  const usdtCoinType = tokens.USDT || normalizedTarget;
+  // Optional: testnet configures no USDT. Defaulting it to the target would
+  // make every non-USDC target match the USDT branch below.
+  const usdtCoinType = tokens.USDT || '';
   const suiUsdeCoinType = coinTypes.SUI_USDE || tokens.SUI_USDE || normalizedTarget;
 
   if (
@@ -25,8 +27,8 @@ export function resolveStablecoinMetadata(targetCoinType?: string | null): Stabl
     return { label: 'USDC', coinType: usdcCoinType, decimals: 6 };
   }
 
-  if (normalizedUpper === 'USDT' || normalizedTarget === usdtCoinType) {
-    return { label: 'USDT', coinType: usdtCoinType, decimals: 6 };
+  if (normalizedUpper === 'USDT' || (usdtCoinType && normalizedTarget === usdtCoinType)) {
+    return { label: 'USDT', coinType: usdtCoinType || normalizedTarget, decimals: 6 };
   }
 
   if (
