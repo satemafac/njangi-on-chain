@@ -113,6 +113,66 @@ async function consumePostgresRateLimit(opts: RateLimitOptions): Promise<RateLim
   };
 }
 
+function peekMemoryRateLimit(opts: RateLimitOptions): RateLimitResult {
+  const now = Date.now();
+  const current = windows.get(opts.key);
+  if (!current || now - current.start >= opts.windowMs) {
+    return { allowed: true, remaining: opts.limit, resetMs: opts.windowMs };
+  }
+  const resetMs = opts.windowMs - (now - current.start);
+  if (current.count >= opts.limit) {
+    return { allowed: false, remaining: 0, resetMs };
+  }
+  return { allowed: true, remaining: opts.limit - current.count, resetMs };
+}
+
+async function peekPostgresRateLimit(opts: RateLimitOptions): Promise<RateLimitResult> {
+  await ensureTable();
+  const now = Date.now();
+  const windowStartMs = Math.floor(now / opts.windowMs) * opts.windowMs;
+  const result = await getSharedPgPool().query<{ count: number }>(
+    `SELECT count FROM rate_limits
+      WHERE bucket = $1 AND window_start = to_timestamp($2 / 1000.0)`,
+    [opts.key, windowStartMs],
+  );
+  const count = Number(result.rows[0]?.count ?? 0);
+  const resetMs = Math.max(windowStartMs + opts.windowMs - now, 0);
+  if (count >= opts.limit) {
+    return { allowed: false, remaining: 0, resetMs };
+  }
+  return { allowed: true, remaining: opts.limit - count, resetMs };
+}
+
+/**
+ * Read-only check of a window: reports whether a `consumeRateLimit` call
+ * with the same options would be allowed right now, WITHOUT spending a
+ * slot. For actions whose expensive step can fail after the check (the
+ * faucet drip calling an upstream that throttles), peek first, do the
+ * work, and consume only on success — otherwise a failed attempt locks
+ * the caller out for the whole window with nothing to show for it.
+ *
+ * Peek-then-consume is not atomic; two concurrent callers can both pass
+ * the peek. That is acceptable for defense-in-depth limits (the upstream
+ * enforces its own), not for correctness gates.
+ */
+export async function peekRateLimit(opts: RateLimitOptions): Promise<RateLimitResult> {
+  if (!isPostgresConfigured()) {
+    return peekMemoryRateLimit(opts);
+  }
+  try {
+    return await peekPostgresRateLimit(opts);
+  } catch (err) {
+    if (!postgresWarned) {
+      postgresWarned = true;
+      console.warn(
+        '[rate-limit] Postgres-backed limiter failed; falling back to in-memory window:',
+        err instanceof Error ? err.message : err,
+      );
+    }
+    return peekMemoryRateLimit(opts);
+  }
+}
+
 export async function consumeRateLimit(opts: RateLimitOptions): Promise<RateLimitResult> {
   if (!isPostgresConfigured()) {
     return consumeMemoryRateLimit(opts);

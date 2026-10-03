@@ -9,6 +9,7 @@ import * as Tooltip from '@radix-ui/react-tooltip';
 import * as Dialog from '@radix-ui/react-dialog';
 import { priceService } from '../services/price-service';
 import { toast } from 'react-hot-toast';
+import { copyToClipboard as copyTextToClipboard, manualCopyMessage } from '@/lib/copy-to-clipboard';
 import { Eye, EyeOff, Settings, Trash2, CreditCard, RefreshCw, Users, X, Copy, Link, AlertCircle, Send, Shield, Clock, CheckCircle, ExternalLink, ArrowRightLeft, ChevronDown, ChevronUp, ScrollText } from 'lucide-react';
 import RampPicker from '@/components/RampPicker';
 import ReceiveFundsModal from '@/components/ReceiveFundsModal';
@@ -2180,33 +2181,6 @@ export default function Dashboard() {
       toast.error('Failed to refresh balance');
     } finally {
       setIsRefreshingBalance(false);
-    }
-  };
-
-  // In-app testnet gas drip. zkLogin users pay their own gas, so a 0-balance
-  // new account stalls on every action; this drips test SUI to the session's
-  // own address (server-verified, rate-limited; testnet-only — 404s on mainnet)
-  // so onboarding can proceed without the captcha-gated external faucet.
-  const [isDrippingFaucet, setIsDrippingFaucet] = useState(false);
-  const requestTestSui = async () => {
-    if (isDrippingFaucet) return;
-    setIsDrippingFaucet(true);
-    const pending = toast.loading('Requesting test SUI…');
-    try {
-      const res = await fetch('/api/faucet/drip', { method: 'POST' });
-      const data = await res.json().catch(() => ({}));
-      if (res.ok && data.success) {
-        toast.success('Test SUI sent — refreshing your balance…', { id: pending });
-        if (userAddress) clearWalletBalanceCache(userAddress);
-        // Faucet settlement isn't instant; refresh shortly after.
-        setTimeout(() => { void fetchBalance(false); }, 4000);
-      } else {
-        toast.error(data.error || 'Faucet request failed. Try faucet.sui.io directly.', { id: pending });
-      }
-    } catch {
-      toast.error('Could not reach the faucet. Try faucet.sui.io directly.', { id: pending });
-    } finally {
-      setIsDrippingFaucet(false);
     }
   };
 
@@ -5138,7 +5112,10 @@ export default function Dashboard() {
     if (!text) return;
     
     try {
-      await navigator.clipboard.writeText(text);
+      if ((await copyTextToClipboard(text)) === 'failed') {
+        toast.error(manualCopyMessage('text', text), { duration: 12000 });
+        return;
+      }
       
       if (type === 'address') {
         setShowToast(true);
@@ -5155,14 +5132,16 @@ export default function Dashboard() {
   };
 
   const copyShareLink = async (circleId: string) => {
-    try {
-      const shareLink = `${window.location.origin}/circle/${circleId}/join`;
-      await navigator.clipboard.writeText(shareLink);
-      toast.success('Invite link copied to clipboard!');
-    } catch (err) {
-      console.error('Failed to copy share link:', err);
-      toast.error('Failed to copy invite link');
+    const shareLink = `${window.location.origin}/circle/${circleId}/join`;
+    // No await before the copy: the click's user-activation must still be live.
+    const outcome = await copyTextToClipboard(shareLink);
+    if (outcome === 'failed') {
+      // Both clipboard paths refused (unfocused document, in-app browser,
+      // permission policy). Hand the user the link instead of a dead end.
+      toast.error(manualCopyMessage('invite link', shareLink), { duration: 12000 });
+      return;
     }
+    toast.success('Invite link copied to clipboard!');
   };
 
   // Format cycle lengths and days for display
@@ -6499,18 +6478,15 @@ export default function Dashboard() {
               </div>
             </div>
             <div className="flex items-center gap-2">
-              <button
-                onClick={requestTestSui}
-                disabled={isDrippingFaucet}
-                className="inline-flex items-center rounded-full border border-amber-400 bg-amber-500 px-4 py-2 text-sm font-semibold text-white transition hover:bg-amber-600 disabled:opacity-60"
-              >
-                {isDrippingFaucet ? 'Sending…' : 'Get test SUI'}
-              </button>
+              {/* The public faucet gates every request on a browser-side
+                  proof-of-work challenge (2026-09), so the one-click in-app
+                  drip that used to sit here could never deliver; the web
+                  faucet, with the address prefilled, is the working path. */}
               <a
                 href={`https://faucet.sui.io/?address=${userAddress || ''}`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex items-center rounded-full border border-amber-300 bg-white px-4 py-2 text-sm font-medium text-amber-900 transition hover:bg-amber-100"
+                className="inline-flex items-center rounded-full border border-amber-400 bg-amber-500 px-4 py-2 text-sm font-semibold text-white transition hover:bg-amber-600"
               >
                 <ExternalLink className="mr-2 h-4 w-4" />
                 Open faucet
@@ -6552,7 +6528,12 @@ export default function Dashboard() {
                         {t('dashboard.eyebrow')}
                       </p>
                       <h1 className="mt-3 text-3xl font-semibold tracking-tight text-slate-950 sm:mt-4 sm:text-4xl">
-                        {t('dashboard.welcome', { name: account.name ? `, ${account.name}` : '' })}
+                        {t(
+                          // "Welcome back" to someone who has never been here
+                          // reads as a mistake; greet a first-timer as one.
+                          !loading && circles.length === 0 ? 'dashboard.welcomeFirst' : 'dashboard.welcome',
+                          { name: account.name ? `, ${account.name}` : '' },
+                        )}
                       </h1>
                       <p className="mt-3 max-w-xl text-sm leading-7 text-slate-600 sm:mt-4 sm:text-base">
                         {t('dashboard.blurb')}
@@ -7708,15 +7689,9 @@ export default function Dashboard() {
                     <p className="mt-2 text-sm text-slate-500">
                       {t('dashboard.emptyBody')}
                     </p>
+                    {/* Create first: on a phone the buttons stack, and the
+                        primary action should be the one the eye lands on. */}
                     <div className="mt-6 flex flex-wrap justify-center gap-3">
-                      <button
-                        type="button"
-                        onClick={() => setIsJoinDialogOpen(true)}
-                        className={secondaryActionClass}
-                      >
-                        <Users className="mr-2 h-4 w-4" />
-                        {t('dashboard.emptyJoin')}
-                      </button>
                       <button
                         type="button"
                         onClick={() => {
@@ -7739,6 +7714,14 @@ export default function Dashboard() {
                           />
                         </svg>
                         {t('dashboard.emptyCreate')}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setIsJoinDialogOpen(true)}
+                        className={secondaryActionClass}
+                      >
+                        <Users className="mr-2 h-4 w-4" />
+                        {t('dashboard.emptyJoin')}
                       </button>
                     </div>
                   </div>

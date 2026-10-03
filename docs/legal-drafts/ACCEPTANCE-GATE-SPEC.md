@@ -24,6 +24,8 @@ acceptance gate") flags this as launch-blocking.
 - Expose current versions to the client from a single constant, e.g.
   `src/lib/legal-docs.ts`: `{ terms: '1.0.0', privacy: '1.0.0', risk: '1.0.0' }`. Bumping a
   constant + adding the new markdown is the whole release procedure for a new version.
+  (As built: `CURRENT_LEGAL_VERSIONS` in `src/lib/legal-acceptance.ts`. A bump also needs a
+  one-line `LEGAL_CHANGE_NOTES` entry, the modal's "what changed" line; a test enforces it.)
 
 ## Storage: `legal_acceptances` (Postgres)
 

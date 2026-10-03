@@ -46,8 +46,9 @@ Please read this carefully. You will be asked to confirm that you have read and 
 ## Losing your login can mean losing your wallet
 
 - Your wallet is connected to your **Google, Facebook, or Apple account**.
-- **If you lose that account, you can lose access to your wallet and your funds.**
-- Generate your **recovery codes** and store them somewhere safe (not only on your phone). Protect your social account with a strong password and two-step verification.
+- **If you lose that account, you can lose access to your wallet and your funds.** Njangi On-Chain has no recovery codes and cannot restore your access.
+- Protect that account with a strong password and two-step verification, and keep its recovery options (phone number, backup email) up to date.
+- Signing in also relies on **Enoki**, a service run by Mysten Labs. It supplies a private value (a "salt") that, together with your social account, determines your wallet address. If Enoki stopped working for Njangi On-Chain, you could lose access to your wallet.
 
 ## The rules around crypto may change
 
@@ -62,7 +63,7 @@ By ticking the box, you confirm that you:
 - understand the risks above and accept them;
 - know that Njangi On-Chain cannot reverse transactions, recover funds, or guarantee circle members;
 - know there is no deposit insurance and no interest;
-- will keep your recovery codes and social account safe;
+- will keep the social account you sign in with safe;
 - are at least 18 years old.
 
 If anything here is unclear, do not continue. Ask us at {{PRIVACY_CONTACT}} or seek independent advice first.

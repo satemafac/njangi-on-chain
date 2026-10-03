@@ -18,6 +18,14 @@ import { LoginButton } from '@/components/LoginButton';
 import { useTranslation } from '@/hooks/useTranslation';
 import { Seo } from '@/components/Seo';
 import { SITE_URL } from '@/lib/structured-data';
+import type { GetServerSideProps } from 'next';
+import {
+  buildInviteShareCopy,
+  normalizeCircleIdParam,
+  readInvitePreview,
+  type InvitePreview,
+} from '@/lib/invite-preview';
+import { getCurrentNetwork } from '@/services/network-config';
 
 // Define Circle type
 interface Circle {
@@ -81,7 +89,29 @@ interface TransactionInputData {
   [key: string]: unknown;
 }
 
-export default function JoinCircle() {
+interface JoinCircleProps {
+  /** Server-side read for the share card; null when the read failed or the id was bad. */
+  invitePreview: InvitePreview | null;
+}
+
+/**
+ * Renders the share tags on the server so WhatsApp/iMessage link cards read
+ * as an invitation ("You've been invited to join <circle>") instead of the
+ * site's marketing card. The read is bounded and never throws; a failure
+ * still yields generic invitation copy. Cached at the edge for a few
+ * minutes — crawlers re-fetch a link every time it is pasted.
+ */
+export const getServerSideProps: GetServerSideProps<JoinCircleProps> = async ({ params, res }) => {
+  const circleId = normalizeCircleIdParam(params?.id);
+  res.setHeader('Cache-Control', 'public, s-maxage=300, stale-while-revalidate=3600');
+  if (!circleId) {
+    return { props: { invitePreview: null } };
+  }
+  const invitePreview = await readInvitePreview(circleId, getCurrentNetwork());
+  return { props: { invitePreview } };
+};
+
+export default function JoinCircle({ invitePreview }: JoinCircleProps) {
   const router = useRouter();
   const { id } = router.query;
   const { t } = useTranslation();
@@ -739,13 +769,34 @@ export default function JoinCircle() {
 
   // Generate page title & description based on circle data
   const joinRequestsOpen = circle ? (!circle.isActive || circle.paused) : false;
-  const pageTitle = circle 
-    ? `Join ${circle.name} Circle - Njangi On-Chain`
-    : 'Join Circle - Njangi On-Chain';
-    
-  const pageDescription = circle 
-    ? `Join ${circle.name}, a savings circle with ${formatCurrency(circle.contributionAmountUsd, circle.currencyType)} contribution ${formatCycleInfo(circle.cycleLength, circle.cycleDay).toLowerCase()}. Currently ${circle.currentMembers}/${circle.maxMembers} members.`
-    : 'Join a secure, transparent savings circle powered by SUI blockchain. Create and manage your community savings with automated payouts.';
+  // One copy builder for the server-rendered card (what link previews
+  // show) and the client-side tab title once the circle has loaded. The
+  // client-loaded circle wins when present; otherwise the SSR preview.
+  const shareCopy = buildInviteShareCopy(
+    circle
+      ? {
+          name: circle.name,
+          currentMembers: circle.currentMembers,
+          maxMembers: circle.maxMembers,
+          contributionUsd: circle.contributionAmountUsd,
+          cycleLength: circle.cycleLength,
+        }
+      : invitePreview,
+  );
+  const pageTitle = shareCopy.title;
+  const pageDescription = shareCopy.description;
+  const shareCard = (
+    <Seo
+      title={pageTitle}
+      titleAbsolute
+      description={pageDescription}
+      canonical={`${SITE_URL}/circle/${typeof id === 'string' ? id : ''}/join`}
+      image={{
+        url: '/og/join.png',
+        alt: `Join ${circle?.name || invitePreview?.name || 'a njangi'} circle on Njangi On-Chain`,
+      }}
+    />
+  );
 
   // Update document title when circle data is loaded
   useEffect(() => {
@@ -787,8 +838,11 @@ export default function JoinCircle() {
 
   // Update the component's return statement to safely check auth state
   if (!router.isReady) {
-    // Show loading while router is initializing
+    // Show loading while router is initializing. The share card still goes
+    // out: this is the branch crawlers used to hit, and it had no tags.
     return (
+      <>
+      {shareCard}
       <div className={pageShellClass}>
         <div className="pointer-events-none absolute inset-x-0 top-0 h-[360px] bg-[radial-gradient(circle_at_top,rgba(112,129,155,0.18),transparent_68%)]" />
         <main className="relative mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-8">
@@ -828,11 +882,14 @@ export default function JoinCircle() {
           </div>
         </main>
       </div>
+      </>
     );
   }
 
   if (!id) {
     return (
+      <>
+      {shareCard}
       <div className={pageShellClass}>
         <div className="pointer-events-none absolute inset-x-0 top-0 h-[360px] bg-[radial-gradient(circle_at_top,rgba(112,129,155,0.18),transparent_68%)]" />
         <main className="relative mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-8">
@@ -860,6 +917,7 @@ export default function JoinCircle() {
           </div>
         </main>
       </div>
+      </>
     );
   }
 
@@ -872,16 +930,7 @@ export default function JoinCircle() {
 
           The image was /og-image.png, a stale blue-brand card left over from
           the previous visual identity. */}
-      <Seo
-        title={pageTitle}
-        titleAbsolute
-        description={pageDescription}
-        canonical={`${SITE_URL}/circle/${id}/join`}
-        image={{
-          url: '/og/join.png',
-          alt: `Join ${circle?.name || 'a njangi'} circle on Njangi On-Chain`,
-        }}
-      />
+      {shareCard}
       
       <div className={pageShellClass}>
         <div className="pointer-events-none absolute inset-x-0 top-0 h-[360px] bg-[radial-gradient(circle_at_top,rgba(112,129,155,0.18),transparent_68%)]" />

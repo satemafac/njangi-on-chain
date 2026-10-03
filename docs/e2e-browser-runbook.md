@@ -58,9 +58,21 @@ Sign in as ADMIN. Record the address from Wallet Overview.
 - `sessionStorage['njangi.zklogin.pending']` is gone (consumed at callback)
 
 ### 2 — Create a circle
-Small amounts: contribution 0.1 USD, deposit 0.1 USD, max 3 members.
+Small amounts: contribution 0.1 USD, 3 members. The setup is one screen
+since 2026-09-23: name, amount, how often, how many. The security deposit is
+derived at half the contribution (0.05 USD here) — open **More settings**
+only if you need a different deposit, rotation style, cycle day, penalties or
+the liveness fallback. "Bringing a circle that's already running?" and
+"Saving toward one goal instead?" are links under the form, not a first step.
 
-Proves `createCircle` builds and signs client-side. Record the circle id.
+On testnet a fresh account sees an amber "no test SUI yet" notice above the
+button with the faucet link; top up, come back to the tab, and the notice
+clears on its own.
+
+Proves `createCircle` builds and signs client-side. The invite screen shows
+the join link immediately (resolved from the creation digest) with
+**Copy invite link**, **Share on WhatsApp** and **Open your circle**. Record
+the circle id from the link.
 
 ### 3 — Members join
 As MEMBER-1 and MEMBER-2: open the invite link and request to join. The request

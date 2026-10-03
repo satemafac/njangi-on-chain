@@ -4,6 +4,8 @@ import { useRouter } from 'next/router';
 import { useAuth } from '@/contexts/AuthContext';
 import { CallbackStatusShell } from '@/components/ui/CallbackStatusShell';
 import { claimCallbackToken } from '@/lib/auth-callback-guard';
+import { isAppPath, takePostLoginDestination } from '@/lib/post-login-redirect';
+import { trackFunnel } from '@/lib/funnel-events';
 
 export default function AuthCallback() {
   const router = useRouter();
@@ -163,51 +165,20 @@ export default function AuthCallback() {
         setIsError(false);
         setStatus('Authentication successful! Redirecting...');
 
-        // Check if this is a WhatsApp authentication
-        const whatsappToken = localStorage.getItem('whatsappAuthToken');
-        const whatsappPhone = localStorage.getItem('whatsappAuthPhone');
-        
-        if (whatsappToken && whatsappPhone) {
-          // This is a WhatsApp authentication - notify WhatsApp of success
-          try {
-            // Ensure phone number has + prefix for international format
-            const formattedPhone = whatsappPhone.startsWith('+') ? whatsappPhone : `+${whatsappPhone}`;
-            
-            await fetch('/api/whatsapp/auth/notify', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ 
-                token: whatsappToken, 
-                phone: formattedPhone, 
-                success: true,
-                message: 'Authentication completed successfully! You can now use all Njangi On-Chain commands.'
-              }),
-            });
-            
-            // Clear WhatsApp auth data
-            localStorage.removeItem('whatsappAuthToken');
-            localStorage.removeItem('whatsappAuthPhone');
-            
-            setStatus('Success! You can now return to WhatsApp.');
-            
-            // Don't auto-redirect for WhatsApp users - let them manually return
-            return;
-          } catch (error) {
-            console.warn('Failed to notify WhatsApp of auth success:', error);
-          }
-        }
-        
-        // Check if there's a stored redirect URL for non-WhatsApp users
-        const redirectUrl = localStorage.getItem('redirectAfterLogin');
-        
+        trackFunnel('signin_completed');
+
+        // Where to next: the landing page's "Start a circle" stores
+        // /create-circle, the join page stores its own URL; both are validated
+        // as same-origin before use (src/lib/post-login-redirect.ts).
+        const destination = takePostLoginDestination();
+
         // Short delay before redirecting to show completion
         redirectTimeoutRef.current = setTimeout(() => {
-          if (redirectUrl) {
-            // Clear the stored redirect URL
-            localStorage.removeItem('redirectAfterLogin');
-            console.log('Redirecting to stored URL:', redirectUrl);
-            // Use window.location.href for external URLs or different origins
-            window.location.href = redirectUrl;
+          if (destination && isAppPath(destination)) {
+            router.replace(destination);
+          } else if (destination) {
+            // Same-origin absolute URL (join page): a full navigation, as before.
+            window.location.href = destination;
           } else {
             // Default redirect to dashboard
             router.replace('/dashboard');
@@ -232,9 +203,10 @@ export default function AuthCallback() {
           setIsError(false);
           setStatus('Authentication successful! Redirecting...');
           redirectTimeoutRef.current = setTimeout(() => {
-            const stored = localStorage.getItem('redirectAfterLogin');
-            if (stored) {
-              localStorage.removeItem('redirectAfterLogin');
+            const stored = takePostLoginDestination();
+            if (stored && isAppPath(stored)) {
+              router.replace(stored);
+            } else if (stored) {
               window.location.href = stored;
             } else {
               router.replace('/dashboard');
@@ -246,36 +218,7 @@ export default function AuthCallback() {
         setIsError(true);
         setStatus('Authentication failed');
         setError(errorMessage);
-        
-        // Check if this is a WhatsApp authentication failure
-        const whatsappToken = localStorage.getItem('whatsappAuthToken');
-        const whatsappPhone = localStorage.getItem('whatsappAuthPhone');
-        
-        if (whatsappToken && whatsappPhone) {
-          // Notify WhatsApp of failure
-          try {
-            // Ensure phone number has + prefix for international format
-            const formattedPhone = whatsappPhone.startsWith('+') ? whatsappPhone : `+${whatsappPhone}`;
-            
-            await fetch('/api/whatsapp/auth/notify', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ 
-                token: whatsappToken, 
-                phone: formattedPhone, 
-                success: false,
-                message: errorMessage 
-              }),
-            });
-          } catch (notifyError) {
-            console.warn('Failed to notify WhatsApp of auth failure:', notifyError);
-          }
-          
-          // Clear WhatsApp auth data
-          localStorage.removeItem('whatsappAuthToken');
-          localStorage.removeItem('whatsappAuthPhone');
-        }
-        
+
         // Short delay before redirecting on error
         redirectAfterFailure();
       }
@@ -285,25 +228,18 @@ export default function AuthCallback() {
   }, [handleCallback, router, router.isReady, setError]);
 
   const tone = isError ? 'error' : progress >= 100 ? 'success' : 'processing';
-  const isWhatsAppReady = !isError && status.includes('return to WhatsApp');
   const pageTitle = isError
     ? 'Sign-in failed - Njangi On-Chain'
     : 'Completing sign in - Njangi On-Chain';
   const lead = isError
     ? 'We could not complete the secure sign-in handoff. The app is keeping the session clean and will send you back to the starting point shortly.'
-    : isWhatsAppReady
-      ? 'Your wallet session is ready. Return to WhatsApp and continue using Njangi On-Chain commands there.'
-      : 'We’re validating the provider response, generating your zero-knowledge proof, and restoring the correct destination before returning you to the app.';
+    : 'We’re validating the provider response, generating your zero-knowledge proof, and restoring the correct destination before returning you to the app.';
   const helperText = isError
     ? 'Redirecting you back to the sign-in entry point.'
-    : isWhatsAppReady
-      ? 'You can switch back to WhatsApp once you are ready.'
-      : tone === 'success'
-        ? 'Your wallet session is ready. Redirecting you now.'
-        : 'Keep this tab open while the secure handoff completes.';
-  const chips = isWhatsAppReady
-    ? ['WhatsApp handoff', 'zkLogin proof', 'Wallet ready']
-    : ['OAuth callback', 'zkLogin proof', 'Secure redirect'];
+    : tone === 'success'
+      ? 'Your wallet session is ready. Redirecting you now.'
+      : 'Keep this tab open while the secure handoff completes.';
+  const chips = ['OAuth callback', 'zkLogin proof', 'Secure redirect'];
 
   return (
     <>

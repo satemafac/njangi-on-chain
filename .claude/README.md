@@ -13,7 +13,6 @@ This directory contains Claude Code configuration for the njangi-on-chain projec
 │   ├── test-contracts/    # /test-contracts - Run Move tests
 │   ├── build-deploy/      # /build-deploy - Build & deploy
 │   ├── verify-circle/     # /verify-circle - Check circle state
-│   ├── start-zklogin/     # /start-zklogin - Start auth services
 │   ├── check-env/         # /check-env - Validate environment
 │   └── deploy-testnet/    # /deploy-testnet - Full deployment
 └── plugins/               # Plugin configurations
@@ -42,7 +41,6 @@ After restarting Claude Code, use project-specific commands:
 /check-env          # Validate environment setup
 /test-contracts     # Run Move contract tests
 /build-deploy       # Build and deploy contracts
-/start-zklogin      # Start Docker services
 ```
 
 ## Configuration Files

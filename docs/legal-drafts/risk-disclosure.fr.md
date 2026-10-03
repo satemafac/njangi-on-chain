@@ -47,8 +47,9 @@ Veuillez lire attentivement ce qui suit. Il vous sera demandé de confirmer que 
 ## Perdre votre identifiant peut signifier perdre votre portefeuille
 
 - Votre portefeuille est lié à votre **compte Google, Facebook ou Apple**.
-- **Si vous perdez ce compte, vous pouvez perdre l'accès à votre portefeuille et à vos fonds.**
-- Générez vos **codes de récupération** et conservez-les en lieu sûr (pas uniquement sur votre téléphone). Protégez votre compte social par un mot de passe robuste et la vérification en deux étapes.
+- **Si vous perdez ce compte, vous pouvez perdre l'accès à votre portefeuille et à vos fonds.** Njangi On-Chain n'a pas de codes de récupération et ne peut pas rétablir votre accès.
+- Protégez ce compte par un mot de passe robuste et la vérification en deux étapes, et tenez à jour ses options de récupération (numéro de téléphone, adresse électronique de secours).
+- La connexion repose aussi sur **Enoki**, un service exploité par Mysten Labs. Il fournit une valeur privée (un « sel ») qui, avec votre compte social, détermine l'adresse de votre portefeuille. Si Enoki cessait de fonctionner pour Njangi On-Chain, vous pourriez perdre l'accès à votre portefeuille.
 
 ## Les règles sur la crypto peuvent changer
 
@@ -63,7 +64,7 @@ En cochant la case, vous confirmez que vous :
 - comprenez les risques ci-dessus et les acceptez ;
 - savez que Njangi On-Chain ne peut ni annuler des transactions, ni récupérer des fonds, ni garantir les membres d'un cercle ;
 - savez qu'il n'existe ni assurance des dépôts ni intérêt ;
-- conserverez vos codes de récupération et votre compte social en sécurité ;
+- conserverez en sécurité le compte social utilisé pour vous connecter ;
 - êtes âgé d'au moins 18 ans.
 
 Si un point n'est pas clair, ne poursuivez pas. Écrivez-nous à {{PRIVACY_CONTACT}} ou demandez d'abord un avis indépendant.

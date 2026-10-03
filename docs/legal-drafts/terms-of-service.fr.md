@@ -45,12 +45,13 @@ Il vous appartient exclusivement de vérifier que votre participation à un cerc
 
 ## 3. Votre compte et votre portefeuille (zkLogin)
 
-Le Service utilise zkLogin : l'adresse de votre portefeuille sur la blockchain Sui est dérivée de votre compte Google, Facebook ou Apple. Il n'existe pas de mot de passe distinct et **nous ne détenons pas vos clés privées**.
+Le Service utilise zkLogin : l'adresse de votre portefeuille sur la blockchain Sui est dérivée de votre compte Google, Facebook ou Apple et d'un sel cryptographique que notre prestataire zkLogin, Enoki (exploité par Mysten Labs, Inc.), fournit à chaque connexion. Il n'existe pas de mot de passe distinct et **nous ne détenons pas vos clés privées**.
 
 Vous reconnaissez et acceptez que :
 
-- **si vous perdez l'accès au compte social utilisé pour vous connecter, vous pouvez perdre définitivement l'accès à votre portefeuille et aux fonds qu'il contrôle.** Les codes de récupération proposés par le Service n'atténuent ce risque que si vous les générez et les conservez en lieu sûr ;
-- vous êtes seul responsable de la sécurité de votre compte social (mot de passe robuste, authentification à deux facteurs) et de vos codes de récupération ;
+- **si vous perdez l'accès au compte social utilisé pour vous connecter, vous pouvez perdre définitivement l'accès à votre portefeuille et aux fonds qu'il contrôle.** Le Service ne propose ni codes de récupération ni aucun autre moyen de rétablir l'accès sans ce compte ;
+- vous êtes seul responsable de la sécurité de votre compte social (mot de passe robuste, authentification à deux facteurs) ;
+- l'accès à votre portefeuille dépend aussi de la fourniture continue de votre sel au Service par Enoki ; si Enoki cesse de le fournir, vous pouvez perdre l'accès à votre portefeuille et aux fonds qu'il contrôle (voir l'article 11) ;
 - toute transaction signée depuis votre portefeuille est réputée autorisée par vous ;
 - nous ne pouvons ni réinitialiser, ni restaurer, ni transférer votre portefeuille à votre place.
 
@@ -120,7 +121,7 @@ Le logiciel, la marque et les contenus du Service appartiennent à Njangi On-Cha
 
 ## 11. Services de tiers
 
-Le Service interagit avec des tiers que nous ne contrôlons pas, notamment le réseau Sui et ses validateurs, le stockage décentralisé Walrus, les fournisseurs OAuth (Google, Facebook, Apple), la plateforme WhatsApp Business de Meta, Stripe, les partenaires d'achat de crypto-actifs et les oracles de prix. Leur disponibilité et leur comportement échappent à notre contrôle, et votre utilisation de leurs services peut être soumise à leurs propres conditions. Dans toute la mesure permise par la loi, nous déclinons toute responsabilité au titre des services de tiers.
+Le Service interagit avec des tiers que nous ne contrôlons pas, notamment le réseau Sui et ses validateurs, le stockage décentralisé Walrus, les fournisseurs OAuth (Google, Facebook, Apple), notre prestataire zkLogin Enoki (Mysten Labs, Inc.), la plateforme WhatsApp Business de Meta, Stripe, les partenaires d'achat de crypto-actifs et les oracles de prix. Leur disponibilité et leur comportement échappent à notre contrôle, et votre utilisation de leurs services peut être soumise à leurs propres conditions. Dans toute la mesure permise par la loi, nous déclinons toute responsabilité au titre des services de tiers.
 
 ## 12. Suspension et résiliation
 
@@ -135,7 +136,7 @@ LE SERVICE, Y COMPRIS LES CONTRATS INTELLIGENTS ET TOUTE INFORMATION AFFICHÉE (
 Dans toute la mesure permise par le droit applicable :
 
 - Njangi On-Chain, ses dirigeants, salariés et mandataires ne sont **pas responsables des dommages indirects, accessoires, spéciaux, consécutifs ou punitifs**, ni des pertes de profits, de données, de clientèle ou de crypto-actifs, découlant du Service ou s'y rapportant ;
-- Njangi On-Chain n'est **pas responsable** : des pertes causées par le comportement des membres d'un cercle (y compris le défaut de cotisation ou la fraude) ; des défaillances du réseau blockchain ou de ses validateurs ; des défauts ou exploitations des contrats intelligents ; des erreurs d'oracles ou de flux de prix ; de la perte d'accès à votre connexion sociale ou à vos codes de récupération ; des actes ou omissions des services de tiers (article 11) ; ou des événements échappant à notre contrôle raisonnable ;
+- Njangi On-Chain n'est **pas responsable** : des pertes causées par le comportement des membres d'un cercle (y compris le défaut de cotisation ou la fraude) ; des défaillances du réseau blockchain ou de ses validateurs ; des défauts ou exploitations des contrats intelligents ; des erreurs d'oracles ou de flux de prix ; de la perte d'accès à votre connexion sociale ; des actes ou omissions des services de tiers (article 11) ; ou des événements échappant à notre contrôle raisonnable ;
 - **la responsabilité cumulée de Njangi On-Chain** au titre de l'ensemble des réclamations liées au Service est limitée au **plus élevé des deux montants suivants : (a) les frais d'abonnement que vous avez versés à Njangi On-Chain au cours des douze (12) mois précédant le fait générateur, et (b) cent (100) dollars US**.
 
 Aucune stipulation des présentes Conditions n'exclut ni ne limite une responsabilité qui ne peut être exclue ou limitée en vertu du droit applicable, notamment la responsabilité pour dol, faute intentionnelle ou faute lourde lorsque cette limitation n'est pas permise.

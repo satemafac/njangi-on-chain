@@ -4,8 +4,8 @@
 // `CREATE INDEX IF NOT EXISTS`), so re-runs are safe.
 //
 // Tables consolidated here:
-//   1. salts                          (src/services/postgres-adapter.ts)
-//   2. recovery_codes                 (src/services/postgres-adapter.ts)
+//   1. salts                          (legacy; scripts/process-deletion-request.mjs)
+//   2. recovery_codes                 (legacy; scripts/process-deletion-request.mjs)
 //   3. join_requests                  (src/services/database-service.ts)
 //   4. mainnet_signups                (src/services/mainnet-signup-database.ts)
 //   5. whatsapp_phone_index           (src/lib/whatsapp-link-index.ts)
@@ -19,6 +19,9 @@
 //  12. subscriptions                  (src/services/stripe-service.ts)
 //  13. zklogin_address_bindings       (src/lib/zklogin-address-bindings.ts)
 //  14. record_share_tokens            (src/lib/circle-record-share.ts)
+//  15. circle_testimonials            (src/lib/testimonials.ts)
+//  16. member_badges                  (src/lib/member-badges.ts)
+//  17. member_rewards                 (src/lib/member-rewards.ts)
 //
 // Phase 12 publish-readiness: replaces the old transactional migration
 // that only knew about `join_requests` + `mainnet_signups`. Keeps every
@@ -72,6 +75,10 @@ const pool = new pg.Pool({
 // rest. Names are used for the per-table log line.
 const STATEMENTS = [
   {
+    // salts + recovery_codes are LEGACY. They belonged to the self-hosted
+    // salt service, retired when salts moved to Enoki (2025-05-24, 11b5e7b)
+    // and since deleted; nothing writes them now. They stay because
+    // scripts/process-deletion-request.mjs still erases any legacy rows.
     name: 'salts',
     sql: `CREATE TABLE IF NOT EXISTS salts (
             id SERIAL PRIMARY KEY,
@@ -409,15 +416,15 @@ const STATEMENTS = [
             WHERE phone_hmac IS NOT NULL;`,
   },
   {
-    // Identity binding for the destructive erasure step. The public
+    // Identity binding for the destructive deletes. The public
     // deletion endpoint captures the server-verified zkLogin identity
     // (from the HttpOnly session cookie) when the requester is signed in.
-    // scripts/process-deletion-request.mjs erases salts/recovery_codes
+    // scripts/process-deletion-request.mjs deletes legacy salts/recovery_codes
     // ONLY against these columns (or an operator override), never against
     // the client-supplied, unauthenticated user_address — which is a public
     // on-chain value and thus can't prove wallet ownership. Anonymous
     // (locked-out) requests keep identity_verified = FALSE and require an
-    // explicit operator override before any cryptographic erasure.
+    // explicit operator override before any identity-keyed delete.
     name: 'deletion_requests_identity_binding',
     sql: `ALTER TABLE deletion_requests
             ADD COLUMN IF NOT EXISTS verified_sub TEXT;
@@ -474,14 +481,18 @@ const STATEMENTS = [
   {
     // zkLogin identity -> address history (src/lib/zklogin-address-bindings.ts).
     //
-    // A zkLogin address derives from (iss, aud, sub, salt). Rotating the
-    // Enoki API key changes the salt — even inside the same app — and the
-    // same social login then resolves to a DIFFERENT address, leaving the
-    // user's funds at the old one with no error and no migration path.
-    // Nothing detected that, because every login wipes the prior session
-    // rows (cleanupUserSessions) and zklogin_sessions has a 24h TTL, so the
-    // previous address was gone before the next one existed. This table is
-    // the durable memory that makes detection possible.
+    // A zkLogin address derives from (iss, aud, sub, salt), so the same
+    // human resolves to a DIFFERENT address when the OAuth client id (aud)
+    // changes, when they sign in with another provider (new iss and sub), or
+    // when the Enoki application is deleted/recreated (Enoki derives salts
+    // per user per application, so that resets them all). Their funds stay
+    // at the old address with no error and no migration path. Rotating the
+    // Enoki API key is NOT a trigger: every key of an application resolves
+    // the same salt (CLAUDE.md, "Address-affecting configuration").
+    // Nothing detected the re-addressing, because every login wipes the
+    // prior session rows (cleanupUserSessions) and zklogin_sessions has a
+    // 24h TTL, so the previous address was gone before the next one existed.
+    // This table is the durable memory that makes detection possible.
     //
     // APPEND-ONLY, like legal_acceptances: a new address inserts a new row
     // rather than updating the old one, so after a drift event BOTH rows
@@ -489,8 +500,10 @@ const STATEMENTS = [
     //
     // Lookups match on (sub, iss) — NOT (sub, aud). A client-id change is
     // itself one of the drift causes, so keying on aud would make that case
-    // look like a brand-new user and miss it. `provider` is the fallback
-    // match for rows written before iss capture.
+    // look like a brand-new user and miss it. A provider switch changes iss
+    // and sub together, so it lands here as a separate identity, not as
+    // drift. `provider` is the fallback match for rows written before iss
+    // capture.
     name: 'zklogin_address_bindings',
     sql: `CREATE TABLE IF NOT EXISTS zklogin_address_bindings (
             id            BIGSERIAL PRIMARY KEY,
@@ -580,6 +593,71 @@ const STATEMENTS = [
             ON record_share_tokens (user_address);
           CREATE INDEX IF NOT EXISTS record_share_tokens_expires_idx
             ON record_share_tokens (expires_at);`,
+  },
+  {
+    // Member stories (src/lib/testimonials.ts). Spec: marketing/handoff/
+    // inbox/003-founder-moments-spec/SPEC.md.
+    //
+    // A quote a member chose to share at their payout moment. NOTHING here is
+    // used in marketing unless consent_marketing is true AND status is
+    // 'approved' (a human decision in /admin/testimonials). A member can
+    // withdraw at any time: status 'withdrawn' excludes the row from every
+    // queue and export. No photo column in v1 — photos are PII we have no
+    // consented storage path for yet.
+    name: 'circle_testimonials',
+    sql: `CREATE TABLE IF NOT EXISTS circle_testimonials (
+            id                BIGSERIAL PRIMARY KEY,
+            user_address      TEXT NOT NULL,
+            circle_id         TEXT NOT NULL,
+            quote             TEXT NOT NULL,
+            consent_marketing BOOLEAN NOT NULL DEFAULT FALSE,
+            consent_at        TIMESTAMPTZ,
+            status            TEXT NOT NULL DEFAULT 'pending',
+            created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            reviewed_at       TIMESTAMPTZ
+          );
+          CREATE INDEX IF NOT EXISTS circle_testimonials_status_idx
+            ON circle_testimonials (status, created_at DESC);
+          CREATE INDEX IF NOT EXISTS circle_testimonials_address_idx
+            ON circle_testimonials (user_address);`,
+  },
+  {
+    // Member badges (src/lib/member-badges.ts). A badge is a FACT about a
+    // member's own history ("started a circle that completed its first
+    // round"), shown only on that member's own Circle Record view. It is
+    // never a score, tier or rating, never shown next to names, and never
+    // included in the shared-record payload (see src/lib/circle-record.ts).
+    name: 'member_badges',
+    sql: `CREATE TABLE IF NOT EXISTS member_badges (
+            id           BIGSERIAL PRIMARY KEY,
+            user_address TEXT NOT NULL,
+            badge_type   TEXT NOT NULL,
+            circle_id    TEXT NOT NULL,
+            awarded_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            source_tx    TEXT,
+            UNIQUE (user_address, badge_type, circle_id)
+          );
+          CREATE INDEX IF NOT EXISTS member_badges_address_idx
+            ON member_badges (user_address);`,
+  },
+  {
+    // Platform-granted Premium windows (src/lib/member-rewards.ts). The
+    // Founding Circle badge grants one month. Never money, never a fee
+    // waiver (there are no fees on fund flows), never touches a pot.
+    name: 'member_rewards',
+    sql: `CREATE TABLE IF NOT EXISTS member_rewards (
+            id           BIGSERIAL PRIMARY KEY,
+            user_address TEXT NOT NULL,
+            reward_type  TEXT NOT NULL,
+            months       INTEGER NOT NULL DEFAULT 1,
+            source       TEXT NOT NULL,
+            starts_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            ends_at      TIMESTAMPTZ NOT NULL,
+            granted_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            UNIQUE (user_address, source)
+          );
+          CREATE INDEX IF NOT EXISTS member_rewards_active_idx
+            ON member_rewards (user_address, ends_at);`,
   },
 ];
 

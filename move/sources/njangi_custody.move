@@ -127,12 +127,38 @@ module njangi::njangi_custody {
     
     // ----------------------------------------------------------
     // Create a new custody wallet
+    //
+    // Kept at its original `()` return type on purpose. Changing an existing
+    // public function's signature is an upgrade-INCOMPATIBLE change in Sui: it
+    // would force a fresh publish, mint a new package id, and orphan every
+    // circle on the current lineage. New callers should use
+    // `create_custody_wallet_returning_id` below; adding a function is
+    // upgrade-compatible, editing this one is not.
     // ----------------------------------------------------------
     public fun create_custody_wallet(
         circle_id: ID,
         timestamp: u64,
         ctx: &mut TxContext
     ) {
+        let _wallet_id = create_custody_wallet_returning_id(circle_id, timestamp, ctx);
+    }
+
+    // ----------------------------------------------------------
+    // Create a new custody wallet and hand back its id
+    //
+    // The id exists right here at creation time. Without this, callers had to
+    // rediscover it afterwards from the `CustodyWalletCreated` event below — a
+    // discovery path that depends on the answering RPC still serving event
+    // history, and that goes silently empty (HTTP 200, no rows) when the event
+    // filter is built from a post-upgrade package id. A circle whose wallet
+    // could not be rediscovered lost its recovery path while its funds sat
+    // safely in custody.
+    // ----------------------------------------------------------
+    public fun create_custody_wallet_returning_id(
+        circle_id: ID,
+        timestamp: u64,
+        ctx: &mut TxContext
+    ): ID {
         let admin = tx_context::sender(ctx);
         
         // Create custody wallet without stablecoin config
@@ -158,8 +184,10 @@ module njangi::njangi_custody {
             wallet_id,
             admin,
         });
+
+        wallet_id
     }
-    
+
     // ----------------------------------------------------------
     // Create a transaction record
     // ----------------------------------------------------------

@@ -11,6 +11,8 @@ import {
   isSwapsEnabled,
   isLegacyRailEnabled,
   isRampEnabled,
+  isEscrowRoundGuardEnabled,
+  isTimedEscrowEntriesEnabled,
   disabledResponse,
 } from '@/config/feature-flags';
 
@@ -79,5 +81,46 @@ describe('capability flags', () => {
       capability: 'swaps',
       message: 'nope',
     });
+  });
+});
+
+describe('escrow entry-point flags', () => {
+  // These say which Move targets the client BUILDS. Default-off matters
+  // more than usual: a target the published package does not carry aborts
+  // every open with an unknown-function error.
+  const KEYS = [
+    'NEXT_PUBLIC_ESCROW_TIMED_ENTRIES_ENABLED',
+    'NEXT_PUBLIC_ESCROW_ROUND_GUARD_ENABLED',
+  ] as const;
+  const original: Record<string, string | undefined> = {};
+
+  beforeEach(() => {
+    for (const k of KEYS) {
+      original[k] = process.env[k];
+      delete process.env[k];
+    }
+  });
+
+  afterEach(() => {
+    for (const k of KEYS) {
+      if (original[k] === undefined) delete process.env[k];
+      else process.env[k] = original[k];
+    }
+  });
+
+  it('default both to OFF when unset', () => {
+    expect(isTimedEscrowEntriesEnabled()).toBe(false);
+    expect(isEscrowRoundGuardEnabled()).toBe(false);
+  });
+
+  it('enable the round guard only on an explicit true, independently of the timed entries', () => {
+    process.env.NEXT_PUBLIC_ESCROW_ROUND_GUARD_ENABLED = 'true';
+    expect(isEscrowRoundGuardEnabled()).toBe(true);
+    expect(isTimedEscrowEntriesEnabled()).toBe(false);
+
+    for (const v of ['false', '1', 'yes', 'enabled', '']) {
+      process.env.NEXT_PUBLIC_ESCROW_ROUND_GUARD_ENABLED = v;
+      expect(isEscrowRoundGuardEnabled()).toBe(false);
+    }
   });
 });

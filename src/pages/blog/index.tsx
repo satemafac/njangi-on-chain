@@ -2,82 +2,262 @@ import Link from 'next/link';
 import { useState } from 'react';
 import { Seo } from '../../components/Seo';
 import { breadcrumbs } from '../../lib/structured-data';
-import { MarketingShell } from '../../components/marketing/ArticleLayout';
+import { Breadcrumbs, MarketingShell } from '../../components/marketing/ArticleLayout';
+import { keepBrand } from '../../components/marketing/PageBlocks';
+import { ChevronLink, focusRing, goldButtonClass, quietButtonClass } from '../../components/landing/ui';
+
+type Post = {
+  id: string;
+  title: string;
+  excerpt: string;
+  category: string;
+  readTime: string;
+  /** ISO date (YYYY-MM-DD). */
+  publishDate: string;
+  author: string;
+  tags: string[];
+  href: string;
+  available: boolean;
+};
+
+// `available` marks which of these have a page behind them. Four did not,
+// and the index linked to all five regardless — five internal links, four
+// of them straight to a 404. Unavailable posts render as a tile with no
+// link rather than being removed, so a planned slate stays visible.
+const BLOG_POSTS: Post[] = [
+  {
+    id: 'traditional-savings-circles-vs-on-chain',
+    title: 'Traditional Savings Circles vs. On-Chain: What Actually Changes',
+    excerpt:
+      'A side-by-side on how a njangi, tontine or susu works traditionally, what changes when the record is shared, and what deliberately does not.',
+    category: 'Technology',
+    readTime: '8 min read',
+    publishDate: '2025-06-05',
+    author: 'Njangi On-Chain',
+    tags: ['rosca', 'njangi', 'tontine', 'susu'],
+    href: '/blog/traditional-savings-circles-vs-on-chain',
+    available: true,
+  },
+  {
+    id: 'african-diaspora-remittances',
+    title: "Sending Money Home Isn't the Same as Belonging",
+    excerpt:
+      'The World Bank puts the average cost of sending $200 to Sub-Saharan Africa at 7.9%. A savings circle does not change that number. What it changes is whether the person sending is a member or only a source of funds.',
+    category: 'Diaspora',
+    readTime: '10 min read',
+    publishDate: '2026-08-28',
+    author: 'Njangi On-Chain',
+    tags: ['diaspora', 'remittances', 'africa'],
+    href: '/blog/african-diaspora-remittances',
+    available: true,
+  },
+  {
+    id: 'women-led-savings-circles-africa',
+    title: 'Women-Led Savings Circles: Who Actually Runs the Money',
+    excerpt:
+      'Across njangis, chamas, stokvels and tontines, the person holding the money is very often a woman. What that role involves, what it costs her, and what a shared record changes.',
+    category: 'Social Impact',
+    readTime: '9 min read',
+    publishDate: '2026-08-24',
+    author: 'Njangi On-Chain',
+    tags: ['women', 'leadership', 'social-impact'],
+    href: '/blog/women-led-savings-circles-africa',
+    available: true,
+  },
+  {
+    id: 'how-regulators-treat-savings-circles',
+    title: 'How Regulators Treat Community Savings Circles',
+    excerpt:
+      'A country-by-country look at how rotating savings groups are regulated, and what it means for a circle that spans borders.',
+    category: 'Regulation',
+    readTime: '11 min read',
+    publishDate: '2026-08-28',
+    author: 'Njangi On-Chain',
+    tags: ['regulation', 'compliance', 'legal'],
+    href: '/blog/how-regulators-treat-savings-circles',
+    available: true,
+  },
+];
+
+// Newest first, so "Latest Post" is the latest. The array above was in
+// authoring order, which put a 2025 post in the feature slot. Array sort is
+// stable, so same-day posts keep their authoring order.
+const POSTS_BY_DATE = [...BLOG_POSTS].sort((a, b) => b.publishDate.localeCompare(a.publishDate));
+
+const CATEGORIES = ['all', 'Technology', 'Diaspora', 'Social Impact', 'Regulation'];
+
+const LEARN_LINKS = [
+  { href: '/learn/what-is-njangi', title: 'What is Njangi?', body: 'Learn about Cameroon’s traditional savings circles.' },
+  { href: '/learn/rosca', title: 'What is a ROSCA?', body: 'Discover the future of community savings.' },
+  { href: '/learn/tontine', title: 'What is a Tontine?', body: 'The rotating savings circle across West and Central Africa.' },
+  { href: '/learn/susu', title: 'What is a Susu?', body: 'Caribbean savings circles go digital.' },
+];
+
+const MONTHS = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December',
+];
+
+/** "2026-08-28" → "28 August 2026". Parsed by hand: `new Date('2026-08-28')`
+ *  is UTC midnight, which renders as the 27th anywhere west of Greenwich —
+ *  and differently on the server than in the reader's browser. */
+function formatDate(iso: string) {
+  const [year, month, day] = iso.split('-').map(Number);
+  return `${day} ${MONTHS[month - 1]} ${year}`;
+}
+
+/** The feature tile's artwork: a circle of members with one turn lit, the
+ *  rotation motif from the landing page. Seeded by the post so the art
+ *  changes with the feature. Coordinates are rounded so server and browser
+ *  print identical attributes. */
+function RotationArt({ seed }: { seed: string }) {
+  const seats = 10;
+  const radius = 64;
+  const turn = 2 + (seed.split('').reduce((sum, ch) => sum + ch.charCodeAt(0), 0) % (seats - 3));
+  const circumference = 2 * Math.PI * radius;
+  return (
+    <div aria-hidden className="relative flex min-h-[240px] items-center justify-center overflow-hidden bg-[#0c0c0e] md:min-h-full">
+      <div className="absolute inset-0 bg-[radial-gradient(360px_260px_at_50%_52%,rgba(232,176,75,0.18),transparent_70%)]" />
+      <svg viewBox="0 0 200 200" className="relative h-[210px] w-[210px] md:h-[260px] md:w-[260px]">
+        <circle cx="100" cy="100" r={radius} fill="none" stroke="rgba(255,255,255,0.1)" strokeWidth="1" />
+        <circle
+          cx="100"
+          cy="100"
+          r={radius}
+          fill="none"
+          stroke="#E8B04B"
+          strokeOpacity="0.7"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+          strokeDasharray={`${((turn / seats) * circumference).toFixed(2)} ${circumference.toFixed(2)}`}
+          transform="rotate(-90 100 100)"
+        />
+        {Array.from({ length: seats }, (_, i) => {
+          const angle = (i / seats) * 2 * Math.PI - Math.PI / 2;
+          const lit = i === turn;
+          return (
+            <circle
+              key={i}
+              cx={(100 + radius * Math.cos(angle)).toFixed(2)}
+              cy={(100 + radius * Math.sin(angle)).toFixed(2)}
+              r={lit ? 7 : 4}
+              fill={lit ? '#E8B04B' : i < turn ? 'rgba(232,176,75,0.45)' : 'rgba(255,255,255,0.22)'}
+            />
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
+function ReadMore({ label }: { label: string }) {
+  return (
+    <span className="inline-flex items-center gap-0.5 text-[15px] text-gold">
+      {label}
+      <span aria-hidden className="transition-transform duration-200 group-hover:translate-x-0.5 rtl:rotate-180">
+        ›
+      </span>
+    </span>
+  );
+}
+
+function Published({ post }: { post: Post }) {
+  return post.available ? (
+    <time dateTime={post.publishDate}>{formatDate(post.publishDate)}</time>
+  ) : (
+    <>Not yet published</>
+  );
+}
+
+const tileClass = 'group flex flex-col rounded-[28px] bg-ink-surface transition-colors duration-200';
+
+/** The newest post: artwork beside the headline, excerpt and byline. */
+function FeatureTile({ post }: { post: Post }) {
+  const body = (
+    <>
+      <RotationArt seed={post.id} />
+      <div className="flex flex-col p-7 sm:p-10 md:py-12">
+        <p className="text-[14px] text-mist-3">
+          <span className="font-semibold text-gold">{post.category}</span>
+          <span aria-hidden className="mx-2 text-mist-4">
+            ·
+          </span>
+          {post.readTime}
+        </p>
+        <h3 className="type-tile mt-4 text-balance text-mist">{keepBrand(post.title)}</h3>
+        <p className="type-body mt-4 flex-1 text-mist-2">{post.excerpt}</p>
+        <div className="mt-8 flex items-center justify-between gap-4">
+          <span className="flex items-center gap-3">
+            <span
+              aria-hidden
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white/[0.08] text-[15px] font-semibold text-mist"
+            >
+              N
+            </span>
+            <span>
+              <span className="block text-[15px] font-semibold tracking-[-0.01em] text-mist">{post.author}</span>
+              <span className="block text-[13px] text-mist-3">
+                <Published post={post} />
+              </span>
+            </span>
+          </span>
+          {post.available ? (
+            <ReadMore label="Read More" />
+          ) : (
+            <span className="text-[13px] font-semibold text-mist-3">Coming soon</span>
+          )}
+        </div>
+      </div>
+    </>
+  );
+  const cls = `${tileClass} mt-8 overflow-hidden md:grid md:grid-cols-[1.05fr_1fr]`;
+  return post.available ? (
+    <Link href={post.href} className={`${cls} hover:bg-[#1b1b1e] ${focusRing}`}>
+      {body}
+    </Link>
+  ) : (
+    <article className={cls}>{body}</article>
+  );
+}
+
+function PostTile({ post }: { post: Post }) {
+  const body = (
+    <>
+      <span className="flex items-center justify-between gap-4">
+        <span className="text-[13px] font-semibold text-gold">{post.category}</span>
+        <span className="text-[13px] text-mist-3">{post.readTime}</span>
+      </span>
+      <h3 className="mt-5 text-[21px] font-semibold leading-snug tracking-[0.011em] text-mist">
+        {keepBrand(post.title)}
+      </h3>
+      <p className="type-caption mt-3 flex-1 text-mist-3">{post.excerpt}</p>
+      <span className="mt-7 flex items-center justify-between gap-4">
+        <span className="text-[13px] text-mist-3">
+          <Published post={post} />
+        </span>
+        {post.available ? (
+          <ReadMore label="Read" />
+        ) : (
+          <span className="text-[13px] font-semibold text-mist-3">Coming soon</span>
+        )}
+      </span>
+    </>
+  );
+  return post.available ? (
+    <Link href={post.href} className={`${tileClass} p-7 hover:bg-[#1b1b1e] sm:p-8 ${focusRing}`}>
+      {body}
+    </Link>
+  ) : (
+    <article className={`${tileClass} p-7 sm:p-8`}>{body}</article>
+  );
+}
 
 export default function BlogIndexPage() {
   const [activeCategory, setActiveCategory] = useState('all');
 
-  // `available` marks which of these have a page behind them. Four did not,
-  // and the index linked to all five regardless — five internal links, four
-  // of them straight to a 404. Unavailable posts now render as a card with no
-  // link rather than being removed, so the planned slate stays visible.
-  const blogPosts = [
-    {
-      id: 'traditional-savings-circles-vs-on-chain',
-      title: "Traditional Savings Circles vs. On-Chain: What Actually Changes",
-      excerpt: "A side-by-side on how a njangi, tontine or susu works traditionally, what changes when the record is shared, and what deliberately does not.",
-      category: 'Technology',
-      readTime: '8 min read',
-      publishDate: '2025-06-05',
-      author: 'Njangi On-Chain',
-      tags: ['rosca', 'njangi', 'tontine', 'susu'],
-      href: '/blog/traditional-savings-circles-vs-on-chain',
-      available: true
-    },
-    {
-      id: 'african-diaspora-remittances',
-      title: "Sending Money Home Isn't the Same as Belonging",
-      excerpt: "The World Bank puts the average cost of sending $200 to Sub-Saharan Africa at 7.9%. A savings circle does not change that number. What it changes is whether the person sending is a member or only a source of funds.",
-      category: 'Diaspora',
-      readTime: '10 min read',
-      publishDate: '2026-08-28',
-      author: 'Njangi On-Chain',
-      tags: ['diaspora', 'remittances', 'africa'],
-      href: '/blog/african-diaspora-remittances',
-      available: true
-    },
-    {
-      id: 'women-led-savings-circles-africa',
-      title: "Women-Led Savings Circles: Who Actually Runs the Money",
-      excerpt: "Across njangis, chamas, stokvels and tontines, the person holding the money is very often a woman. What that role involves, what it costs her, and what a shared record changes.",
-      category: 'Social Impact',
-      readTime: '9 min read',
-      publishDate: '2026-08-24',
-      author: 'Njangi On-Chain',
-      tags: ['women', 'leadership', 'social-impact'],
-      href: '/blog/women-led-savings-circles-africa',
-      available: true
-    },
-    {
-      id: 'how-regulators-treat-savings-circles',
-      title: "How Regulators Treat Community Savings Circles",
-      excerpt: "A country-by-country look at how rotating savings groups are regulated, and what it means for a circle that spans borders.",
-      category: 'Regulation',
-      readTime: '11 min read',
-      publishDate: '2026-08-28',
-      author: 'Njangi On-Chain',
-      tags: ['regulation', 'compliance', 'legal'],
-      href: '/blog/how-regulators-treat-savings-circles',
-      available: true
-    }
-  ];
-
-  const categories = ['all', 'Technology', 'Diaspora', 'Social Impact', 'Regulation'];
-
-  const filteredPosts = activeCategory === 'all' 
-    ? blogPosts 
-    : blogPosts.filter(post => post.category === activeCategory);
-
-  const getCategoryColor = (category: string) => {
-    const colors = {
-      'Technology': 'bg-gold/[0.07] text-gold',
-      'Diaspora': 'bg-gold/[0.07] text-gold',
-      'Success Stories': 'bg-gold/[0.07] text-gold',
-      'Social Impact': 'bg-gold/[0.07] text-gold',
-      'Regulation': 'bg-ink-surface text-cream'
-    };
-    return colors[category as keyof typeof colors] || 'bg-ink-surface text-cream';
-  };
+  const filteredPosts =
+    activeCategory === 'all' ? POSTS_BY_DATE : POSTS_BY_DATE.filter((post) => post.category === activeCategory);
+  const [latest, ...rest] = filteredPosts;
 
   return (
     <>
@@ -89,287 +269,155 @@ export default function BlogIndexPage() {
         jsonLd={[breadcrumbs([{ name: 'Home', path: '/' }, { name: 'Blog' }])]}
       />
 
-      <MarketingShell>
-        {/* Navigation */}
-        <nav className="bg-ink-surface border-b">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div className="flex items-center space-x-2 py-3 text-sm text-sand">
-              <Link href="/" className="hover:text-gold transition-colors">Home</Link>
-              <span>/</span>
-              <span className="text-cream font-medium">Blog</span>
+      <MarketingShell legacy={false}>
+        {/* ================= HERO ================= */}
+        <header className="relative overflow-hidden">
+          <div
+            aria-hidden
+            className="pointer-events-none absolute inset-0 bg-[radial-gradient(900px_460px_at_50%_-12%,rgba(232,176,75,0.10),transparent_64%)]"
+          />
+          <div className="relative mx-auto max-w-[1100px] px-5 pb-14 pt-8 text-center sm:px-8 md:pb-20 md:pt-12">
+            <Breadcrumbs className="flex justify-center" items={[{ label: 'Home', href: '/' }, { label: 'Blog' }]} />
+            <h1 className="type-hero mx-auto mt-12 max-w-[14ch] text-balance text-mist">{keepBrand('The Njangi On-Chain Blog')}</h1>
+            <p className="type-intro mx-auto mt-6 max-w-[44rem] text-balance text-mist-2">
+              Insights, stories, and education about the future of community finance&mdash;from
+              traditional savings circles, and what changes when the record is shared.
+            </p>
+            <div className="mt-10 flex flex-col items-center justify-center gap-5 sm:flex-row sm:gap-8">
+              <Link href="/learn" className={goldButtonClass}>
+                Educational Resources
+              </Link>
+              <ChevronLink href="#featured">Latest Posts</ChevronLink>
             </div>
           </div>
-        </nav>
+        </header>
 
-        {/* Hero Section */}
-        <section className="bg-gradient-to-r from-ink-surface to-ink-deep text-cream py-16">
-          <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div className="text-center">
-              <h1 className="text-4xl md:text-5xl font-bold mb-6">
-                The Njangi On-Chain Blog
-              </h1>
-              <p className="text-xl md:text-2xl mb-8 text-cream-muted max-w-4xl mx-auto">
-                Insights, stories, and education about the future of community finance—from traditional 
-                savings circles, and what changes when the record is shared.
-              </p>
-              <div className="flex flex-col sm:flex-row gap-4 justify-center">
-                <Link 
-                  href="/learn" 
-                  className="bg-ink-surface text-gold px-8 py-3 rounded-lg font-semibold hover:bg-ink-surface transition-colors"
-                >
-                  Educational Resources →
-                </Link>
-                <Link 
-                  href="#featured" 
-                  className="border border-gold-deep/55 text-cream px-8 py-3 rounded-lg font-semibold hover:bg-ink-surface hover:text-gold transition-colors"
-                >
-                  Latest Posts
-                </Link>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        {/* Category Filter */}
-        <section className="bg-ink-surface border-b">
-          <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-            <div className="flex flex-wrap gap-3">
-              {categories.map((category) => (
+        {/* ================= FILTER ================= */}
+        <div className="px-5 sm:px-8">
+          <div
+            role="group"
+            aria-label="Filter posts by category"
+            className="mx-auto flex max-w-[1100px] flex-wrap justify-center gap-2"
+          >
+            {CATEGORIES.map((category) => {
+              const active = activeCategory === category;
+              return (
                 <button
                   key={category}
+                  type="button"
+                  aria-pressed={active}
                   onClick={() => setActiveCategory(category)}
-                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                    activeCategory === category
-                      ? 'bg-gold/[0.07] text-gold'
-                      : 'hover:bg-ink-surface text-sand'
-                  }`}
+                  className={`rounded-full px-4 py-2 text-[14px] transition-colors duration-200 ${
+                    active
+                      ? 'bg-mist font-medium text-black'
+                      : 'bg-white/[0.06] text-mist-2 hover:bg-white/[0.12] hover:text-mist'
+                  } ${focusRing}`}
                 >
                   {category === 'all' ? 'All Posts' : category}
                 </button>
-              ))}
-            </div>
+              );
+            })}
+          </div>
+          <p className="sr-only" aria-live="polite">
+            {activeCategory === 'all'
+              ? `Showing all ${filteredPosts.length} posts`
+              : `Showing ${filteredPosts.length} ${filteredPosts.length === 1 ? 'post' : 'posts'} in ${activeCategory}`}
+          </p>
+        </div>
+
+        {/* ================= POSTS ================= */}
+        <section id="featured" aria-label="Posts" className="scroll-mt-[72px] px-5 pb-24 pt-14 sm:px-8 md:pb-32 md:pt-20">
+          <div className="mx-auto max-w-[1100px]">
+            {latest ? (
+              <>
+                <h2 className="type-headline text-mist">Latest Post</h2>
+                <FeatureTile post={latest} />
+
+                {rest.length > 0 && (
+                  <>
+                    <h2 className="type-headline mt-20 text-mist md:mt-24">More Articles</h2>
+                    <div className="mt-8 grid gap-4 md:grid-cols-2 md:gap-5 lg:grid-cols-3">
+                      {rest.map((post) => (
+                        <PostTile key={post.id} post={post} />
+                      ))}
+                    </div>
+                  </>
+                )}
+              </>
+            ) : (
+              <p className="type-intro text-center text-mist-2">No posts in this category yet.</p>
+            )}
           </div>
         </section>
 
-        {/* Featured Posts */}
-        <section id="featured" className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-16">
-          {filteredPosts.length > 0 && (
-            <>
-              {/* Latest Featured Post */}
-              <div className="mb-12">
-                <h2 className="text-3xl font-bold text-cream mb-8">Latest Post</h2>
-                <article className="bg-ink-surface rounded-lg shadow-[0_20px_60px_-30px_rgba(0,0,0,0.85)] overflow-hidden">
-                  <div className="md:flex">
-                    <div className="md:w-1/2">
-                      <div className="h-64 md:h-full bg-gradient-to-br from-ink-surface to-ink-deep flex items-center justify-center">
-                        <div className="text-cream text-center p-8">
-                          <div className="text-4xl mb-4">📊</div>
-                          <div className="text-lg font-semibold">Featured Article</div>
-                        </div>
-                      </div>
-                    </div>
-                    <div className="md:w-1/2 p-8">
-                      <div className="flex items-center mb-4">
-                        <span className={`inline-block px-3 py-1 text-xs font-semibold rounded-full ${getCategoryColor(filteredPosts[0].category)}`}>
-                          {filteredPosts[0].category}
-                        </span>
-                        <span className="text-sm text-sand-dim ml-4">{filteredPosts[0].readTime}</span>
-                      </div>
-                      <h3 className="text-2xl font-bold text-cream mb-4">
-                        {filteredPosts[0].available ? (
-                          <Link href={filteredPosts[0].href} className="hover:text-gold transition-colors">
-                            {filteredPosts[0].title}
-                          </Link>
-                        ) : (
-                          filteredPosts[0].title
-                        )}
-                      </h3>
-                      <p className="text-sand mb-6 leading-relaxed">
-                        {filteredPosts[0].excerpt}
-                      </p>
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center space-x-3">
-                          <div className="w-10 h-10 bg-gradient-to-br from-ink-surface to-ink-deep rounded-full flex items-center justify-center text-cream font-semibold">
-                            N
-                          </div>
-                          <div>
-                            <div className="font-medium text-cream">{filteredPosts[0].author}</div>
-                            <div className="text-sm text-sand-dim">{filteredPosts[0].available ? filteredPosts[0].publishDate : 'Not yet published'}</div>
-                          </div>
-                        </div>
-                        {filteredPosts[0].available ? (
-                        <Link 
-                          href={filteredPosts[0].href}
-                          className="text-gold hover:text-gold-hi font-semibold flex items-center"
-                        >
-                          Read More
-                          <svg className="ml-2 w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                          </svg>
-                        </Link>
-                        ) : (
-                          <span className="text-sm font-semibold text-sand-dim">Coming soon</span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                </article>
-              </div>
-
-              {/* Rest of Posts */}
-              <div className="mb-8">
-                <h2 className="text-3xl font-bold text-cream mb-8">More Articles</h2>
-                <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
-                  {filteredPosts.slice(1).map((post) => (
-                    <article key={post.id} className="bg-ink-surface rounded-lg shadow-[0_20px_60px_-30px_rgba(0,0,0,0.85)] overflow-hidden hover:shadow-xl transition-shadow">
-                      <div className="h-48 bg-gradient-to-br from-gray-200 to-gray-300 flex items-center justify-center">
-                        <div className="text-sand-dim text-center">
-                          <div className="text-3xl mb-2">📖</div>
-                          <div className="text-sm font-medium">{post.category}</div>
-                        </div>
-                      </div>
-                      
-                      <div className="p-6">
-                        <div className="flex items-center justify-between mb-3">
-                          <span className={`inline-block px-2 py-1 text-xs font-semibold rounded-full ${getCategoryColor(post.category)}`}>
-                            {post.category}
-                          </span>
-                          <span className="text-xs text-sand-dim">{post.readTime}</span>
-                        </div>
-                        
-                        <h3 className="text-lg font-bold text-cream mb-3 line-clamp-2">
-                          {post.available ? (
-                            <Link href={post.href} className="hover:text-gold transition-colors">
-                              {post.title}
-                            </Link>
-                          ) : (
-                            post.title
-                          )}
-                        </h3>
-                        
-                        <p className="text-sand text-sm mb-4 line-clamp-3">
-                          {post.excerpt}
-                        </p>
-                        
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center space-x-2">
-                            <div className="w-8 h-8 bg-gradient-to-br from-ink-surface to-ink-deep rounded-full flex items-center justify-center text-cream text-xs font-semibold">
-                              N
-                            </div>
-                            <div>
-                              <div className="text-xs font-medium text-cream">{post.author}</div>
-                              <div className="text-xs text-sand-dim">{post.available ? post.publishDate : 'Not yet published'}</div>
-                            </div>
-                          </div>
-                          {post.available ? (
-                            <Link 
-                              href={post.href}
-                              className="text-gold hover:text-gold-hi text-sm font-semibold"
-                            >
-                              Read →
-                            </Link>
-                          ) : (
-                            <span className="text-xs font-semibold text-sand-dim">Coming soon</span>
-                          )}
-                        </div>
-                      </div>
-                    </article>
-                  ))}
-                </div>
-              </div>
-            </>
-          )}
-        </section>
-
-        {/* Educational Resources CTA */}
-        <section className="bg-ink-surface">
-          <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-16">
-            <div className="text-center mb-12">
-              <h2 className="text-3xl font-bold text-cream mb-4">New to savings circles?</h2>
-              <p className="text-lg text-sand">
+        {/* ================= NEW TO SAVINGS CIRCLES ================= */}
+        <section className="px-5 pb-24 sm:px-8 md:pb-32">
+          <div className="mx-auto max-w-[1100px]">
+            <div className="mx-auto max-w-[44rem] text-center">
+              <h2 className="type-section text-balance text-mist">New to savings circles?</h2>
+              <p className="type-intro mt-5 text-balance text-mist-2">
                 Start with our comprehensive educational resources to understand the fundamentals.
               </p>
             </div>
+            <ul className="mt-14 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              {LEARN_LINKS.map((item) => (
+                <li key={item.href}>
+                  <Link
+                    href={item.href}
+                    className={`group flex h-full flex-col rounded-[22px] bg-ink-surface p-6 transition-colors duration-200 hover:bg-[#1b1b1e] ${focusRing}`}
+                  >
+                    <span className="text-[19px] font-semibold tracking-[0.012em] text-mist">{item.title}</span>
+                    <span className="type-caption mt-2 flex-1 text-mist-3">{item.body}</span>
+                    <span className="mt-5">
+                      <ReadMore label="Read" />
+                    </span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </section>
 
-            <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
-              <Link href="/learn/what-is-njangi" className="group">
-                <div className="bg-gold/[0.07] border border-gold/45 rounded-lg p-6 hover:border-gold/45 hover:shadow-[0_14px_40px_-24px_rgba(0,0,0,0.8)] transition-all">
-                  <h3 className="font-semibold text-gold group-hover:text-gold mb-2">
-                    What is Njangi?
-                  </h3>
-                  <p className="text-sm text-gold">
-                    Learn about Cameroon&rsquo;s traditional savings circles.
-                  </p>
-                </div>
-              </Link>
-              
-              <Link href="/learn/rosca" className="group">
-                <div className="bg-gold/[0.07] border border-gold/45 rounded-lg p-6 hover:border-gold/45 hover:shadow-[0_14px_40px_-24px_rgba(0,0,0,0.8)] transition-all">
-                  <h3 className="font-semibold text-gold group-hover:text-gold mb-2">
-                    What is a ROSCA?
-                  </h3>
-                  <p className="text-sm text-gold">
-                    Discover the future of community savings.
-                  </p>
-                </div>
-              </Link>
-              
-              <Link href="/learn/tontine" className="group">
-                <div className="bg-gold/[0.07] border border-gold/45 rounded-lg p-6 hover:border-gold/45 hover:shadow-[0_14px_40px_-24px_rgba(0,0,0,0.8)] transition-all">
-                  <h3 className="font-semibold text-gold group-hover:text-gold mb-2">
-                    What is a Tontine?
-                  </h3>
-                  <p className="text-sm text-gold">
-                    The rotating savings circle across West and Central Africa.
-                  </p>
-                </div>
-              </Link>
-              
-              <Link href="/learn/susu" className="group">
-                <div className="bg-gold/[0.07] border border-gold/45 rounded-lg p-6 hover:border-gold/45 hover:shadow-[0_14px_40px_-24px_rgba(0,0,0,0.8)] transition-all">
-                  <h3 className="font-semibold text-gold group-hover:text-gold mb-2">
-                    What is a Susu?
-                  </h3>
-                  <p className="text-sm text-gold">
-                    Caribbean savings circles go digital.
-                  </p>
-                </div>
-              </Link>
+        {/* ================= STAY UPDATED =================
+            This was an email box with a Subscribe button wired to nothing —
+            it looked like a sign-up and collected no one. There is no
+            newsletter to join, and the only email list we keep is the launch
+            waitlist, which the privacy policy scopes to launch news. So the
+            section points to where new posts are shared instead. */}
+        <section className="px-5 pb-24 sm:px-8 md:pb-32">
+          <div className="relative mx-auto max-w-[1100px] overflow-hidden rounded-[32px] bg-ink-surface px-7 py-16 text-center sm:px-12 md:py-20">
+            <div
+              aria-hidden
+              className="pointer-events-none absolute inset-x-0 -top-40 mx-auto h-80 max-w-[720px] rounded-full"
+              style={{ background: 'radial-gradient(closest-side, rgba(232,176,75,0.16), transparent)' }}
+            />
+            <h2 className="type-section relative text-balance text-mist">Stay Updated</h2>
+            <p className="type-intro relative mx-auto mt-5 max-w-[38rem] text-balance text-mist-2">
+              Get the latest on how savings circles work, and educational content, by following
+              along where we share every new post.
+            </p>
+            <div className="relative mt-10 flex flex-col items-center justify-center gap-3 sm:flex-row">
+              <a href="https://x.com/njangi_on_chain" className={quietButtonClass}>
+                Follow on X
+              </a>
+              <a href="https://www.instagram.com/njangionchain" className={quietButtonClass}>
+                Follow on Instagram
+              </a>
             </div>
           </div>
         </section>
 
-        {/* Newsletter Signup */}
-        <section className="bg-gradient-to-r from-ink-surface to-ink-deep text-cream">
-          <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-16 text-center">
-            <h2 className="text-3xl font-bold mb-4">Stay Updated</h2>
-            <p className="text-xl text-cream-muted mb-8 max-w-2xl mx-auto">
-              Get the latest on how savings circles work, 
-              and educational content delivered to your inbox.
-            </p>
-            <div className="flex flex-col sm:flex-row gap-4 justify-center max-w-md mx-auto">
-              <input 
-                type="email" 
-                placeholder="Enter your email"
-                className="flex-1 px-4 py-3 rounded-lg text-cream focus:outline-none focus:ring-2 focus:ring-white"
-              />
-              <button className="bg-ink-surface text-gold px-8 py-3 rounded-lg font-semibold hover:bg-ink-surface transition-colors">
-                Subscribe
-              </button>
-            </div>
-          </div>
-        </section>
-
-        {/* Footer */}
-        <footer className="bg-ink-surface">
-          <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-            <p className="text-sm text-sand text-center">
-              <strong>Disclaimer:</strong> Content is for educational purposes only and does not constitute financial advice. 
-              Njangi On-Chain is coordination software for savings circles: it never holds your money, never offers an investment, and never pays a return. Take part only with an amount your group can commit to the schedule.
-            </p>
-          </div>
-        </footer>
+        {/* ================= DISCLAIMER ================= */}
+        <aside className="px-5 pb-16 sm:px-8">
+          <p className="type-fine mx-auto max-w-[44rem] text-center text-mist-3">
+            <strong className="font-semibold text-mist-2">Disclaimer:</strong> Content is for
+            educational purposes only and does not constitute financial advice. Njangi On-Chain is
+            coordination software for savings circles: it never holds your money, never offers an
+            investment, and never pays a return. Take part only with an amount your group can commit
+            to the schedule.
+          </p>
+        </aside>
       </MarketingShell>
     </>
   );
-} 
+}

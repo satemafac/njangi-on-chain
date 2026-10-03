@@ -8,19 +8,24 @@
 // For a claim that is true by construction rather than measured — "no operator
 // function can move member funds" — use <PlainStat>, which deliberately has no
 // number to attribute.
+//
+// Styled as Apple's "by the numbers" figures: large semibold numeral, a short
+// secondary caption, and the citation as quiet fine print.
 
 import type { SourcedFact } from '@/content/sourced-facts';
 
 export function SourcedStat({ fact }: { fact: SourcedFact }) {
   return (
     <div className="flex flex-col">
-      <div className="text-3xl font-bold text-gold">{fact.value}</div>
-      <div className="mt-2 text-sm leading-6 text-sand">{fact.label}</div>
+      <div className="text-[2.25rem] font-semibold leading-none tracking-[-0.015em] text-gold">
+        {fact.value}
+      </div>
+      <div className="type-caption mt-3 text-sand">{fact.label}</div>
       <a
         href={fact.url}
         target="_blank"
         rel="noopener noreferrer"
-        className="mt-2 text-xs text-sand-dim underline-offset-4 transition-colors hover:text-gold-hi hover:underline"
+        className="type-fine mt-2 text-sand-dim underline-offset-4 transition-colors hover:text-gold-hi hover:underline"
       >
         {fact.source}, {fact.year}
       </a>
@@ -36,8 +41,10 @@ export function SourcedStat({ fact }: { fact: SourcedFact }) {
 export function PlainStat({ value, label }: { value: string; label: string }) {
   return (
     <div className="flex flex-col">
-      <div className="text-3xl font-bold text-cream">{value}</div>
-      <div className="mt-2 text-sm leading-6 text-sand">{label}</div>
+      <div className="text-[2.25rem] font-semibold leading-none tracking-[-0.015em] text-cream">
+        {value}
+      </div>
+      <div className="type-caption mt-3 text-sand">{label}</div>
     </div>
   );
 }

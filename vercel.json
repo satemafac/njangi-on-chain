@@ -12,6 +12,10 @@
       "schedule": "*/15 * * * *"
     },
     {
+      "path": "/api/cron/founding-badges",
+      "schedule": "7 * * * *"
+    },
+    {
       "path": "/api/cron/walrus-renewal",
       "schedule": "0 3 * * *"
     },

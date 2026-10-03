@@ -17,5 +17,10 @@ if (dsn) {
     tracesSampleRate: Number(process.env.NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE ?? '0.1'),
     // zkLogin/PII hygiene: never attach request bodies, cookies, or user IP.
     sendDefaultPii: false,
+    // Next's post-hydration middleware re-check throws this when its data
+    // fetch fails, although the page itself is fine. It is handled in
+    // useSameUrlNavigationRecovery (silenced, or one reload after a real
+    // click), so it is expected rather than an error (JAVASCRIPT-NEXTJS-3).
+    ignoreErrors: [/^Invariant: attempted to hard navigate to the same URL/],
   });
 }

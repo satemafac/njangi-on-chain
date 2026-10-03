@@ -1,5 +1,9 @@
 # TypeMismatch Error: Fixed ✅
 
+> Written 2025-11; the ids below were current then. Since 2026-03 the current
+> package and registry ids come only from env (the hardcoded fallback is gone),
+> and nothing discovers registries on chain. See [Next Deployment](#next-deployment).
+
 ## The Problem
 
 You were getting this error:
@@ -91,9 +95,9 @@ When linking/unlinking circles:
    - `NEXT_PUBLIC_WHATSAPP_PACKAGE_ID`
    - `NEXT_PUBLIC_WHATSAPP_REGISTRY_ID`
    - `SUI_WHATSAPP_LINKS_REGISTRY_ID`
-3. **Hardcoded fallback** (what we just fixed)
-   - Package: `0xd0f586ee...`
-   - Registry: `0x9e203f7d...`
+3. **Nothing.** The hardcoded fallback this note fixed (`0xd0f586ee...` /
+   `0x9e203f7d...`) was removed in 2026-03. With none of the vars above set,
+   there is no current registry.
 
 ## What Changed
 
@@ -134,14 +138,23 @@ The deprecated registry is kept because:
 - ✅ Backward compatibility
 - ✅ Migration path is clear (deprecated flag shows which is current)
 
-## No More Manual Updates Needed
+## Next Deployment
 
-Remember: The auto-discovery system will find future registries automatically from the blockchain deployment coin. You only needed to update the hardcoded fallback this once because we were using an old default.
+There is no auto-discovery: the app reads the current pair only from env.
+After a fresh publish, which needs a new registry:
 
-Next time you deploy:
-- Auto-discovery will find it
-- No manual updates needed
-- Just works! ✨
+1. `move/build_and_test.sh` writes the new package id to
+   `NEXT_PUBLIC_<NET>_WHATSAPP_PACKAGE_ID` in `.env.local`.
+2. `scripts/bootstrap-package.mjs` calls `init_registry` and writes the new
+   registry id to `NEXT_PUBLIC_<NET>_WHATSAPP_REGISTRY_ID`. It keeps the
+   current value only if that value is a live shared registry of the new
+   package's lineage. The old registry's type comes from the old lineage, so
+   it is replaced: nothing to blank by hand. (Until 2026-10 the script skipped
+   the call for any value starting with `0x`, which paired the new package with
+   the old registry, the mismatch above.)
+3. Set both ids in the Vercel env (Production and Preview) and redeploy.
+   Next.js inlines `NEXT_PUBLIC_*` at build time, so a running deployment
+   keeps the old pair until it is rebuilt.
 
 ## Summary
 

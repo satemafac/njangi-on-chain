@@ -16,7 +16,7 @@ jest.mock('../pg-pool', () => {
   };
 });
 
-import { consumeRateLimit, __resetRateLimitForTests } from '../rate-limit';
+import { consumeRateLimit, peekRateLimit, __resetRateLimitForTests } from '../rate-limit';
 import { getSharedPgPool } from '../pg-pool';
 
 const ORIGINAL_DATABASE_URL = process.env.DATABASE_URL;
@@ -144,5 +144,46 @@ describe('Postgres mode', () => {
     // The in-memory fallback still enforces the bound per instance.
     expect((await consumeRateLimit(opts)).allowed).toBe(false);
     expect(warnSpy).toHaveBeenCalled();
+  });
+});
+
+describe('peekRateLimit (read-only check)', () => {
+  it('in-memory: never spends a slot, and reflects what consume() did', async () => {
+    delete process.env.DATABASE_URL;
+    __resetRateLimitForTests();
+    const opts = { key: 'peek-mem', limit: 1, windowMs: 60_000 };
+    expect((await peekRateLimit(opts)).allowed).toBe(true);
+    expect((await peekRateLimit(opts)).allowed).toBe(true); // still not spent
+    expect((await consumeRateLimit(opts)).allowed).toBe(true);
+    const after = await peekRateLimit(opts);
+    expect(after.allowed).toBe(false);
+    expect(after.remaining).toBe(0);
+    expect(after.resetMs).toBeGreaterThan(0);
+    expect(getQueryMock()).not.toHaveBeenCalled();
+  });
+
+  it('postgres: issues a SELECT, never the upsert, and reports the window state', async () => {
+    process.env.DATABASE_URL = 'postgres://example';
+    __resetRateLimitForTests();
+    const queryMock = getQueryMock();
+    queryMock.mockReset();
+    queryMock.mockResolvedValueOnce({ rows: [] }); // CREATE TABLE
+    queryMock.mockResolvedValueOnce({ rows: [{ count: 1 }] }); // SELECT
+    const result = await peekRateLimit({ key: 'peek-pg', limit: 1, windowMs: 60_000 });
+    expect(result.allowed).toBe(false);
+    const sqls = queryMock.mock.calls.map((c) => String(c[0]));
+    expect(sqls.some((q) => /SELECT count FROM rate_limits/.test(q))).toBe(true);
+    expect(sqls.some((q) => /INSERT INTO rate_limits/.test(q))).toBe(false);
+  });
+
+  it('postgres: an empty window peeks as allowed with the full limit remaining', async () => {
+    process.env.DATABASE_URL = 'postgres://example';
+    __resetRateLimitForTests();
+    const queryMock = getQueryMock();
+    queryMock.mockReset();
+    queryMock.mockResolvedValueOnce({ rows: [] });
+    queryMock.mockResolvedValueOnce({ rows: [] });
+    const result = await peekRateLimit({ key: 'peek-pg-empty', limit: 5, windowMs: 60_000 });
+    expect(result).toMatchObject({ allowed: true, remaining: 5 });
   });
 });

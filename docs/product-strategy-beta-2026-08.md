@@ -318,7 +318,7 @@ that has money to organize.
 | P0 | Escrow, contribute, claim, recover | Built | The product. |
 | P0 | Social sign-in | Built | Without it there is no non-technical user. |
 | P0 | Counsel opinion on the posture | In flight | The gate: no real family money before it lands. Also unblocks flagship design. |
-| P1 | Sponsored gas | Flip flag | Removes the "buy a token first" barrier. Prerequisite: key rotation, which is an address-migration event — do it before users exist. |
+| P1 | Sponsored gas | Flip flag | Removes the "buy a token first" barrier. Prerequisite: key rotation, a plain credential refresh (Enoki salts are per application and survive it; see CLAUDE.md). |
 | P1 | WhatsApp reminders and turn notices | Template approval | Retention mechanism and Premium anchor. External dependency — start now. |
 | P1 | Digital-dollar settlement | Built | Rung 1 of the flagship. |
 | P1 | Goal pots | Built | Second, lower-commitment entry point. |
