@@ -1,8 +1,9 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/router';
 import { useAuth } from '../../../contexts/AuthContext';
 import { toast } from 'react-hot-toast';
 import { copyToClipboard as copyTextToClipboard, manualCopyMessage } from '@/lib/copy-to-clipboard';
+import ConfirmationModal from '@/components/ConfirmationModal';
 import {
   ArrowLeft,
   AlertTriangle,
@@ -140,6 +141,16 @@ const canMemberTriggerAutoReleaseFromFieldObject = (value: unknown): boolean => 
   return status === 0 && suspensionEndTime === null;
 };
 
+/** What the confirmation dialog asks before a recovery transaction. */
+interface RecoveryConfirmation {
+  title: string;
+  message: string;
+  confirmText: string;
+  confirmButtonVariant: 'primary' | 'danger' | 'warning';
+  /** Sends the transaction. Runs after the dialog has closed. */
+  onConfirm: () => Promise<void>;
+}
+
 export default function CircleDetails() {
   const router = useRouter();
   const { id } = router.query;
@@ -188,6 +199,14 @@ export default function CircleDetails() {
   const [isSubmittingRecoveryVote, setIsSubmittingRecoveryVote] = useState(false);
   const [isSubmittingAutoRelease, setIsSubmittingAutoRelease] = useState(false);
   const [isExecutingRecovery, setIsExecutingRecovery] = useState(false);
+  // The vote, the liveness fallback and the emergency stop are confirmed in
+  // the shared in-app dialog (as on the manage page), not window.confirm,
+  // which in-app browsers can block. Null while the dialog is closed.
+  const [recoveryConfirmation, setRecoveryConfirmation] = useState<RecoveryConfirmation | null>(null);
+  // One in-flight lock per recovery transaction. The flags above only drive
+  // the buttons: a dialog's onConfirm closes over the render that opened it,
+  // so it would read them stale. The lock is what stops a second submission.
+  const recoveryInFlightRef = useRef({ vote: false, autoRelease: false, execute: false });
   const [suiPrice, setSuiPrice] = useState(1.25); // Default price until we fetch real price
   const [copiedId, setCopiedId] = useState(false);
   // Track membership verification status (used for access control flow)
@@ -1237,46 +1256,53 @@ export default function CircleDetails() {
   const pillBaseClass =
     'inline-flex items-center gap-2 rounded-full border px-3 py-2 text-sm font-medium';
 
-  const handleVoteEmergencyStop = async (yesVote: boolean) => {
+  const handleVoteEmergencyStop = (yesVote: boolean) => {
     if (!circle || !account) {
       toast.error('Circle or account information is unavailable.');
       return;
     }
+    if (recoveryInFlightRef.current.vote) return;
 
-    const confirmed = window.confirm(
-      `Cast a ${yesVote ? 'YES' : 'NO'} vote on the emergency stop proposal? This action is recorded onchain and cannot be changed.`,
-    );
-    if (!confirmed) return;
+    setRecoveryConfirmation({
+      title: `Vote ${yesVote ? 'yes' : 'no'} on the emergency stop?`,
+      message: `This casts a ${yesVote ? 'YES' : 'NO'} vote on the emergency stop proposal. It is recorded onchain and cannot be changed.`,
+      confirmText: yesVote ? 'Vote yes' : 'Vote no',
+      confirmButtonVariant: yesVote ? 'warning' : 'primary',
+      onConfirm: async () => {
+        if (recoveryInFlightRef.current.vote) return;
+        recoveryInFlightRef.current.vote = true;
+        setIsSubmittingRecoveryVote(true);
+        const toastId = `vote-recovery-${yesVote ? 'yes' : 'no'}`;
 
-    setIsSubmittingRecoveryVote(true);
-    const toastId = `vote-recovery-${yesVote ? 'yes' : 'no'}`;
+        try {
+          toast.loading(`Submitting ${yesVote ? 'approval' : 'rejection'} vote...`, { id: toastId });
+          const zkLoginClient = ZkLoginClient.getInstance();
+          await zkLoginClient.voteEmergencyStop(account, {
+            circleId: circle.id,
+            yesVote,
+            network: getCurrentNetwork(),
+          });
 
-    try {
-      toast.loading(`Submitting ${yesVote ? 'approval' : 'rejection'} vote...`, { id: toastId });
-      const zkLoginClient = ZkLoginClient.getInstance();
-      await zkLoginClient.voteEmergencyStop(account, {
-        circleId: circle.id,
-        yesVote,
-        network: getCurrentNetwork(),
-      });
-
-      toast.success(`Your ${yesVote ? 'approval' : 'rejection'} vote was recorded.`, { id: toastId });
-      await Promise.all([
-        fetchCircleDetails(),
-        fetchRecoveryStatus(),
-        fetchRecoveryExecutionState(),
-        fetchRecoveryLivenessState(),
-      ]);
-    } catch (error) {
-      console.error('Details - Failed to vote on recovery proposal:', error);
-      if (error instanceof ZkLoginError && error.requireRelogin) {
-        router.push('/');
-        return;
-      }
-      toast.error(error instanceof Error ? error.message : 'Failed to cast vote', { id: toastId });
-    } finally {
-      setIsSubmittingRecoveryVote(false);
-    }
+          toast.success(`Your ${yesVote ? 'approval' : 'rejection'} vote was recorded.`, { id: toastId });
+          await Promise.all([
+            fetchCircleDetails(),
+            fetchRecoveryStatus(),
+            fetchRecoveryExecutionState(),
+            fetchRecoveryLivenessState(),
+          ]);
+        } catch (error) {
+          console.error('Details - Failed to vote on recovery proposal:', error);
+          if (error instanceof ZkLoginError && error.requireRelogin) {
+            router.push('/');
+            return;
+          }
+          toast.error(error instanceof Error ? error.message : 'Failed to cast vote', { id: toastId });
+        } finally {
+          recoveryInFlightRef.current.vote = false;
+          setIsSubmittingRecoveryVote(false);
+        }
+      },
+    });
   };
 
   const handleTriggerAutoRelease = async () => {
@@ -1284,6 +1310,8 @@ export default function CircleDetails() {
       toast.error('Recovery wallet information is unavailable.');
       return;
     }
+    if (recoveryInFlightRef.current.autoRelease) return;
+    const walletId = circle.custody.walletId;
 
     let stablecoinType: string | null =
       recoveryStablecoinType || circle.custody.stablecoinCoinType || null;
@@ -1291,51 +1319,59 @@ export default function CircleDetails() {
       // Same retention-proof fallback as the emergency-stop handler.
       stablecoinType = await resolveCustodyStablecoinType(
         getPooledSuiClient(),
-        circle.custody.walletId,
+        walletId,
       );
     }
     if (!stablecoinType) {
       toast.error('Stablecoin type is unavailable for this custody wallet.');
       return;
     }
+    const resolvedStablecoinType = stablecoinType;
+    // Checked again after the lookup: an earlier click's dialog may have been
+    // confirmed while it ran.
+    if (recoveryInFlightRef.current.autoRelease) return;
 
-    const confirmed = window.confirm(
-      'Trigger the admin-liveness fallback now? This stops the circle and returns tracked funds to their recorded owners.',
-    );
-    if (!confirmed) {
-      return;
-    }
+    setRecoveryConfirmation({
+      title: 'Trigger the admin-liveness fallback now?',
+      message: 'This stops the circle and returns tracked funds to their recorded owners.',
+      confirmText: 'Trigger auto-release',
+      confirmButtonVariant: 'warning',
+      onConfirm: async () => {
+        if (recoveryInFlightRef.current.autoRelease) return;
+        recoveryInFlightRef.current.autoRelease = true;
+        setIsSubmittingAutoRelease(true);
+        const toastId = 'trigger-auto-release';
 
-    setIsSubmittingAutoRelease(true);
-    const toastId = 'trigger-auto-release';
+        try {
+          toast.loading('Triggering auto-release recovery...', { id: toastId });
+          const zkLoginClient = ZkLoginClient.getInstance();
+          await zkLoginClient.triggerAutoRelease(account, {
+            circleId: circle.id,
+            walletId,
+            stablecoinType: resolvedStablecoinType,
+            network: getCurrentNetwork(),
+          });
 
-    try {
-      toast.loading('Triggering auto-release recovery...', { id: toastId });
-      const zkLoginClient = ZkLoginClient.getInstance();
-      await zkLoginClient.triggerAutoRelease(account, {
-        circleId: circle.id,
-        walletId: circle.custody.walletId,
-        stablecoinType,
-        network: getCurrentNetwork(),
-      });
-
-      toast.success('Auto-release recovery submitted.', { id: toastId });
-      await Promise.all([
-        fetchCircleDetails(),
-        fetchRecoveryStatus(),
-        fetchRecoveryExecutionState(),
-        fetchRecoveryLivenessState(),
-      ]);
-    } catch (error) {
-      console.error('Details - Failed to trigger auto-release:', error);
-      if (error instanceof ZkLoginError && error.requireRelogin) {
-        router.push('/');
-        return;
-      }
-      toast.error(error instanceof Error ? error.message : 'Failed to trigger auto-release', { id: toastId });
-    } finally {
-      setIsSubmittingAutoRelease(false);
-    }
+          toast.success('Auto-release recovery submitted.', { id: toastId });
+          await Promise.all([
+            fetchCircleDetails(),
+            fetchRecoveryStatus(),
+            fetchRecoveryExecutionState(),
+            fetchRecoveryLivenessState(),
+          ]);
+        } catch (error) {
+          console.error('Details - Failed to trigger auto-release:', error);
+          if (error instanceof ZkLoginError && error.requireRelogin) {
+            router.push('/');
+            return;
+          }
+          toast.error(error instanceof Error ? error.message : 'Failed to trigger auto-release', { id: toastId });
+        } finally {
+          recoveryInFlightRef.current.autoRelease = false;
+          setIsSubmittingAutoRelease(false);
+        }
+      },
+    });
   };
 
   const handleExecuteRecoveryAsMember = async () => {
@@ -1349,6 +1385,8 @@ export default function CircleDetails() {
       toast.error('Recovery wallet information is unavailable. Refresh and try again.');
       return;
     }
+    if (recoveryInFlightRef.current.execute) return;
+    const walletId = circle.custody.walletId;
 
     // The wallet read behind recoveryStablecoinType may not have answered
     // yet (or failed), and stablecoin_config was never set on some wallets.
@@ -1359,51 +1397,59 @@ export default function CircleDetails() {
     if (!stablecoinType) {
       stablecoinType = await resolveCustodyStablecoinType(
         getPooledSuiClient(),
-        circle.custody.walletId,
+        walletId,
       );
     }
     if (!stablecoinType) {
       toast.error('Stablecoin type is unavailable for this custody wallet.');
       return;
     }
+    const resolvedStablecoinType = stablecoinType;
+    // Checked again after the lookup: an earlier click's dialog may have been
+    // confirmed while it ran.
+    if (recoveryInFlightRef.current.execute) return;
 
-    const confirmed = window.confirm(
-      'Execute the emergency stop now? This halts the circle and returns tracked funds to their recorded owners. It cannot be undone.',
-    );
-    if (!confirmed) {
-      return;
-    }
+    setRecoveryConfirmation({
+      title: 'Execute the emergency stop now?',
+      message: 'This halts the circle and returns tracked funds to their recorded owners. It cannot be undone.',
+      confirmText: 'Execute emergency stop',
+      confirmButtonVariant: 'danger',
+      onConfirm: async () => {
+        if (recoveryInFlightRef.current.execute) return;
+        recoveryInFlightRef.current.execute = true;
+        setIsExecutingRecovery(true);
+        const toastId = 'execute-recovery-member';
 
-    setIsExecutingRecovery(true);
-    const toastId = 'execute-recovery-member';
+        try {
+          toast.loading('Executing the emergency stop...', { id: toastId });
+          const zkLoginClient = ZkLoginClient.getInstance();
+          await zkLoginClient.executeRecovery(account, {
+            circleId: circle.id,
+            walletId,
+            stablecoinType: resolvedStablecoinType,
+            network: getCurrentNetwork(),
+          });
 
-    try {
-      toast.loading('Executing the emergency stop...', { id: toastId });
-      const zkLoginClient = ZkLoginClient.getInstance();
-      await zkLoginClient.executeRecovery(account, {
-        circleId: circle.id,
-        walletId: circle.custody.walletId,
-        stablecoinType,
-        network: getCurrentNetwork(),
-      });
-
-      toast.success('Emergency stop executed. Refunds are on their way to recorded owners.', { id: toastId });
-      await Promise.all([
-        fetchCircleDetails(),
-        fetchRecoveryStatus(),
-        fetchRecoveryExecutionState(),
-        fetchRecoveryLivenessState(),
-      ]);
-    } catch (error) {
-      console.error('Details - Failed to execute recovery:', error);
-      if (error instanceof ZkLoginError && error.requireRelogin) {
-        router.push('/');
-        return;
-      }
-      toast.error(error instanceof Error ? error.message : 'Failed to execute the emergency stop', { id: toastId });
-    } finally {
-      setIsExecutingRecovery(false);
-    }
+          toast.success('Emergency stop executed. Refunds are on their way to recorded owners.', { id: toastId });
+          await Promise.all([
+            fetchCircleDetails(),
+            fetchRecoveryStatus(),
+            fetchRecoveryExecutionState(),
+            fetchRecoveryLivenessState(),
+          ]);
+        } catch (error) {
+          console.error('Details - Failed to execute recovery:', error);
+          if (error instanceof ZkLoginError && error.requireRelogin) {
+            router.push('/');
+            return;
+          }
+          toast.error(error instanceof Error ? error.message : 'Failed to execute the emergency stop', { id: toastId });
+        } finally {
+          recoveryInFlightRef.current.execute = false;
+          setIsExecutingRecovery(false);
+        }
+      },
+    });
   };
 
   return (
@@ -2226,6 +2272,23 @@ export default function CircleDetails() {
           </div>
         )}
       </main>
+
+      <ConfirmationModal
+        isOpen={recoveryConfirmation !== null}
+        onClose={() => setRecoveryConfirmation(null)}
+        onConfirm={() => {
+          // Close first, then run: the order the manage page settled on
+          // (confirmation-modal-order.test.ts), so the transaction never
+          // starts under a dialog that is still open.
+          const pending = recoveryConfirmation;
+          setRecoveryConfirmation(null);
+          void pending?.onConfirm();
+        }}
+        title={recoveryConfirmation?.title ?? ''}
+        message={recoveryConfirmation?.message ?? ''}
+        confirmText={recoveryConfirmation?.confirmText}
+        confirmButtonVariant={recoveryConfirmation?.confirmButtonVariant}
+      />
     </div>
   );
 }

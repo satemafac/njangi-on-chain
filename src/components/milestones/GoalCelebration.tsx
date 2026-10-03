@@ -7,6 +7,8 @@
 
 import React, { useMemo, useState } from 'react';
 import { Check, Copy, PartyPopper } from 'lucide-react';
+import { toast } from 'react-hot-toast';
+import { copyToClipboard, manualCopyMessage } from '@/lib/copy-to-clipboard';
 import { formatBaseAmount } from './milestone-plan';
 
 export interface GoalCelebrationProps {
@@ -54,13 +56,16 @@ export function GoalCelebration({
   }, [circleName, dateLabel, amountLabel, milestoneCount]);
 
   const onCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(shareText);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2500);
-    } catch {
-      /* clipboard unavailable — leave the text visible to copy by hand */
+    // Called first, inside the click, so the browser still counts it as a
+    // user gesture. Falls back to execCommand and never throws.
+    const outcome = await copyToClipboard(shareText);
+    if (outcome === 'failed') {
+      // The card never shows the message itself, so the toast carries it.
+      toast.error(manualCopyMessage('celebration message', shareText), { duration: 12000 });
+      return;
     }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2500);
   };
 
   // Deterministic confetti placement so SSR + hydration agree.

@@ -1,4 +1,6 @@
 import React, { useState } from 'react';
+import { toast } from 'react-hot-toast';
+import { copyToClipboard, manualCopyMessage } from '@/lib/copy-to-clipboard';
 
 interface InAppBrowserModalProps {
   isOpen: boolean;
@@ -36,22 +38,15 @@ export function InAppBrowserModal({
     typeof window !== 'undefined' ? window.location.origin : '';
 
   const handleCopyUrl = async () => {
-    try {
-      await navigator.clipboard.writeText(handoffUrl);
-      setCopyFeedback(true);
-      setTimeout(() => setCopyFeedback(false), 2000);
-    } catch (error) {
-      console.error('Failed to copy URL:', error);
-      // Fallback for older browsers
-      const textArea = document.createElement('textarea');
-      textArea.value = handoffUrl;
-      document.body.appendChild(textArea);
-      textArea.select();
-      document.execCommand('copy');
-      document.body.removeChild(textArea);
-      setCopyFeedback(true);
-      setTimeout(() => setCopyFeedback(false), 2000);
+    // The shared helper does the execCommand fallback this used to inline,
+    // and reports when both paths fail instead of claiming a copy anyway.
+    const outcome = await copyToClipboard(handoffUrl);
+    if (outcome === 'failed') {
+      toast.error(manualCopyMessage('app link', handoffUrl), { duration: 12000 });
+      return;
     }
+    setCopyFeedback(true);
+    setTimeout(() => setCopyFeedback(false), 2000);
   };
 
   const handleOpenInBrowser = () => {

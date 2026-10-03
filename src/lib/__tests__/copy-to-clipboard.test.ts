@@ -3,6 +3,8 @@
  * Runs in the default node environment with hand-rolled navigator/document
  * stubs, so the fallback order is pinned without a DOM package.
  */
+import { readFileSync, readdirSync, statSync } from 'fs';
+import { join, relative } from 'path';
 import { copyToClipboard, manualCopyMessage } from '../copy-to-clipboard';
 
 const LINK = 'https://njangionchain.com/circle/0xabc/join';
@@ -73,5 +75,50 @@ describe('manualCopyMessage', () => {
     const msg = manualCopyMessage('invite link', LINK);
     expect(msg).toContain(LINK);
     expect(msg).toMatch(/press and hold/i);
+  });
+});
+
+/**
+ * Every copy goes through the helper. PR #31 moved the copy buttons it knew
+ * about; ReceiveFundsModal, GoalCelebration, GoalPoolPanel and
+ * InAppBrowserModal kept the raw API, and GoalPoolPanel toasted "Link copied"
+ * without ever checking the write. Source-level, because jest runs in node and
+ * `testMatch` skips .tsx (same technique as confirmation-modal-order.test.ts).
+ */
+describe('copy call sites', () => {
+  const SRC = join(process.cwd(), 'src');
+  const HELPER = join(SRC, 'lib', 'copy-to-clipboard.ts');
+
+  const walk = (dir: string, out: string[] = []): string[] => {
+    for (const entry of readdirSync(dir)) {
+      if (entry === '__tests__' || entry === 'node_modules') continue;
+      const full = join(dir, entry);
+      if (statSync(full).isDirectory()) walk(full, out);
+      else if (/\.tsx?$/.test(entry)) out.push(full);
+    }
+    return out;
+  };
+
+  /** Comments may name the raw API; only code counts. */
+  const stripComments = (source: string): string =>
+    source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+
+  const files = walk(SRC);
+
+  it('scans the source tree it means to guard', () => {
+    // Without this a moved src/ would make the next test pass vacuously.
+    expect(files).toContain(HELPER);
+    expect(files.length).toBeGreaterThan(100);
+  });
+
+  it('never writes to the clipboard except through copyToClipboard', () => {
+    const offenders = files
+      .filter((file) => file !== HELPER)
+      .filter((file) => {
+        const code = stripComments(readFileSync(file, 'utf8'));
+        return /clipboard\s*\??\.\s*writeText\b/.test(code) || /execCommand\(\s*['"`]copy/.test(code);
+      })
+      .map((file) => relative(process.cwd(), file));
+    expect(offenders).toEqual([]);
   });
 });

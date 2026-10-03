@@ -45,4 +45,33 @@ describe('confirmation dialog ordering', () => {
       /setConfirmationModal\(\s*prev\s*=>\s*\(\{\s*\.\.\.prev,\s*isOpen:\s*false\s*\}\)\s*\);\s*confirmationModal\.onConfirm\(\);/,
     );
   });
+
+  // The circle page's member vote, liveness fallback and emergency stop used
+  // window.confirm, which in-app browsers (WhatsApp, Instagram) can block and
+  // which froze the whole page while it was open.
+  describe('the circle page recovery actions', () => {
+    const page = stripComments(read('pages/circle/[id]/index.tsx'));
+
+    it('confirm in the shared dialog, not window.confirm', () => {
+      expect(page).not.toMatch(/window\.confirm\s*\(/);
+      expect(page).toMatch(/import ConfirmationModal from '@\/components\/ConfirmationModal';/);
+      expect(page).toMatch(/<ConfirmationModal\b/);
+    });
+
+    it('close the dialog before running the action', () => {
+      expect(page).not.toMatch(/pending\?\.onConfirm\(\);\s*setRecoveryConfirmation\(null\);/);
+      expect(page).toMatch(/setRecoveryConfirmation\(null\);\s*void pending\?\.onConfirm\(\);/);
+    });
+
+    it('hold an in-flight lock, so a second confirm cannot submit again', () => {
+      // A dialog's onConfirm closes over the render that opened it, so the
+      // isSubmitting* state it sees is stale. The ref is the real guard: take
+      // it before submitting, release it in `finally`.
+      for (const action of ['vote', 'autoRelease', 'execute']) {
+        const lock = `recoveryInFlightRef\\.current\\.${action}`;
+        expect(page).toMatch(new RegExp(`if \\(${lock}\\) return;\\s*${lock} = true;`));
+        expect(page).toMatch(new RegExp(`finally \\{\\s*${lock} = false;`));
+      }
+    });
+  });
 });
