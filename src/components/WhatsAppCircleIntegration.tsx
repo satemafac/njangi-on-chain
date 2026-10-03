@@ -128,7 +128,9 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
         setLinkedStatus({ isLinked: false });
       }
     } catch (error) {
-      console.error('Error checking link status:', error);
+      // warn, not error: the failure is handled below, and in dev
+      // console.error opens Next's error overlay over the card.
+      console.warn('Error checking link status:', error);
       // Not "not linked": the circle may already be linked on chain. Leave
       // linkedStatus alone; the card shows "Couldn't check" and Retry instead.
       setLoadError(true);
