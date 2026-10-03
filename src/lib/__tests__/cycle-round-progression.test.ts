@@ -20,9 +20,12 @@
  * only the recipient pointer distinguishes them.
  */
 import {
+  completedRoundCopyKey,
   resolveNextRoundAction,
   type CircleRotationPointer,
+  type NextRoundAction,
 } from '@/lib/cycle-round-progression';
+import { DICTIONARIES, type Locale } from '@/lib/i18n';
 
 // The three members of the reproduced circle, in rotation order.
 const PAID = '0xe833deaa9c038ac2edd397323ed5dbde1e622aadfd0d526332a214a31f9de17d';
@@ -143,5 +146,112 @@ describe('resolveNextRoundAction', () => {
         pointer: pointer({ currentPosition: 0, nextRecipient: PAID }),
       }),
     ).toEqual({ action: 'advance-rotation' });
+  });
+});
+
+/**
+ * The sentence shown above those controls.
+ *
+ * Found on production 2026-08-30 (same circle, paused_after_cycle = true):
+ * the panel correctly pointed the admin at Resume Cycle — beneath a sentence
+ * saying the admin "can open the next round whenever everyone is ready". One
+ * `escrow.completed` string served every action. Each action now names its
+ * own key, so the sentence and the control cannot disagree again.
+ */
+describe('completedRoundCopyKey', () => {
+  // Typed as a Record so adding an action without copy fails to compile.
+  const expected: Record<NextRoundAction, string> = {
+    'open-next-round': 'escrow.completed.openNextRound',
+    'resume-cycle': 'escrow.completed.resumeCycle',
+    'advance-rotation': 'escrow.completed.advanceRotation',
+    unknown: 'escrow.completed.unknown',
+  };
+  const actions = Object.keys(expected) as NextRoundAction[];
+  const locales = Object.keys(DICTIONARIES) as Locale[];
+
+  it.each(actions)('chooses a dedicated key for %s', (action) => {
+    expect(completedRoundCopyKey(action)).toBe(expected[action]);
+  });
+
+  it('never lets two actions share a sentence', () => {
+    expect(new Set(actions.map(completedRoundCopyKey)).size).toBe(actions.length);
+  });
+
+  // t() falls back to EN for a key a locale lacks, and to the raw key when
+  // EN lacks it too — a typo here would print "escrow.completed.resumeCycle"
+  // on screen. Every locale carried the old string, so every locale carries
+  // all four variants, with the placeholders the panel interpolates.
+  it.each(locales)('defines every variant in %s with {cycle} and {recipient}', (locale) => {
+    for (const action of actions) {
+      const value = DICTIONARIES[locale][completedRoundCopyKey(action)];
+      expect(value).toBeDefined();
+      expect(value).toContain('{cycle}');
+      expect(value).toContain('{recipient}');
+    }
+  });
+
+  it('drops the old single key so nothing can fall back to it', () => {
+    for (const locale of locales) {
+      expect(DICTIONARIES[locale]).not.toHaveProperty('escrow.completed');
+    }
+  });
+
+  // The reported mismatch, pinned in EN: only the open-next-round sentence
+  // may promise the next round.
+  it('only the open-next-round sentence promises the next round', () => {
+    const en = DICTIONARIES.en;
+    expect(en[completedRoundCopyKey('open-next-round')]).toMatch(/open the next round/i);
+    for (const action of ['resume-cycle', 'advance-rotation', 'unknown'] as const) {
+      expect(en[completedRoundCopyKey(action)]).not.toMatch(/can open the next round/i);
+    }
+  });
+
+  // End of a lap: the admin resumes the cycle (starting the next lap) and
+  // then opens that lap's first round. Since package v7 `resume_cycle`
+  // leaves every posted security deposit in custody with its `deposit_paid`
+  // flag set, and `member_deposit_security_deposit` refuses a second one
+  // while the first is held (abort 21). A member reading "new lap" needs to
+  // hear that nothing more is owed. This sentence first shipped with the
+  // pre-v7 demand that every member post a fresh deposit.
+  it('tells members a resumed cycle keeps the deposits already posted', () => {
+    const sentence = DICTIONARIES.en[completedRoundCopyKey('resume-cycle')];
+    expect(sentence).toMatch(/last member of this rotation/i);
+    expect(sentence).toMatch(/resume the cycle to start the next lap, then open its first round/i);
+    expect(sentence).toMatch(/security deposits already posted stay in place/i);
+    expect(sentence).not.toMatch(/fresh|new (?:security )?deposit|post a (?:new |fresh )?deposit/i);
+  });
+
+  // Per locale: the deposit noun the resume sentence must still mention, and
+  // the pre-v7 demand for a new deposit it must no longer make. Typed as a
+  // Record so a new locale cannot skip the check.
+  const resumeDepositWording: Record<Locale, { mentions: RegExp; preV7Demand: RegExp }> = {
+    en: { mentions: /security deposits/i, preV7Demand: /fresh security deposit/i },
+    fr: { mentions: /dépôts de garantie/i, preV7Demand: /nouveau dépôt de garantie/i },
+    pcm: { mentions: /security deposit/i, preV7Demand: /fresh security deposit/i },
+    sw: { mentions: /dhamana za usalama/i, preV7Demand: /dhamana mpya/i },
+    am: { mentions: /የዋስትና ተቀማጮች/, preV7Demand: /አዲስ የዋስትና ተቀማጭ/ },
+    ar: { mentions: /ودائع الضمان/, preV7Demand: /وديعة ضمان جديدة/ },
+    fa: { mentions: /سپرده/, preV7Demand: /سپرده تضمین جدیدی/ },
+  };
+
+  it.each(locales)('%s says the posted deposits stay when the cycle resumes', (locale) => {
+    const sentence = DICTIONARIES[locale][completedRoundCopyKey('resume-cycle')];
+    const { mentions, preV7Demand } = resumeDepositWording[locale];
+    expect(sentence).toMatch(mentions);
+    expect(sentence).not.toMatch(preV7Demand);
+  });
+
+  // `unknown` covers three states: the pointer read failed
+  // (pointer-unavailable), a recipient is missing (no-recipient), or a
+  // pointer read fine has drifted off this escrow's cycle
+  // (stalled-off-cycle). "We couldn't read …" would be false for the last
+  // two, so the sentence only says the next step could not be confirmed —
+  // and suggests no action to anyone.
+  it('suggests no action when the next step could not be confirmed', () => {
+    const sentence = DICTIONARIES.en[completedRoundCopyKey('unknown')];
+    expect(sentence).toMatch(/couldn't confirm/i);
+    expect(sentence).not.toMatch(/couldn't read/i);
+    expect(sentence).not.toMatch(/admin/i);
+    expect(sentence).not.toMatch(/open|advance|resume/i);
   });
 });

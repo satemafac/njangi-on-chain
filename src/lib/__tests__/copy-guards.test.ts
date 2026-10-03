@@ -18,6 +18,7 @@
  */
 import { readFileSync } from 'fs';
 import path from 'path';
+import { DICTIONARIES } from '@/lib/i18n';
 
 const read = (rel: string) =>
   readFileSync(path.resolve(__dirname, '../..', rel), 'utf8');
@@ -124,5 +125,84 @@ describe('mid-cycle migration copy', () => {
 
     expect(page).toContain('migrationVersionOnScreen');
     expect(page).toContain('acknowledgeMigrationVersion: migrationVersionOnScreen');
+  });
+});
+
+describe('WhatsApp Premium copy', () => {
+  // What a WhatsApp link delivers today: content/whatsapp-updates.ts lists it,
+  // and docs/whatsapp-integration-setup.md ("What gets sent") explains it.
+  // Circle updates go to the ONE number the circle admin linked
+  // (resolveCirclePhone, lib/whatsapp-bot/circle-phone.ts), and only the admin
+  // can link a number: whatsapp_integration::link_circle aborts with
+  // E_NOT_CIRCLE_ADMIN otherwise. The "your turn" nudge goes to a number the
+  // round's recipient linked as an admin (resolveMemberPhone in
+  // lib/whatsapp-notifier.ts matches linked_by). Nothing sends reminders, and
+  // the contribution and payout streams wait on the escrow-event relay.
+  //
+  // The pricing card sold "turn and payout notifications" and the upsell said
+  // "members get turn reminders and payout alerts": a paid promise of messages
+  // members never received.
+  const KEYS = [
+    'pricing.premium.feature.whatsapp',
+    'billing.whatsappSuite.title',
+    'billing.whatsappSuite.body',
+  ];
+
+  // Each pattern is a promise the channel does not keep. EN and FR share one
+  // list, so a locale that borrows the other's wording is caught too.
+  const UNSENT: ReadonlyArray<readonly [RegExp, string]> = [
+    [/remind|rappel|deadline|échéance/i, 'nothing sends reminders'],
+    [/\bmembers?\b|\bmembres?\b/i, 'members are not messaged: only the circle admin can link a number'],
+    [/\bturns?\b|\btours?\b/i, '"your turn" reaches only a recipient who linked a number as an admin'],
+    [
+      // "the payout order" / "l'ordre des versements" name an update that is
+      // sent (RotationOrderChanged), not a payout notice.
+      /\bpayouts?\b(?!\s+order)|\bcontributions?\b|\bpaiements?\b|\bcotisations?\b|\bversements?\b(?<!ordre des versements)/i,
+      'contribution and payout updates are not sent yet',
+    ],
+  ];
+
+  const unsentPromises = (text: string): string[] =>
+    UNSENT.filter(([pattern]) => pattern.test(text)).map(([, why]) => why);
+
+  const copy: Array<[string, string, string]> = Object.entries(DICTIONARIES).flatMap(
+    ([locale, dict]) =>
+      KEYS.filter((key) => key in dict).map((key): [string, string, string] => [
+        locale,
+        key,
+        dict[key],
+      ]),
+  );
+
+  it('the keys exist in EN and FR, so the checks below are not vacuous', () => {
+    const missing = KEYS.filter((key) => !(key in DICTIONARIES.en) || !(key in DICTIONARIES.fr));
+    expect(missing).toEqual([]);
+  });
+
+  it.each(copy)('%s %s promises only what is sent', (_locale, _key, text) => {
+    expect(unsentPromises(text)).toEqual([]);
+  });
+
+  it("the server's upgrade message promises only what is sent", () => {
+    // BillingUpsellModal shows the 402 body's message ahead of the localized
+    // body, so on the WhatsApp card this is the sentence the admin reads.
+    const gate = stripComments(read('lib/entitlement-gate.ts'));
+    const message = gate.match(/case 'whatsappSuite':\s*return '([^']+)'/)?.[1];
+
+    expect(message).toBeDefined();
+    expect(unsentPromises(message ?? '')).toEqual([]);
+  });
+
+  it('rejects the copy it replaced', () => {
+    const replaced = [
+      'WhatsApp linking + turn and payout notifications',
+      'Link your circle to WhatsApp so members get turn reminders and payout alerts right where they already chat.',
+      'Liaison WhatsApp + notifications de tour et de paiement',
+      'Reliez votre cercle à WhatsApp pour que les membres reçoivent les rappels de tour et les alertes de paiement là où ils discutent déjà.',
+    ];
+
+    for (const text of replaced) {
+      expect(unsentPromises(text)).not.toEqual([]);
+    }
   });
 });

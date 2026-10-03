@@ -12,6 +12,7 @@ import {
   isLegacyRailEnabled,
   isRampEnabled,
   isEscrowRoundGuardEnabled,
+  isFinalizedEscrowCollectEnabled,
   isTimedEscrowEntriesEnabled,
   disabledResponse,
 } from '@/config/feature-flags';
@@ -91,6 +92,7 @@ describe('escrow entry-point flags', () => {
   const KEYS = [
     'NEXT_PUBLIC_ESCROW_TIMED_ENTRIES_ENABLED',
     'NEXT_PUBLIC_ESCROW_ROUND_GUARD_ENABLED',
+    'NEXT_PUBLIC_ESCROW_FINALIZED_COLLECT_ENABLED',
   ] as const;
   const original: Record<string, string | undefined> = {};
 
@@ -108,9 +110,10 @@ describe('escrow entry-point flags', () => {
     }
   });
 
-  it('default both to OFF when unset', () => {
+  it('default every one to OFF when unset', () => {
     expect(isTimedEscrowEntriesEnabled()).toBe(false);
     expect(isEscrowRoundGuardEnabled()).toBe(false);
+    expect(isFinalizedEscrowCollectEnabled()).toBe(false);
   });
 
   it('enable the round guard only on an explicit true, independently of the timed entries', () => {
@@ -121,6 +124,20 @@ describe('escrow entry-point flags', () => {
     for (const v of ['false', '1', 'yes', 'enabled', '']) {
       process.env.NEXT_PUBLIC_ESCROW_ROUND_GUARD_ENABLED = v;
       expect(isEscrowRoundGuardEnabled()).toBe(false);
+    }
+  });
+
+  it('enable the finalized-round collect only on an explicit true, on its own', () => {
+    // On before its package is published, Collect on a finalized escrow would
+    // build finalize_and_redeem and abort 205.
+    process.env.NEXT_PUBLIC_ESCROW_FINALIZED_COLLECT_ENABLED = 'true';
+    expect(isFinalizedEscrowCollectEnabled()).toBe(true);
+    expect(isEscrowRoundGuardEnabled()).toBe(false);
+    expect(isTimedEscrowEntriesEnabled()).toBe(false);
+
+    for (const v of ['false', '1', 'yes', 'enabled', '']) {
+      process.env.NEXT_PUBLIC_ESCROW_FINALIZED_COLLECT_ENABLED = v;
+      expect(isFinalizedEscrowCollectEnabled()).toBe(false);
     }
   });
 });

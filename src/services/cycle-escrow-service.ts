@@ -111,6 +111,12 @@ export interface AdvanceCircleAfterClaimParams extends CycleEscrowCallBase {
 export interface RedeemClaimParams extends CycleEscrowCallBase {
   escrowId: string;
   claimId: string;
+  /**
+   * As on FinalizeAndRedeemParams: chains `advance_circle_after_claim` so
+   * the rotation advances atomically with the payout. Always pass it from
+   * the panel.
+   */
+  circleId?: string;
 }
 
 export type BuildTransactionFn = (txb: Transaction) => void;
@@ -393,10 +399,12 @@ export function buildAdvanceCircleAfterClaimTx(
 }
 
 /**
- * Two-step redeem for a claim minted to the recipient in a previous tx.
- * The caller must pass both the shared escrow object and the owned claim
- * object they hold; the Move function returns a `Coin<T>` that we transfer
- * to the caller.
+ * Two-step redeem for a claim minted to the recipient in a previous tx —
+ * `finalize_to_recipient` is permissionless, so anyone may have settled the
+ * round. The caller passes the shared escrow and the owned claim they hold
+ * (find it with `findRecipientClaim`); the Move function returns a `Coin<T>`
+ * that goes to the escrow's frozen recipient, whom `redeem_claim` has
+ * already asserted is the sender.
  */
 export function buildRedeemClaimTx(params: RedeemClaimParams): BuildTransactionFn {
   const packageId = packageIdFor(params.network);
@@ -418,6 +426,30 @@ export function buildRedeemClaimTx(params: RedeemClaimParams): BuildTransactionF
       ],
     });
     txb.transferObjects([coin], recipientAddress);
+    appendAdvanceCircleAfterClaim(txb, packageId, params.coinType, params.circleId, escrowId);
+  };
+}
+
+export interface RefundExpiredClaimParams extends CycleEscrowCallBase {
+  escrowId: string;
+}
+
+/**
+ * `refund_expired_claim`: once a finalized round's claim window has closed
+ * with the pot uncollected, sends every recorded contribution back to the
+ * member who paid it. Permissionless, and it can pay nobody else. Aborts 223
+ * E_CLAIM_NOT_EXPIRED inside the window and 206 E_ALREADY_CLAIMED once the
+ * pot was collected.
+ */
+export function buildRefundExpiredClaimTx(params: RefundExpiredClaimParams): BuildTransactionFn {
+  const packageId = packageIdFor(params.network);
+  const escrowId = requireAddr(params.escrowId, 'escrowId');
+  return (txb: Transaction) => {
+    txb.moveCall({
+      target: `${packageId}::njangi_cycle_escrow::refund_expired_claim`,
+      typeArguments: [params.coinType],
+      arguments: [txb.object(escrowId), txb.object(CLOCK_OBJECT_ID)],
+    });
   };
 }
 

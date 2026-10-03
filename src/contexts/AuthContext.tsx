@@ -6,6 +6,7 @@ import { AddressDriftGate } from '@/components/AddressDriftModal';
 import { useIdleTimer } from '@/hooks/useIdleTimer';
 import { getCurrentNetwork, getNetworkConfig } from '@/services/network-config';
 import { refreshAdminHeartbeatsAfterAuth } from '@/lib/admin-heartbeat-refresh';
+import { isDeleteCircleWalletFundsAbort } from '@/lib/custody-wallet-balance';
 import {
   accountToSignerSession,
   clearSignerSession,
@@ -384,6 +385,18 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       };
     } catch (error) {
       console.error('Error in AuthContext.deleteCircle:', error);
+      // delete_circle refuses a wallet that still holds funds (abort 6).
+      // Signed here in the browser, that refusal arrives from the SDK's dry
+      // run, before anything is signed, so answer with the structured result
+      // the dashboard turns into its "withdraw the funds first" dialog.
+      if (error instanceof Error && isDeleteCircleWalletFundsAbort(error.message)) {
+        return {
+          success: false,
+          error: 'Cannot delete: The circle wallet still holds funds. Please withdraw all funds first.',
+          errorType: 'WALLET_HAS_BALANCE',
+          walletId,
+        };
+      }
       // Rethrow to let component handle specific error cases
       throw error;
     }
