@@ -75,6 +75,8 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
       "The window to collect round {cycle}'s payout closed on {date}, so it can no longer be collected. Sending the contributions back gives each member back the share they paid in.",
     'escrow.action.sendBack': 'Send the contributions back',
     'escrow.action.sendingBack': 'Sending back…',
+    'escrow.sendBack.membershipUnknown':
+      "We couldn't check whether you're a member of this round, so sending the contributions back isn't offered here yet. Refresh to try again.",
     'escrow.onlyAdminOpens': 'Only the circle admin can open the round.',
     'escrow.yourShare': 'Your share this round',
     'escrow.whoseTurn': 'Whose turn it is',
@@ -578,6 +580,8 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
       "Le délai pour récupérer le versement du tour {cycle} a pris fin le {date} : il ne peut plus être récupéré. Renvoyer les contributions rend à chaque membre la part qu'il a versée.",
     'escrow.action.sendBack': 'Renvoyer les contributions',
     'escrow.action.sendingBack': 'Renvoi en cours…',
+    'escrow.sendBack.membershipUnknown':
+      "Nous n'avons pas pu vérifier si vous faites partie de ce tour : le renvoi des contributions n'est donc pas encore proposé ici. Actualisez pour réessayer.",
     'escrow.onlyAdminOpens': "Seul l'administrateur du cercle peut ouvrir le tour.",
     'escrow.yourShare': 'Votre part ce tour',
     'escrow.whoseTurn': "C'est le tour de",

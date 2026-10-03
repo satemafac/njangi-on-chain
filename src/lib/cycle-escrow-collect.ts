@@ -98,6 +98,61 @@ export function resolveEscrowStage(params: {
 }
 
 // ---------------------------------------------------------------------------
+// Expired claim — who is offered "Send the contributions back"
+// ---------------------------------------------------------------------------
+
+/**
+ * Whether the panel offers `refund_expired_claim` to the signed-in viewer
+ * once a round's claim window has closed.
+ *
+ * The call is permissionless and can only pay the recorded contributors, so
+ * this is a product rule, not a safety check. Recovery is member-initiated:
+ * every member of the round, the admin included, is offered it, and a
+ * signed-in viewer outside the round is not. It is never admin-only, so
+ * nobody's money waits on one person to act.
+ *
+ * Membership is the escrow's own frozen member list (`snapshot.members`, the
+ * list `contribute` checks; it includes the recipient), which arrives in the
+ * same object read as the stage. A recorded contributor is a member by
+ * construction (`contribute` aborts 200 for anyone off that list), so that
+ * alone settles it even when the list did not come back.
+ */
+export type ExpiredClaimRefundAccess =
+  /** The admin, or a member of this round: offer the refund. */
+  | 'offer'
+  /** Signed in, the member list was read, and this address is not on it. */
+  | 'not-member'
+  /**
+   * The member list did not come back. Neither offer nor hide the refund on
+   * a guess; say it could not be checked, and let a refresh try again.
+   */
+  | 'unknown'
+  /** No signer session, so nobody to check yet; the panel asks them to sign in. */
+  | 'signed-out';
+
+export function resolveExpiredClaimRefundAccess(params: {
+  /** The signer's address (`useZkLoginSigner`), null when signed out. */
+  userAddress: string | null;
+  isAdmin: boolean;
+  /** The escrow snapshot's members; empty or absent when unreadable. */
+  members: readonly string[] | null | undefined;
+  /** Recorded contributors (the escrow's `contributed` table). */
+  contributors: readonly string[];
+}): ExpiredClaimRefundAccess {
+  const { userAddress, isAdmin, members, contributors } = params;
+  if (isAdmin) return 'offer';
+  if (!userAddress) return 'signed-out';
+  const viewer = normalizeAddress(userAddress);
+  const includesViewer = (list: readonly string[]) =>
+    list.some((address) => normalizeAddress(address) === viewer);
+  if (includesViewer(contributors)) return 'offer';
+  // `open_cycle*` refuses to open a round with fewer than two members, so an
+  // empty list is a read that came back unusable, never an empty round.
+  if (!members || members.length === 0) return 'unknown';
+  return includesViewer(members) ? 'offer' : 'not-member';
+}
+
+// ---------------------------------------------------------------------------
 // Collect route — which transaction the recipient's Collect builds
 // ---------------------------------------------------------------------------
 

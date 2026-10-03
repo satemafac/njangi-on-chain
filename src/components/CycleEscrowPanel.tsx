@@ -13,6 +13,7 @@ import {
   findRecipientClaim,
   resolveCollectRoute,
   resolveEscrowStage,
+  resolveExpiredClaimRefundAccess,
   type EscrowStage,
 } from '@/lib/cycle-escrow-collect';
 import { readChainClockMs } from '@/lib/chain-clock';
@@ -309,6 +310,20 @@ export function CycleEscrowPanel({
         chainNowMs,
       }),
     [loading, summary, liveState, paidSoFar, totalRequired, chainNowMs],
+  );
+
+  // Who may send an expired round's contributions back: every member of the
+  // round, the admin included, never only the admin. An unreadable member
+  // list is 'unknown', which neither offers nor silently hides the control.
+  const refundAccess = useMemo(
+    () =>
+      resolveExpiredClaimRefundAccess({
+        userAddress,
+        isAdmin,
+        members: liveState?.members,
+        contributors,
+      }),
+    [userAddress, isAdmin, liveState?.members, contributors],
   );
 
   // The day the claim window closed, in the reader's locale. Only formats
@@ -858,13 +873,14 @@ export function CycleEscrowPanel({
 
   // An expired round's pot can only go back to its contributors, and
   // refund_expired_claim (permissionless) does exactly that, paying nobody
-  // else. So anyone signed in may run it: nobody's money should wait on one
-  // person, the recipient or the admin, to act.
+  // else. Recovery is member-initiated, so every member of the round runs
+  // it, the admin included: nobody's money should wait on one person, the
+  // recipient or the admin, to act (resolveExpiredClaimRefundAccess).
   const onSendContributionsBack = useCallback(() => {
-    if (!summary) return;
+    if (!summary || refundAccess !== 'offer') return;
     const build = buildRefundExpiredClaimTx({ network, coinType, escrowId: summary.escrowId });
     void runWithSigner('refund', build, 100_000_000);
-  }, [summary, network, coinType, runWithSigner]);
+  }, [summary, refundAccess, network, coinType, runWithSigner]);
 
   return (
     <section className="rounded-2xl border border-emerald-200 bg-white p-5 shadow-sm">
@@ -1165,24 +1181,35 @@ export function CycleEscrowPanel({
             {/* The claim window closed, on the chain clock, before anyone
                 collected: collecting aborts 211 now, and the pot can only go
                 back to the members who paid in. refund_expired_claim is
-                permissionless and pays nobody else, so it is offered to
-                anyone signed in. */}
+                permissionless and pays nobody else; it is offered to every
+                member of the round, the admin included, and to no one
+                outside it. When the member list could not be read, say so
+                rather than offer or hide the control on a guess. */}
             {stage === 'claim-expired' ? (
               <div className="flex w-full flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <p className="text-sm font-medium text-amber-700 sm:max-w-md">
-                  {t('escrow.claimExpired', {
-                    cycle: summary?.cycleNo ?? '—',
-                    date: claimClosedOn,
-                  })}
-                </p>
-                <button
-                  type="button"
-                  onClick={onSendContributionsBack}
-                  disabled={!isReady || busy === 'refund'}
-                  className="inline-flex shrink-0 items-center justify-center rounded-full bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-50"
-                >
-                  {busy === 'refund' ? t('escrow.action.sendingBack') : t('escrow.action.sendBack')}
-                </button>
+                <div className="sm:max-w-md">
+                  <p className="text-sm font-medium text-amber-700">
+                    {t('escrow.claimExpired', {
+                      cycle: summary?.cycleNo ?? '—',
+                      date: claimClosedOn,
+                    })}
+                  </p>
+                  {refundAccess === 'unknown' ? (
+                    <p role="status" className="mt-2 text-xs text-amber-700">
+                      {t('escrow.sendBack.membershipUnknown')}
+                    </p>
+                  ) : null}
+                </div>
+                {refundAccess === 'offer' ? (
+                  <button
+                    type="button"
+                    onClick={onSendContributionsBack}
+                    disabled={!isReady || busy === 'refund'}
+                    className="inline-flex shrink-0 items-center justify-center rounded-full bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-50"
+                  >
+                    {busy === 'refund' ? t('escrow.action.sendingBack') : t('escrow.action.sendBack')}
+                  </button>
+                ) : null}
               </div>
             ) : null}
 

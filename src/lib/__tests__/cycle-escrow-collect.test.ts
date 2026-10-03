@@ -13,6 +13,8 @@
  * escrow renders, which transaction Collect builds for it, and how the
  * recipient's Claim is found — with a failed read kept apart from "no claim".
  */
+import { readFileSync } from 'fs';
+import { join } from 'path';
 import type { SuiClient } from '@mysten/sui/client';
 import {
   claimStructType,
@@ -21,6 +23,7 @@ import {
   MAX_CLAIM_PAGES,
   resolveCollectRoute,
   resolveEscrowStage,
+  resolveExpiredClaimRefundAccess,
   type CollectRouteState,
   type EscrowStageState,
 } from '@/lib/cycle-escrow-collect';
@@ -164,6 +167,89 @@ describe('claimWindowClosed', () => {
     expect(claimWindowClosed({ ...running, finalized: false, claimExpiresAtMs: 0 }, null)).toBe(false);
     expect(claimWindowClosed({ ...running, claimed: true }, EXPIRES + 1)).toBe(false);
     expect(claimWindowClosed({ ...running, refunded: true }, EXPIRES + 1)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Expired claim — who is offered "Send the contributions back"
+// ---------------------------------------------------------------------------
+
+describe('resolveExpiredClaimRefundAccess', () => {
+  // The production circle's rotation: the admin, MEMBER-1 and this round's
+  // recipient. Only the admin has paid in so far.
+  const ADMIN = '0xe833deaa9c038ac2edd397323ed5dbde1e622aadfd0d526332a214a31f9de17d';
+  const MEMBER = '0xdf98684462fb5b3e85dffcc34fda108b7c34e7da37ab88f0ae3a530ef804a97d';
+  const MEMBERS = [ADMIN, MEMBER, RECIPIENT];
+  const access = (over: Partial<Parameters<typeof resolveExpiredClaimRefundAccess>[0]> = {}) =>
+    resolveExpiredClaimRefundAccess({
+      userAddress: MEMBER,
+      isAdmin: false,
+      members: MEMBERS,
+      contributors: [ADMIN],
+      ...over,
+    });
+
+  it('offers it to every member of the round, never only to the admin', () => {
+    expect(access({ userAddress: MEMBER })).toBe('offer'); // has not paid in
+    expect(access({ userAddress: RECIPIENT })).toBe('offer');
+    expect(access({ userAddress: ADMIN })).toBe('offer'); // as a member, without the flag
+  });
+
+  it('offers it to the admin even when the member list did not come back', () => {
+    expect(access({ userAddress: ADMIN, isAdmin: true, members: [], contributors: [] })).toBe(
+      'offer',
+    );
+  });
+
+  it('hides it from a signed-in viewer the member list does not name', () => {
+    expect(access({ userAddress: STRANGER })).toBe('not-member');
+  });
+
+  it('neither offers nor hides it when the member list did not come back', () => {
+    // A real round always names at least two members, so empty is unreadable.
+    expect(access({ userAddress: STRANGER, members: [] })).toBe('unknown');
+    expect(access({ userAddress: MEMBER, members: null })).toBe('unknown');
+    expect(access({ userAddress: MEMBER, members: undefined })).toBe('unknown');
+  });
+
+  it('takes a recorded contributor as a member even without the list', () => {
+    // `contribute` aborts 200 for anyone off the snapshot list.
+    expect(access({ userAddress: ADMIN, members: [] })).toBe('offer');
+  });
+
+  it('matches addresses however they are padded or cased', () => {
+    const padded = '0x0000' + 'ab'.repeat(30);
+    const short = '0x' + 'AB'.repeat(30);
+    expect(access({ userAddress: short, members: [ADMIN, padded] })).toBe('offer');
+    expect(access({ userAddress: MEMBER.toUpperCase().replace('0X', '0x') })).toBe('offer');
+  });
+
+  it('has nobody to check while signed out', () => {
+    expect(access({ userAddress: null })).toBe('signed-out');
+  });
+});
+
+describe('CycleEscrowPanel offers "Send the contributions back" by that rule', () => {
+  // Jest runs node-only `.test.ts` files (no jsdom), so the render rule is
+  // pinned on the source, the same technique as copy-guards.test.ts.
+  const panel = readFileSync(join(process.cwd(), 'src/components/CycleEscrowPanel.tsx'), 'utf8');
+
+  it('renders the one send-back button only when the rule offers it', () => {
+    expect(panel).toContain('resolveExpiredClaimRefundAccess(');
+    expect(panel.match(/onClick=\{onSendContributionsBack\}/g)).toHaveLength(1);
+    expect(panel).toMatch(
+      /refundAccess === 'offer' \? \(\s*<button\s+type="button"\s+onClick=\{onSendContributionsBack\}/,
+    );
+  });
+
+  it('says so when membership could not be checked, instead of hiding it silently', () => {
+    expect(panel).toMatch(/refundAccess === 'unknown' \? \([\s\S]{0,200}escrow\.sendBack\.membershipUnknown/);
+  });
+
+  it('refuses the refund in the handler too, for anyone the rule does not offer it to', () => {
+    expect(panel).toMatch(
+      /const onSendContributionsBack = useCallback\(\(\) => \{\s*if \(!summary \|\| refundAccess !== 'offer'\) return;/,
+    );
   });
 });
 
