@@ -50,6 +50,10 @@ answers every text message sent to the business number:
 Matching is loose: any message that contains `help` gets the help reply, and
 any other message that contains `status` counts as `/status`.
 
+When a bare `/status` can't finish its lookup (the link index, the chain or
+Walrus can't be read), the reply says so and asks the sender to try again. It
+says no circle is linked only when every lookup answered.
+
 ## How it works
 
 - **Linking.** On the circle's manage page,
