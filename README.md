@@ -130,7 +130,7 @@ Five rules hold the whole design together. A change that breaks one is treated a
 | **Invite links** | Share cards render server-side, so WhatsApp and iMessage show the circle, not a generic page. |
 | **Per-round escrow** | Open, contribute, settle, collect, refund and advance, all on-chain. |
 | **Assets** | SUI and USDC. Members can swap into the circle's currency themselves through Cetus. |
-| **WhatsApp nudges** | "It's your turn" and payout notifications where the group already talks (Premium). |
+| **WhatsApp updates** | The circle admin links one WhatsApp number, which gets the circle's updates: who joins or is removed, security deposits, payout-order changes and activation (Premium). |
 | **Smart goals** | Savings goals and milestones on top of the rotation (Premium). |
 | **Records** | A Founding Circle badge, a payout celebration, and member stories shared only with consent. |
 | **The globe** | Hover or tap to see the local name of the savings circle in 20 places. |
@@ -144,7 +144,7 @@ Five rules hold the whole design together. A change that breaks one is treated a
 | Circles | 1 | Up to 5 at once |
 | Members per circle | Up to 3 | Up to 20 |
 | Escrow rounds, collecting, member recovery | ✓ | ✓ |
-| WhatsApp turn and payout notifications | — | ✓ |
+| WhatsApp circle updates, sent to the number the admin links | — | ✓ |
 | Smart savings goals | — | ✓ |
 | Circle analytics | — | ✓ |
 

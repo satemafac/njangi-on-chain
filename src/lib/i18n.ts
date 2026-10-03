@@ -417,7 +417,9 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'pricing.free.feature.zklogin': 'zkLogin sign-in with self-custodied wallets',
     'pricing.premium.feature.members': 'Up to {count} members per circle',
     'pricing.premium.feature.circles': 'Run up to {count} circles at once',
-    'pricing.premium.feature.whatsapp': 'WhatsApp linking + turn and payout notifications',
+    // WhatsApp copy here and in billing.whatsappSuite.* names only updates
+    // listed in src/content/whatsapp-updates.ts (guard: copy-guards.test.ts).
+    'pricing.premium.feature.whatsapp': 'Circle updates on WhatsApp, sent to the number you link',
     'pricing.premium.feature.goals': 'Smart savings goals for your circles',
     'pricing.premium.feature.everything': 'Everything in Free',
     'pricing.alwaysFreeNoteLabel': 'Always free, on every plan:',
@@ -432,7 +434,7 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'billing.generic.body': 'Upgrade to Premium to unlock it for your circles.',
     'billing.whatsappSuite.title': 'WhatsApp updates are a Premium feature',
     'billing.whatsappSuite.body':
-      'Link your circle to WhatsApp so members get turn reminders and payout alerts right where they already chat.',
+      "Link a WhatsApp number to your circle, and that number gets the circle's updates: who joins or is removed, security deposits paid or returned, changes to the payout order, and the circle going live.",
     'billing.maxMembers.title': 'Bigger circles are a Premium feature',
     'billing.maxMembers.body':
       'Free circles hold a few close members. Premium grows a circle to the full rotation the contract supports.',
@@ -922,7 +924,7 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'pricing.free.feature.zklogin': 'Connexion zkLogin avec portefeuilles en autodétention',
     'pricing.premium.feature.members': "Jusqu'à {count} membres par cercle",
     'pricing.premium.feature.circles': "Gérez jusqu'à {count} cercles à la fois",
-    'pricing.premium.feature.whatsapp': 'Liaison WhatsApp + notifications de tour et de paiement',
+    'pricing.premium.feature.whatsapp': 'Mises à jour du cercle sur WhatsApp, envoyées au numéro que vous reliez',
     'pricing.premium.feature.goals': "Objectifs d'épargne intelligents pour vos cercles",
     'pricing.premium.feature.everything': 'Tout ce qui est inclus dans Gratuit',
     'pricing.alwaysFreeNoteLabel': 'Toujours gratuit, sur tous les forfaits :',
@@ -937,7 +939,7 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'billing.generic.body': 'Passez à Premium pour la débloquer pour vos cercles.',
     'billing.whatsappSuite.title': 'Les notifications WhatsApp sont une fonctionnalité Premium',
     'billing.whatsappSuite.body':
-      "Reliez votre cercle à WhatsApp pour que les membres reçoivent les rappels de tour et les alertes de paiement là où ils discutent déjà.",
+      "Reliez un numéro WhatsApp à votre cercle, et ce numéro reçoit ses mises à jour : qui le rejoint ou en est retiré, les dépôts de garantie versés ou restitués, les changements de l'ordre des versements et le démarrage du cercle.",
     'billing.maxMembers.title': 'Les cercles plus grands sont une fonctionnalité Premium',
     'billing.maxMembers.body':
       "Les cercles gratuits réunissent quelques membres proches. Premium étend un cercle à la rotation complète prise en charge par le contrat.",
