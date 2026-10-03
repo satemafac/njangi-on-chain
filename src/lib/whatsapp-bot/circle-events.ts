@@ -25,6 +25,15 @@
 //     `admin_phone_number` field that no longer exists on chain.
 //   * Dedupe/cursor state lives in Postgres (whatsapp_notifications +
 //     cycle_finalized_cursor tables), not process memory.
+//   * Contributions and payouts come from the per-round escrow rail
+//     (njangi_cycle_escrow::ContributionRecorded / ClaimRedeemed). The bot
+//     listened to the legacy njangi_payments rail's ContributionMade,
+//     StablecoinContributionMade and PayoutProcessed, which no live circle
+//     emits: that rail is switched off (isLegacyRailEnabled), and as of
+//     2026-09-27 the testnet lineage had never emitted any of the three.
+//     Escrow events name an escrow, not a circle, so those two streams
+//     define `escrowIdOf` and the cron reads the escrow object first (see
+//     EscrowSubject).
 
 import type { WhatsAppTemplatePayload } from '../whatsapp-notifier';
 
@@ -78,6 +87,21 @@ export function shortAddress(address: string): string {
   return `${address.slice(0, 6)}...${address.slice(-4)}`;
 }
 
+/** Labels whose decimals formatTokenAmount knows rather than guesses. */
+const KNOWN_DECIMALS_LABELS = new Set(['SUI', 'USDC', 'USDT']);
+
+/**
+ * formatTokenAmount for an escrow's coin, or null when the coin is not one
+ * whose decimals are known. Opening an escrow is permissionless and generic
+ * over `T`, and formatTokenAmount's 9-decimal default would misreport any
+ * other coin by orders of magnitude — so the copy omits the figure instead.
+ */
+function formatEscrowAmount(rawAmount: unknown, coinType: string): string | null {
+  return KNOWN_DECIMALS_LABELS.has(getCoinLabelFromType(coinType))
+    ? formatTokenAmount(rawAmount, coinType)
+    : null;
+}
+
 // ---------------------------------------------------------------------------
 // Stream definitions
 // ---------------------------------------------------------------------------
@@ -118,6 +142,22 @@ export interface ParsedCircleEvent {
   buildTemplate?(ctx: CircleEventMessageContext): WhatsAppTemplatePayload | null;
 }
 
+/**
+ * What the cron reads off a `njangi_cycle_escrow::CycleEscrow<T>` for the
+ * escrow-rail streams, whose events carry the escrow id but neither the
+ * circle id nor the coin type. All three fields are frozen when the escrow
+ * opens (the circle id and snapshot never change; `T` is the object's
+ * type), and escrows are shared objects that are never deleted — so a read
+ * made any time after the event returns what the event was emitted under.
+ */
+export interface EscrowSubject {
+  circleId: string;
+  /** `T` of `CycleEscrow<T>`, e.g. `0x…::usdc::USDC` or `0x2::sui::SUI`. */
+  coinType: string;
+  /** Members who pay into the round (all but the recipient); null if unreadable. */
+  requiredContributors: number | null;
+}
+
 export interface CircleEventStream {
   /** Stable stream name — cursor key suffix + audit kind detail. */
   name: string;
@@ -130,8 +170,17 @@ export interface CircleEventStream {
   source: 'core' | 'whatsapp';
   /** Builds the Move event type tag from the DEFINING package id. */
   eventType(definingPackageId: string): string;
-  /** Returns null for malformed or filtered payloads (advance, no send). */
-  parse(parsedJson: unknown): ParsedCircleEvent | null;
+  /**
+   * Escrow-rail streams only: the escrow the event names. The cron reads
+   * that object and passes the result to `parse`. Null for a payload with
+   * no escrow id (advance, no send).
+   */
+  escrowIdOf?(parsedJson: unknown): string | null;
+  /**
+   * Returns null for malformed or filtered payloads (advance, no send).
+   * `escrow` is supplied exactly for streams that define `escrowIdOf`.
+   */
+  parse(parsedJson: unknown, escrow?: EscrowSubject): ParsedCircleEvent | null;
 }
 
 type RawEvent = Record<string, unknown>;
@@ -143,6 +192,39 @@ function asRecord(parsedJson: unknown): RawEvent | null {
 function stringField(raw: RawEvent, key: string): string | null {
   const value = raw[key];
   return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+function escrowIdField(parsedJson: unknown): string | null {
+  const raw = asRecord(parsedJson);
+  return raw ? stringField(raw, 'escrow_id') : null;
+}
+
+const CYCLE_ESCROW_TYPE = /::njangi_cycle_escrow::CycleEscrow<(.+)>$/;
+
+/**
+ * Parses a `getObject({ showType, showContent })` response for a
+ * CycleEscrow<T>. Null when the response holds no such escrow (the RPC's
+ * `notExists` error, another type, no circle id); the cron skips those
+ * events. Transport failures never get here — the cron lets them throw.
+ */
+export function parseEscrowSubject(objectResponse: unknown): EscrowSubject | null {
+  const data = asRecord(asRecord(objectResponse)?.data);
+  const content = asRecord(data?.content);
+  const typeTag = typeof data?.type === 'string' ? data.type : content?.type;
+  const coinType =
+    typeof typeTag === 'string' ? (typeTag.match(CYCLE_ESCROW_TYPE)?.[1] ?? null) : null;
+  const fields = asRecord(content?.fields);
+  const circleId = fields ? stringField(fields, 'circle_id') : null;
+  if (!coinType || !circleId) return null;
+
+  // Nested structs arrive as { type, fields }; u64s arrive as strings.
+  const snapshot = asRecord(fields?.snapshot);
+  const snapshotFields = asRecord(snapshot?.fields) ?? snapshot;
+  return {
+    circleId,
+    coinType,
+    requiredContributors: parseNumericField(snapshotFields?.required_contributors),
+  };
 }
 
 function circleLink(ctx: CircleEventMessageContext, circleId: string, suffix = ''): string {
@@ -293,8 +375,9 @@ export const CIRCLE_EVENT_STREAMS: CircleEventStream[] = [
       const raw = asRecord(parsedJson);
       if (!raw) return null;
       // operation_type 3 = security deposit. Type 1 (cycle contributions)
-      // is covered by the ContributionMade/StablecoinContributionMade
-      // streams; other operations are internal transfers.
+      // belongs to the retired legacy rail — contributions now land in the
+      // per-round escrow (contribution_recorded stream); other operations
+      // are internal transfers.
       if (parseNumericField(raw.operation_type) !== 3) return null;
       const circleId = stringField(raw, 'circle_id');
       const member = stringField(raw, 'member') ?? stringField(raw, 'depositor');
@@ -357,16 +440,42 @@ export const CIRCLE_EVENT_STREAMS: CircleEventStream[] = [
     },
   },
   {
-    name: 'contribution',
+    // A member paid into a round's escrow (njangi_cycle_escrow::contribute*).
+    // Replaces the legacy rail's `contribution` / `contribution_stablecoin`
+    // streams; the new name gives it a fresh cursor key, so a cursor paged
+    // over another event type is never reused.
+    name: 'contribution_recorded',
     source: 'core',
-    eventType: (pkg) => `${pkg}::njangi_payments::ContributionMade`,
-    parse: (parsedJson) => parseContribution(parsedJson, /* hasCoinType */ false),
-  },
-  {
-    name: 'contribution_stablecoin',
-    source: 'core',
-    eventType: (pkg) => `${pkg}::njangi_circles::StablecoinContributionMade`,
-    parse: (parsedJson) => parseContribution(parsedJson, /* hasCoinType */ true),
+    eventType: (pkg) => `${pkg}::njangi_cycle_escrow::ContributionRecorded`,
+    escrowIdOf: escrowIdField,
+    parse(parsedJson, escrow) {
+      const raw = asRecord(parsedJson);
+      const contributor = raw && stringField(raw, 'contributor');
+      if (!raw || !contributor || !escrow) return null;
+      const { circleId } = escrow;
+      const amount = formatEscrowAmount(raw.amount, escrow.coinType);
+      const round = parseNumericField(raw.cycle_no);
+      // Count as of this contribution (the escrow's live count drops again
+      // if the round is refunded); the target is frozen in the snapshot.
+      const paid = parseNumericField(raw.contributors_so_far);
+      const required = escrow.requiredContributors;
+      return {
+        circleId,
+        memberAddress: contributor,
+        // No buildTemplate: the legacy `recieve_contribution` template is not
+        // on whatsapp-notifier.ts's approved reuse list. The escrow read now
+        // supplies its paid/total/remaining placeholders ({{5}}–{{7}}), so it
+        // can be wired once its approval and {{8}} beneficiary are confirmed.
+        buildBody: (ctx) =>
+          `Contribution received in ${ctx.circleName}.\n` +
+          `${round !== null ? `Round ${round}: ` : ''}` +
+          `${memberDisplay(ctx, contributor)} paid ${amount ?? 'their share'}.` +
+          (paid !== null && required !== null
+            ? ` ${paid} of ${required} members have paid in for this round.`
+            : '') +
+          `\nView progress: ${circleLink(ctx, circleId)}`,
+      };
+    },
   },
   {
     name: 'member_removed',
@@ -449,35 +558,40 @@ export const CIRCLE_EVENT_STREAMS: CircleEventStream[] = [
     },
   },
   {
-    name: 'payout_processed',
+    // The recipient collected a round's payout (njangi_cycle_escrow::
+    // redeem_claim, also reached through finalize_and_redeem). Replaces the
+    // legacy rail's `payout_processed` stream. The rail is recipient-pull,
+    // so this fires on collection; CycleFinalized, which drives the separate
+    // "your turn" nudge (/api/cron/cycle-finalized), is not relayed here.
+    name: 'claim_redeemed',
     source: 'core',
-    eventType: (pkg) => `${pkg}::njangi_payments::PayoutProcessed`,
-    parse(parsedJson) {
+    eventType: (pkg) => `${pkg}::njangi_cycle_escrow::ClaimRedeemed`,
+    escrowIdOf: escrowIdField,
+    parse(parsedJson, escrow) {
       const raw = asRecord(parsedJson);
-      const circleId = raw && stringField(raw, 'circle_id');
       const recipient = raw && stringField(raw, 'recipient');
-      if (!circleId || !recipient) return null;
-      // Legacy payout path settles in SUI (no coin_type on the event).
-      const amount = formatTokenAmount(raw.amount, null);
-      const cycle = parseNumericField(raw.cycle);
+      if (!raw || !recipient || !escrow) return null;
+      const { circleId } = escrow;
+      const amount = formatEscrowAmount(raw.amount, escrow.coinType);
+      const round = parseNumericField(raw.cycle_no);
       return {
         circleId,
         memberAddress: recipient,
         buildBody: (ctx) =>
-          `Payout sent in ${ctx.circleName}.\n` +
-          `${cycle !== null ? `Cycle ${cycle}: ` : ''}` +
+          `Payout collected in ${ctx.circleName}.\n` +
+          `${round !== null ? `Round ${round}: ` : ''}` +
           `${memberDisplay(ctx, recipient)} received ${amount ?? 'their payout'}.\n` +
           `View circle: ${circleLink(ctx, circleId)}`,
-        // payout_processed body params: {{1}} circle, {{2}} cycle,
+        // payout_processed body params: {{1}} circle, {{2}} cycle number,
         // {{3}} recipient, {{4}} amount, {{5}} date (same approved template
         // buildYourTurnTemplate reuses). Send only when amount + cycle parsed.
         buildTemplate: (ctx) =>
-          amount && cycle !== null
+          amount && round !== null
             ? legacyTemplate(
                 'payout_processed',
                 [
                   ctx.circleName,
-                  String(cycle),
+                  String(round),
                   ctx.memberName || shortAddress(recipient),
                   amount,
                   sendDateLabel(true),
@@ -489,36 +603,6 @@ export const CIRCLE_EVENT_STREAMS: CircleEventStream[] = [
     },
   },
 ];
-
-function parseContribution(
-  parsedJson: unknown,
-  hasCoinType: boolean,
-): ParsedCircleEvent | null {
-  const raw = asRecord(parsedJson);
-  const circleId = raw && stringField(raw, 'circle_id');
-  const member = raw && stringField(raw, 'member');
-  if (!raw || !circleId || !member) return null;
-  const amount = formatTokenAmount(
-    raw.amount,
-    hasCoinType ? stringField(raw, 'coin_type') : null,
-  );
-  if (!amount) return null;
-  const cycle = parseNumericField(raw.cycle);
-  return {
-    circleId,
-    memberAddress: member,
-    // No buildTemplate: the legacy `recieve_contribution` template body needs
-    // paid count, member total, remaining count and the current beneficiary
-    // ({{5}}–{{8}}) — aggregates the serverless cron does not compute. Keep the
-    // freeform fallback until a leaner template is approved (recieve_contribution
-    // is intentionally absent from whatsapp-notifier.ts's reuse list).
-    buildBody: (ctx) =>
-      `Contribution received in ${ctx.circleName}.\n` +
-      `${cycle !== null ? `Cycle ${cycle}: ` : ''}` +
-      `${memberDisplay(ctx, member)} paid ${amount}.\n` +
-      `View progress: ${circleLink(ctx, circleId)}`,
-  };
-}
 
 /** Stable per-event dedupe key for the whatsapp_notifications claim row. */
 export function circleEventDedupeKey(
