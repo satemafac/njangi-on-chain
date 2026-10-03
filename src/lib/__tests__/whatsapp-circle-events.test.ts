@@ -3,7 +3,8 @@
  * GET /api/cron/whatsapp-circle-events — the fold-in of the retired
  * whatsapp-bot-backend listener. Covers event payload parsing (field
  * extraction, the CustodyDeposited operation_type filter, malformed
- * payload rejection), amount formatting, and the message bodies.
+ * payload rejection), the escrow-object read behind the escrow-rail
+ * streams, amount formatting, and the message bodies.
  */
 
 import {
@@ -12,15 +13,72 @@ import {
   circleEventDedupeKey,
   formatTokenAmount,
   getCoinLabelFromType,
+  parseEscrowSubject,
   shortAddress,
   type CircleEventMessageContext,
   type CircleEventStream,
+  type EscrowSubject,
 } from '../whatsapp-bot/circle-events';
 import type { WhatsAppTemplatePayload } from '../whatsapp-notifier';
 
 const CIRCLE = '0x' + 'c1'.repeat(32);
 const MEMBER = '0x' + 'ab'.repeat(32);
+const RECIPIENT = '0x' + '1f'.repeat(32);
+const ESCROW = '0x' + 'e3'.repeat(32);
 const PKG = '0x' + 'aa'.repeat(32);
+const USDC = '0x' + '26'.repeat(32) + '::usdc::USDC';
+const SUI = '0x2::sui::SUI';
+
+/** What the cron hands escrow-rail parsers after reading the escrow. */
+const USDC_ESCROW: EscrowSubject = {
+  circleId: CIRCLE,
+  coinType: USDC,
+  requiredContributors: 2,
+};
+
+/**
+ * getObject({ showType, showContent }) response for a CycleEscrow<T>, in
+ * the shape testnet publicnode returns (escrow 0xe30c91…, round 5 of
+ * circle 0xa3fada…): u64s as strings, the snapshot as { type, fields }.
+ */
+function escrowObjectResponse(coinType: string = USDC) {
+  const type = `${PKG}::njangi_cycle_escrow::CycleEscrow<${coinType}>`;
+  return {
+    data: {
+      objectId: ESCROW,
+      version: '1006074990',
+      digest: 'digest',
+      type,
+      content: {
+        dataType: 'moveObject',
+        type,
+        hasPublicTransfer: false,
+        fields: {
+          id: { id: ESCROW },
+          balance: '0',
+          circle_id: CIRCLE,
+          claimed: true,
+          contributors_count: '2',
+          finalized: true,
+          refunded: false,
+          requires_attestation: false,
+          snapshot: {
+            type: `${PKG}::njangi_cycle_escrow::CycleSnapshot`,
+            fields: {
+              cycle_no: '5',
+              recipient: RECIPIENT,
+              members: [MEMBER, RECIPIENT, '0x' + 'df'.repeat(32)],
+              required_contributors: '2',
+              contribution_amount: '100000',
+              due_at_ms: '1792540800000',
+              opened_at_ms: '1788742214815',
+            },
+          },
+        },
+      },
+    },
+  };
+}
 
 function stream(name: string): CircleEventStream {
   const found = CIRCLE_EVENT_STREAMS.find((s) => s.name === name);
@@ -68,7 +126,7 @@ describe('amount formatting helpers', () => {
 });
 
 describe('stream registry', () => {
-  it('registers every ported legacy stream exactly once', () => {
+  it('registers every stream exactly once', () => {
     const names = CIRCLE_EVENT_STREAMS.map((s) => s.name);
     expect(new Set(names).size).toBe(names.length);
     expect(names.sort()).toEqual(
@@ -76,12 +134,11 @@ describe('stream registry', () => {
         'circle_activated',
         'circle_linked',
         'circle_unlinked',
-        'contribution',
-        'contribution_stablecoin',
+        'claim_redeemed',
+        'contribution_recorded',
         'deposit_returned',
         'member_joined',
         'member_removed',
-        'payout_processed',
         'rotation_changed',
         'security_deposit',
       ].sort(),
@@ -89,22 +146,107 @@ describe('stream registry', () => {
   });
 
   it('builds event type tags from the defining package id', () => {
-    expect(stream('contribution').eventType(PKG)).toBe(
-      `${PKG}::njangi_payments::ContributionMade`,
+    expect(stream('contribution_recorded').eventType(PKG)).toBe(
+      `${PKG}::njangi_cycle_escrow::ContributionRecorded`,
+    );
+    expect(stream('claim_redeemed').eventType(PKG)).toBe(
+      `${PKG}::njangi_cycle_escrow::ClaimRedeemed`,
     );
     expect(stream('circle_linked').eventType(PKG)).toBe(
       `${PKG}::whatsapp_integration::CircleLinked`,
     );
     expect(stream('circle_linked').source).toBe('whatsapp');
-    expect(stream('contribution').source).toBe('core');
+    expect(stream('contribution_recorded').source).toBe('core');
+    expect(stream('claim_redeemed').source).toBe('core');
+  });
+
+  it('listens to no event of the retired legacy payment rail', () => {
+    // njangi_payments::contribute / trigger_payout and
+    // njangi_circles::contribute_stablecoin are off (isLegacyRailEnabled);
+    // a stream keyed to their events never fires on a live circle.
+    const types = CIRCLE_EVENT_STREAMS.map((s) => s.eventType(PKG));
+    for (const legacy of [
+      '::njangi_payments::ContributionMade',
+      '::njangi_circles::StablecoinContributionMade',
+      '::njangi_payments::PayoutProcessed',
+    ]) {
+      expect(types.filter((t) => t.endsWith(legacy))).toEqual([]);
+    }
+  });
+
+  it('only the escrow-rail streams ask the cron to read an escrow', () => {
+    const escrowStreams = CIRCLE_EVENT_STREAMS.filter((s) => s.escrowIdOf).map((s) => s.name);
+    expect(escrowStreams.sort()).toEqual(['claim_redeemed', 'contribution_recorded']);
+    for (const name of escrowStreams) {
+      const s = stream(name);
+      expect(s.escrowIdOf!({ escrow_id: ESCROW })).toBe(ESCROW);
+      expect(s.escrowIdOf!({})).toBeNull();
+      expect(s.escrowIdOf!(null)).toBeNull();
+      expect(s.escrowIdOf!({ escrow_id: 42 })).toBeNull();
+    }
   });
 
   it('every parser rejects malformed payloads instead of throwing', () => {
     for (const s of CIRCLE_EVENT_STREAMS) {
-      expect(s.parse(null)).toBeNull();
-      expect(s.parse('string')).toBeNull();
-      expect(s.parse({})).toBeNull();
+      for (const escrow of [undefined, USDC_ESCROW]) {
+        expect(s.parse(null, escrow)).toBeNull();
+        expect(s.parse('string', escrow)).toBeNull();
+        expect(s.parse({}, escrow)).toBeNull();
+      }
     }
+  });
+});
+
+describe('parseEscrowSubject (the escrow-rail object read)', () => {
+  it('reads circle id, coin type and round target off a CycleEscrow<USDC>', () => {
+    expect(parseEscrowSubject(escrowObjectResponse())).toEqual({
+      circleId: CIRCLE,
+      coinType: USDC,
+      requiredContributors: 2,
+    });
+  });
+
+  it('reads the coin type of a SUI-settled escrow', () => {
+    expect(parseEscrowSubject(escrowObjectResponse(SUI))?.coinType).toBe(SUI);
+  });
+
+  it('keeps a nested generic coin type whole', () => {
+    const nested = '0xabc::wrapper::Wrapped<0x2::sui::SUI>';
+    expect(parseEscrowSubject(escrowObjectResponse(nested))?.coinType).toBe(nested);
+  });
+
+  it('falls back to content.type when the object type was not requested', () => {
+    const response = escrowObjectResponse();
+    delete (response.data as { type?: string }).type;
+    expect(parseEscrowSubject(response)?.coinType).toBe(USDC);
+  });
+
+  it('leaves the round target null when the snapshot is unreadable', () => {
+    const response = escrowObjectResponse();
+    delete (response.data.content.fields as { snapshot?: unknown }).snapshot;
+    expect(parseEscrowSubject(response)).toEqual({
+      circleId: CIRCLE,
+      coinType: USDC,
+      requiredContributors: null,
+    });
+  });
+
+  it('returns null when the response holds no CycleEscrow', () => {
+    // The RPC's answer for an id with no object behind it.
+    expect(
+      parseEscrowSubject({ error: { code: 'notExists', object_id: ESCROW } }),
+    ).toBeNull();
+    expect(parseEscrowSubject(null)).toBeNull();
+    expect(parseEscrowSubject({ data: null })).toBeNull();
+
+    const circleObject = escrowObjectResponse();
+    circleObject.data.type = `${PKG}::njangi_circles::Circle`;
+    circleObject.data.content.type = `${PKG}::njangi_circles::Circle`;
+    expect(parseEscrowSubject(circleObject)).toBeNull();
+
+    const noCircle = escrowObjectResponse();
+    delete (noCircle.data.content.fields as { circle_id?: string }).circle_id;
+    expect(parseEscrowSubject(noCircle)).toBeNull();
   });
 });
 
@@ -197,38 +339,114 @@ describe('security_deposit (CustodyDeposited)', () => {
   });
 });
 
-describe('contribution streams', () => {
-  it('formats the SUI contribution with cycle number', () => {
-    const parsed = stream('contribution').parse({
-      circle_id: CIRCLE,
-      member: MEMBER,
-      amount: '1500000000',
-      cycle: '2',
-    });
-    const body = parsed!.buildBody(ctx({ memberName: 'Aminata' }));
-    expect(body).toContain('Cycle 2:');
-    expect(body).toContain('paid 1.5000 SUI');
+describe('contribution_recorded (njangi_cycle_escrow::ContributionRecorded)', () => {
+  const contribution = stream('contribution_recorded');
+  // Round 5 of testnet circle 0xa3fada…: the second of two payers.
+  const EVENT = {
+    escrow_id: ESCROW,
+    cycle_no: '5',
+    contributor: MEMBER,
+    amount: '100000',
+    contributors_so_far: '2',
+    total_contributed: '200000',
+  };
+
+  it('attributes the event to the escrow circle and the contributor', () => {
+    const parsed = contribution.parse(EVENT, USDC_ESCROW);
+    expect(parsed!.circleId).toBe(CIRCLE);
+    expect(parsed!.memberAddress).toBe(MEMBER);
+    expect(parsed!.includeDisabledLink).toBeUndefined();
   });
 
-  it('uses the on-event coin type for stablecoin contributions', () => {
-    const parsed = stream('contribution_stablecoin').parse({
-      circle_id: CIRCLE,
-      member: MEMBER,
-      amount: '2500000',
-      cycle: 1,
-      coin_type: '0xdead::usdc::USDC',
-    });
-    expect(parsed!.buildBody(ctx())).toContain('paid 2.50 USDC');
+  it('reports a USDC contribution with 6 decimals, the round and progress', () => {
+    const body = contribution
+      .parse(EVENT, USDC_ESCROW)!
+      .buildBody(ctx({ memberName: 'Aminata' }));
+    expect(body).toBe(
+      'Contribution received in Bamenda Savers.\n' +
+        `Round 5: Aminata (${shortAddress(MEMBER)}) paid 0.10 USDC. ` +
+        '2 of 2 members have paid in for this round.\n' +
+        `View progress: https://njangionchain.com/circle/${CIRCLE}`,
+    );
   });
 
-  it('rejects contributions whose amount cannot be parsed', () => {
-    expect(
-      stream('contribution').parse({ circle_id: CIRCLE, member: MEMBER, amount: 'x' }),
-    ).toBeNull();
+  it('reports a SUI-settled contribution with 9 decimals', () => {
+    const body = contribution
+      .parse(
+        { ...EVENT, amount: '1500000000', contributors_so_far: '1' },
+        { ...USDC_ESCROW, coinType: SUI, requiredContributors: 4 },
+      )!
+      .buildBody(ctx());
+    expect(body).toContain(`${shortAddress(MEMBER)} paid 1.5000 SUI.`);
+    expect(body).toContain('1 of 4 members have paid in for this round.');
+  });
+
+  it('omits the figure for a coin whose decimals are unknown', () => {
+    const body = contribution
+      .parse(
+        { ...EVENT, amount: '1500000000' },
+        { ...USDC_ESCROW, coinType: '0xbeef::wrapped::WETH' },
+      )!
+      .buildBody(ctx());
+    expect(body).toContain('paid their share.');
+    expect(body).not.toMatch(/\d\.\d+ WETH/);
+  });
+
+  it('drops the progress clause when the round target is unreadable', () => {
+    const body = contribution
+      .parse(EVENT, { ...USDC_ESCROW, requiredContributors: null })!
+      .buildBody(ctx());
+    expect(body).toContain('paid 0.10 USDC.\n');
+    expect(body).not.toContain('members have paid in');
+  });
+
+  it('cannot build without the escrow the cron resolved', () => {
+    expect(contribution.parse(EVENT)).toBeNull();
+    expect(contribution.parse({ ...EVENT, contributor: undefined }, USDC_ESCROW)).toBeNull();
+  });
+
+  it('stays on the freeform text fallback (no approved template)', () => {
+    expect(contribution.parse(EVENT, USDC_ESCROW)!.buildTemplate).toBeUndefined();
   });
 });
 
-describe('deposit_returned / rotation_changed / circle_activated / payout_processed', () => {
+describe('claim_redeemed (njangi_cycle_escrow::ClaimRedeemed)', () => {
+  const payout = stream('claim_redeemed');
+  // Round 5 of testnet circle 0xa3fada…: two 0.10 USDC shares collected.
+  const EVENT = { escrow_id: ESCROW, cycle_no: '5', recipient: RECIPIENT, amount: '200000' };
+
+  it('reports the collection to the recipient display name', () => {
+    const parsed = payout.parse(EVENT, USDC_ESCROW);
+    expect(parsed!.circleId).toBe(CIRCLE);
+    expect(parsed!.memberAddress).toBe(RECIPIENT);
+    expect(parsed!.buildBody(ctx({ memberName: 'Aminata' }))).toBe(
+      'Payout collected in Bamenda Savers.\n' +
+        `Round 5: Aminata (${shortAddress(RECIPIENT)}) received 0.20 USDC.\n` +
+        `View circle: https://njangionchain.com/circle/${CIRCLE}`,
+    );
+  });
+
+  it('formats a SUI payout with 9 decimals', () => {
+    const body = payout
+      .parse({ ...EVENT, amount: '3000000000' }, { ...USDC_ESCROW, coinType: SUI })!
+      .buildBody(ctx());
+    expect(body).toContain(`${shortAddress(RECIPIENT)} received 3.0000 SUI.`);
+  });
+
+  it('omits the figure for a coin whose decimals are unknown', () => {
+    const body = payout
+      .parse(EVENT, { ...USDC_ESCROW, coinType: '0xbeef::wrapped::WETH' })!
+      .buildBody(ctx());
+    expect(body).toContain('received their payout.');
+  });
+
+  it('cannot build without the escrow the cron resolved', () => {
+    expect(payout.parse(EVENT)).toBeNull();
+    expect(payout.parse({ ...EVENT, recipient: '' }, USDC_ESCROW)).toBeNull();
+  });
+});
+
+describe('deposit_returned / rotation_changed / circle_activated', () => {
   it('reports the returned amount using the event coin type', () => {
     const parsed = stream('deposit_returned').parse({
       circle_id: CIRCLE,
@@ -251,19 +469,6 @@ describe('deposit_returned / rotation_changed / circle_activated / payout_proces
     const parsed = stream('circle_activated').parse({ circle_id: CIRCLE });
     expect(parsed!.buildBody(ctx())).toContain('Bamenda Savers is now live');
   });
-
-  it('reports legacy payouts in SUI to the recipient name', () => {
-    const parsed = stream('payout_processed').parse({
-      circle_id: CIRCLE,
-      recipient: MEMBER,
-      amount: '3000000000',
-      cycle: 4,
-    });
-    expect(parsed!.memberAddress).toBe(MEMBER);
-    const body = parsed!.buildBody(ctx({ memberName: 'Aminata' }));
-    expect(body).toContain('Cycle 4:');
-    expect(body).toContain('received 3.0000 SUI');
-  });
 });
 
 describe('buildTemplate (Meta-approved business-initiated sends)', () => {
@@ -279,8 +484,9 @@ describe('buildTemplate (Meta-approved business-initiated sends)', () => {
     name: string,
     parsedJson: unknown,
     overrides: Partial<CircleEventMessageContext> = {},
+    escrow?: EscrowSubject,
   ): WhatsAppTemplatePayload | null {
-    const parsed = stream(name).parse(parsedJson);
+    const parsed = stream(name).parse(parsedJson, escrow);
     if (!parsed) throw new Error(`stream ${name} rejected its fixture payload`);
     if (!parsed.buildTemplate) return null;
     return parsed.buildTemplate(ctx(overrides));
@@ -363,38 +569,62 @@ describe('buildTemplate (Meta-approved business-initiated sends)', () => {
     expect(template('rotation_changed', { circle_id: CIRCLE })).toBeNull();
   });
 
-  it('payout_processed → payout_processed (same template buildYourTurnTemplate reuses)', () => {
+  it('claim_redeemed → payout_processed (same template buildYourTurnTemplate reuses)', () => {
     const t = template(
-      'payout_processed',
-      { circle_id: CIRCLE, recipient: MEMBER, amount: '3000000000', cycle: 4 },
+      'claim_redeemed',
+      { escrow_id: ESCROW, cycle_no: '5', recipient: RECIPIENT, amount: '200000' },
       { memberName: 'Aminata' },
+      USDC_ESCROW,
     )!;
     expect(t.name).toBe('payout_processed');
+    expect(t.language).toBe('en');
     const params = bodyParams(t);
     expect(params).toHaveLength(5);
     expect(params[0]).toBe('Bamenda Savers');
-    expect(params[1]).toBe('4');
+    expect(params[1]).toBe('5');
     expect(params[2]).toBe('Aminata');
-    expect(params[3]).toBe('3.0000 SUI');
+    expect(params[3]).toBe('0.20 USDC');
     expect(params[4]).not.toHaveLength(0); // send-time date with weekday
+    // The button deep-links to the escrow's circle, never the escrow.
     expect(buttonParam(t)).toBe(CIRCLE);
   });
 
+  it('claim_redeemed falls back to the short address without a resolved name', () => {
+    const t = template(
+      'claim_redeemed',
+      { escrow_id: ESCROW, cycle_no: '5', recipient: RECIPIENT, amount: '200000' },
+      {},
+      USDC_ESCROW,
+    )!;
+    expect(bodyParams(t)[2]).toBe(shortAddress(RECIPIENT));
+  });
+
+  it('claim_redeemed keeps the text fallback when the amount or round is missing', () => {
+    // An approved positional layout cannot carry an empty {{2}} or {{4}}.
+    const event = { escrow_id: ESCROW, cycle_no: '5', recipient: RECIPIENT, amount: '200000' };
+    expect(
+      template('claim_redeemed', event, {}, { ...USDC_ESCROW, coinType: '0xbeef::wrapped::WETH' }),
+    ).toBeNull();
+    expect(
+      template('claim_redeemed', { ...event, cycle_no: undefined }, {}, USDC_ESCROW),
+    ).toBeNull();
+  });
+
   it('keeps aggregate-heavy streams on the freeform text fallback (no template)', () => {
-    // deposit_received / recieve_contribution / live_circle need paid counts,
-    // member totals, beneficiary or schedules the serverless cron does not
-    // compute — these streams must NOT define buildTemplate.
-    const textOnly: Array<[string, unknown]> = [
+    // deposit_received / recieve_contribution / live_circle are not on the
+    // notifier's approved reuse list (their layouts need aggregates or
+    // schedules) — these streams must NOT define buildTemplate.
+    const textOnly: Array<[string, unknown, EscrowSubject?]> = [
       ['security_deposit', { circle_id: CIRCLE, member: MEMBER, amount: '5', operation_type: 3 }],
-      ['contribution', { circle_id: CIRCLE, member: MEMBER, amount: '1500000000', cycle: '2' }],
       [
-        'contribution_stablecoin',
-        { circle_id: CIRCLE, member: MEMBER, amount: '2500000', cycle: 1, coin_type: '0xd::usdc::USDC' },
+        'contribution_recorded',
+        { escrow_id: ESCROW, cycle_no: '5', contributor: MEMBER, amount: '100000', contributors_so_far: '1' },
+        USDC_ESCROW,
       ],
       ['circle_activated', { circle_id: CIRCLE }],
     ];
-    for (const [name, payload] of textOnly) {
-      const parsed = stream(name).parse(payload);
+    for (const [name, payload, escrow] of textOnly) {
+      const parsed = stream(name).parse(payload, escrow);
       expect(parsed).not.toBeNull();
       expect(parsed!.buildTemplate).toBeUndefined();
     }
@@ -403,9 +633,23 @@ describe('buildTemplate (Meta-approved business-initiated sends)', () => {
 
 describe('keys', () => {
   it('builds stable dedupe and cursor keys', () => {
-    expect(circleEventDedupeKey('contribution', 'tx1', '0')).toBe('contribution:tx1:0');
-    expect(circleEventCursorKey('contribution', PKG, 'testnet')).toBe(
-      `whatsapp-events:contribution:${PKG}:testnet`,
+    expect(circleEventDedupeKey('contribution_recorded', 'tx1', '0')).toBe(
+      'contribution_recorded:tx1:0',
     );
+    expect(circleEventCursorKey('contribution_recorded', PKG, 'testnet')).toBe(
+      `whatsapp-events:contribution_recorded:${PKG}:testnet`,
+    );
+  });
+
+  it('gives the escrow-rail streams cursor rows the legacy streams never wrote', () => {
+    // The escrow events share the legacy events' DEFINING package (both
+    // exist since v1), so only the stream name keeps a cursor paged over
+    // ContributionMade/PayoutProcessed from being resumed against the
+    // escrow events. The legacy names must never be reused.
+    const retired = ['contribution', 'contribution_stablecoin', 'payout_processed'];
+    const liveKeys = CIRCLE_EVENT_STREAMS.map((s) => circleEventCursorKey(s.name, PKG, 'testnet'));
+    for (const name of retired) {
+      expect(liveKeys).not.toContain(circleEventCursorKey(name, PKG, 'testnet'));
+    }
   });
 });

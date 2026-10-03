@@ -15,11 +15,15 @@
  *  GROUP_LINKS_UNSUPPORTED.
  *
  * GET /api/whatsapp/admin-link-circle?circleId=...&network=...
- *  returns { isLinked, linkType, walrusBlobId, linkNonceHex, recipient? }
- *  `recipient` is decrypted server-side and only returned when
+ *  returns { isLinked, linkType, walrusBlobId, linkNonceHex,
+ *            maskedRecipient?, linkedAt? }
+ *  The linked number is decrypted server-side only when
  *  `includeRecipient=true` AND the caller's zkLogin session resolves to the
- *  on-chain circle admin. Without that proof the response carries zero PII
- *  (the plain link-existence probe stays public for the frontend).
+ *  on-chain circle admin, and even then only a mask leaves the server
+ *  (`maskedRecipient`, e.g. "+237 ••• ••• 1234") plus the date the link was
+ *  made (`linkedAt`). No response carries the full number. Without that
+ *  proof the response carries zero PII (the plain link-existence probe
+ *  stays public for the frontend).
  *
  * Auth: POST and the GET `includeRecipient` path require the `session-id`
  * cookie from /api/zkLogin to map to the circle's on-chain admin — see
@@ -48,7 +52,8 @@ import {
   nonceToHex,
   type WhatsAppPiiPayload,
 } from '../../../lib/walrus-pii';
-import { indexWhatsAppLink } from '../../../lib/whatsapp-link-index';
+import { indexWhatsAppLink, lookupBlobsForCircle } from '../../../lib/whatsapp-link-index';
+import { maskPhoneNumber } from '../../../lib/whatsapp-recipient-mask';
 import { screenAddress, sanctionsErrorBody } from '../../../lib/sanctions';
 import {
   getDriftStatusForAddress,
@@ -174,15 +179,10 @@ async function handleGet(req: NextApiRequest, res: NextApiResponse) {
       const linkNonce = decodeBytesField(nonceRaw);
       const walrusBlobIdString = blobIdToString(walrusBlobId);
 
-      let recipient: string | undefined;
-      if (wantsRecipient) {
-        try {
-          const payload = await fetchAndDecryptPII(walrusBlobIdString);
-          recipient = payload.phone_e164 ?? payload.group_id ?? undefined;
-        } catch (err) {
-          console.warn('[admin-link-circle] Failed to decrypt PII envelope:', err);
-        }
-      }
+      // The admin's own card: a mask and a date, never the number.
+      const recipientDisplay = wantsRecipient
+        ? await readRecipientForDisplay(circleId, walrusBlobIdString)
+        : {};
 
       return res.status(200).json({
         success: true,
@@ -191,7 +191,7 @@ async function handleGet(req: NextApiRequest, res: NextApiResponse) {
           linkType,
           walrusBlobId: walrusBlobIdString,
           linkNonceHex: bytesToHex(linkNonce),
-          recipient,
+          ...recipientDisplay,
         },
       });
     }
@@ -206,6 +206,70 @@ async function handleGet(req: NextApiRequest, res: NextApiResponse) {
       error: error instanceof Error ? error.message : 'Failed to query link status',
     });
   }
+}
+
+/** What the admin's WhatsApp card may show about the linked number. */
+interface RecipientDisplay {
+  /** e.g. "+237 ••• ••• 1234"; see src/lib/whatsapp-recipient-mask.ts. */
+  maskedRecipient?: string;
+  /** When the link was made (ISO 8601): the card's "Linked on" date. */
+  linkedAt?: string;
+}
+
+/**
+ * Opens the circle's link envelope for the admin's card and returns only
+ * what the card may show. The E.164 number never leaves this function: it is
+ * masked here, and neither it nor the payload is logged.
+ *
+ * Blob choice: the circle's rows in the link index (newest first), and the
+ * blob anchored on chain only when the index has no row for the circle or
+ * cannot be read. /api/cron/walrus-renewal re-stores a blob under a NEW id
+ * and records that id only in the index, so the anchored id stops resolving
+ * once its first lease ends. resolveMemberPhone (src/lib/whatsapp-notifier.ts)
+ * follows the same rule.
+ *
+ * `linkedAt` is the payload's `created_at`, stamped when the admin submitted
+ * the number, seconds before they signed the anchor. Renewal re-seals the
+ * same payload, so the date survives it. The on-chain `linked_at` cannot
+ * serve: it holds a Sui epoch number, not a time.
+ */
+async function readRecipientForDisplay(
+  circleId: string,
+  anchoredBlobId: string,
+): Promise<RecipientDisplay> {
+  let indexedBlobIds: string[] = [];
+  try {
+    indexedBlobIds = await lookupBlobsForCircle(circleId);
+  } catch (err) {
+    console.warn('[admin-link-circle] Link index lookup failed; trying the anchored blob', {
+      circleId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  const blobIds = (indexedBlobIds.length > 0 ? indexedBlobIds : [anchoredBlobId]).filter(Boolean);
+  for (const blobId of blobIds) {
+    let payload: WhatsAppPiiPayload;
+    try {
+      payload = await fetchAndDecryptPII(blobId);
+    } catch (err) {
+      console.warn('[admin-link-circle] Could not open a link envelope for display', {
+        circleId,
+        blobId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      continue;
+    }
+
+    const createdAtMs = Date.parse(payload.created_at);
+    return {
+      // Group links carry no phone_e164 and get no mask.
+      maskedRecipient: maskPhoneNumber(payload.phone_e164) ?? undefined,
+      linkedAt: Number.isFinite(createdAtMs) ? new Date(createdAtMs).toISOString() : undefined,
+    };
+  }
+
+  return {};
 }
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
