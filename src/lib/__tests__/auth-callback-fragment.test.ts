@@ -1,3 +1,5 @@
+import { readFileSync } from 'fs';
+import { join } from 'path';
 import {
   AUTH_CALLBACK_FRAGMENT_KEY,
   AUTH_CALLBACK_FRAGMENT_SCRIPT,
@@ -112,5 +114,68 @@ describe('clearAuthCallbackFragment', () => {
 
     expect(win[AUTH_CALLBACK_FRAGMENT_KEY]).toBeUndefined();
     expect(readAuthCallbackFragment(win as unknown as Window)).toBe('');
+  });
+});
+
+/**
+ * The arguments of every console.* call in `source`, with comments dropped
+ * and plain '…' / "…" string literals blanked, so message text ("ID token
+ * not found in URL hash") does not count. Template literals stay whole:
+ * `${window.location.href}` must still be caught.
+ */
+function consoleCallArguments(source: string): string[] {
+  const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+  const calls: string[] = [];
+  const start = /console\.(?:log|info|warn|error|debug|trace)\s*\(/g;
+  let match: RegExpExecArray | null;
+  while ((match = start.exec(code))) {
+    let i = match.index + match[0].length;
+    let depth = 1;
+    let args = '';
+    while (i < code.length && depth > 0) {
+      const c = code[i];
+      if (c === '"' || c === "'" || c === '`') {
+        const begin = i;
+        i += 1;
+        while (i < code.length && code[i] !== c) i += code[i] === '\\' ? 2 : 1;
+        i += 1;
+        args += c === '`' ? code.slice(begin, i) : '""';
+        continue;
+      }
+      if (c === '(') depth += 1;
+      if (c === ')') depth -= 1;
+      if (depth > 0) args += c;
+      i += 1;
+    }
+    calls.push(args);
+  }
+  return calls;
+}
+
+describe('the callback page never logs the URL, the fragment or the token', () => {
+  // It used to log window.location.href and .hash on every sign-in, which
+  // put the id_token (a JWT carrying the user's email and sub) in the
+  // browser console and in console breadcrumbs.
+  const source = readFileSync(join(process.cwd(), 'src/pages/auth/callback.tsx'), 'utf8');
+  const calls = consoleCallArguments(source);
+  const FORBIDDEN =
+    /\b(?:location|href|hash|hashParams|search|searchParams|idToken|id_token|fullUrl|tokenMatch|userDataParam|appleUserData)\b/;
+
+  it('finds the page console calls (guards against a vacuous scan)', () => {
+    expect(calls.length).toBeGreaterThan(0);
+  });
+
+  it('passes none of them a URL part or the token', () => {
+    expect(calls.filter((args) => FORBIDDEN.test(args))).toEqual([]);
+  });
+
+  it('catches the shapes that leaked before', () => {
+    const leaky = [
+      "console.log('URL information:', { fullUrl: window.location.href, hash: window.location.hash });",
+      'console.log(`landed on ${window.location.href}`);',
+      "console.log('token', idToken);",
+    ].join('\n');
+
+    expect(consoleCallArguments(leaky).filter((args) => FORBIDDEN.test(args))).toHaveLength(3);
   });
 });

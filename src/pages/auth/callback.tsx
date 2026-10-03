@@ -74,10 +74,11 @@ export default function AuthCallback() {
       try {
         console.log('Processing authentication callback');
         
-        // Try to get the ID token from different places
+        // Try to get the ID token from different places. Never log the URL,
+        // the fragment or the query: they carry the id_token, a JWT with the
+        // user's email and sub.
         let idToken = null;
-        let appleUserData = null;
-        
+
         // 1. Try the URL fragment. _document parks it off the address bar
         //    before Next boots (see auth-callback-fragment.ts); this reads
         //    the stash and falls back to the live hash.
@@ -87,18 +88,9 @@ export default function AuthCallback() {
         const hashError = hashParams.get('error');
         const hashErrorDescription = hashParams.get('error_description');
         const hashCode = hashParams.get('code');
-        
-        // Extract Apple user data if available
-        const userDataParam = hashParams.get('user');
-        if (userDataParam) {
-          try {
-            appleUserData = JSON.parse(decodeURIComponent(userDataParam));
-            console.log('Apple user profile data found:', appleUserData);
-          } catch (e) {
-            console.warn('Failed to parse Apple user data:', e);
-          }
-        }
-        
+        // Apple's first sign-in also forwards a `user` payload (name, email)
+        // in the fragment. Nothing here needs it, so it is not read.
+
         // 2. If not in hash, try search params (query string)
         if (!idToken) {
           console.log('ID token not found in URL hash, checking search params');
@@ -138,15 +130,6 @@ export default function AuthCallback() {
           }
         }
         
-        // Shape only — never the URL, fragment or query themselves, which
-        // carry the id_token (and with it the user's email and sub).
-        console.log('URL information:', {
-          pathname: window.location.pathname,
-          hashLength: hash.length,
-          searchLength: window.location.search.length,
-          idTokenFound: !!idToken
-        });
-
         if (!idToken) {
           setIsError(true);
           setStatus('Authentication failed');
