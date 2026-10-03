@@ -55,7 +55,17 @@ async function ensureTable(): Promise<void> {
       -- renewal cron treats them as "expiry unknown, renew once to learn".
       ALTER TABLE whatsapp_phone_index
         ADD COLUMN IF NOT EXISTS walrus_end_epoch BIGINT;
-    `).then(() => undefined);
+    `)
+      .then(() => undefined)
+      .catch((err) => {
+        // Unlatch so the next call retries the setup. A cached rejection
+        // would fail every later read in this (reused) instance without
+        // reaching Postgres, so a caller that halts and retries on an
+        // index error (resolveCirclePhone) would keep failing until the
+        // instance is recycled.
+        setupPromise = null;
+        throw err;
+      });
   }
   return setupPromise;
 }
