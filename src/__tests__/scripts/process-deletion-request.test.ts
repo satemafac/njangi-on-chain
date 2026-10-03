@@ -62,9 +62,19 @@ interface IndexRow {
   circle_id: string;
 }
 
+interface KeyRow {
+  kid: string;
+  phone_hmac: string;
+  circle_id: string;
+}
+
 interface FakeDb {
   request: RequestRow;
   index: IndexRow[];
+  /** whatsapp_pii_keys rows; absent when the database has no key table yet. */
+  keys?: KeyRow[];
+  /** Makes the first query starting with this text fail. */
+  failOn?: string;
   queries?: Array<{ sql: string; params: unknown[] }>;
 }
 
@@ -312,5 +322,94 @@ describe('scripts/process-deletion-request.mjs', () => {
     expect(code).toBe(0);
     expect(stderr).toContain('no index row matches this number');
     expect(db.index).toHaveLength(1);
+  });
+});
+
+// Per-link data keys (src/lib/whatsapp-pii-keys.ts): every link made since
+// has its own key row, carrying the same phone_hmac as its index row. Deleting
+// a number's key rows is what makes every copy of its envelopes unreadable.
+describe('scripts/process-deletion-request.mjs and the link data keys', () => {
+  it('deletes the number\'s data keys with its index rows, in one transaction', async () => {
+    const linked = await indexedHash(LINKED);
+    const other = await indexedHash(OTHER);
+
+    const { code, stdout, db } = runScript(['--request-id', '7', '--phone', '+44 7700 900123'], {
+      request: request(),
+      index: [{ phone_hmac: linked, circle_id: '0xc1' }],
+      keys: [
+        { kid: 'k1', phone_hmac: linked, circle_id: '0xc1' },
+        // A link prepared but never confirmed: no index row, still erased.
+        { kid: 'k2', phone_hmac: linked, circle_id: '0xc2' },
+        { kid: 'k3', phone_hmac: other, circle_id: '0xc3' },
+      ],
+    });
+
+    expect(code).toBe(0);
+    expect(db.keys).toEqual([{ kid: 'k3', phone_hmac: other, circle_id: '0xc3' }]);
+    expect(db.index).toEqual([]);
+    expect(db.request.status).toBe('completed');
+    expect(stdout).toContain('whatsapp_pii_keys rows (link data keys) matching the phone: 2');
+    expect(stdout).toContain('whatsapp_pii_keys rows for phone: 2 row(s)');
+    const sql = writes(db).map((q) => q.sql);
+    expect(sql.slice(0, 3)).toEqual([
+      'DELETE FROM whatsapp_pii_keys WHERE phone_hmac = $1',
+      'DELETE FROM whatsapp_phone_index WHERE phone_hmac = $1',
+      'UPDATE deletion_requests SET phone_hmac = $1, updated_at = NOW() WHERE id = $2',
+    ]);
+    const all = db.queries.map((q) => q.sql);
+    expect(all.indexOf('BEGIN')).toBeLessThan(all.indexOf('DELETE FROM whatsapp_pii_keys WHERE phone_hmac = $1'));
+    expect(all.indexOf('COMMIT')).toBeGreaterThan(
+      all.indexOf('UPDATE deletion_requests SET phone_hmac = $1, updated_at = NOW() WHERE id = $2'),
+    );
+  });
+
+  it('leaves the keys, the index rows and the request as they were when a step fails', async () => {
+    const linked = await indexedHash(LINKED);
+    const seed: FakeDb = {
+      request: request(),
+      index: [{ phone_hmac: linked, circle_id: '0xc1' }],
+      keys: [{ kid: 'k1', phone_hmac: linked, circle_id: '0xc1' }],
+      failOn: 'DELETE FROM whatsapp_phone_index',
+    };
+
+    const { code, stderr, db } = runScript(['--request-id', '7', '--phone', LINKED], seed);
+
+    expect(code).toBe(1);
+    expect(stderr).toContain('injected failure');
+    expect(db.queries.map((q) => q.sql)).toContain('ROLLBACK');
+    expect(db.keys).toEqual(seed.keys);
+    expect(db.index).toEqual(seed.index);
+    expect(db.request).toEqual(seed.request);
+  });
+
+  it('still erases the index rows when the database has no key table yet', async () => {
+    const linked = await indexedHash(LINKED);
+
+    const { code, stdout, db } = runScript(['--request-id', '7', '--phone', LINKED], {
+      request: request(),
+      index: [{ phone_hmac: linked, circle_id: '0xc1' }],
+    });
+
+    expect(code).toBe(0);
+    expect(stdout).toContain('no whatsapp_pii_keys table yet');
+    expect(db.index).toEqual([]);
+    expect(db.queries.map((q) => q.sql)).not.toContain('DELETE FROM whatsapp_pii_keys WHERE phone_hmac = $1');
+  });
+
+  it('counts the matching keys on a dry run and writes nothing', async () => {
+    const linked = await indexedHash(LINKED);
+    const seed: FakeDb = {
+      request: request(),
+      index: [],
+      keys: [{ kid: 'k1', phone_hmac: linked, circle_id: '0xc1' }],
+    };
+
+    const { code, stdout, db } = runScript(['--request-id', '7', '--phone', LINKED, '--dry-run'], seed);
+
+    expect(code).toBe(0);
+    expect(stdout).toContain('whatsapp_pii_keys rows (link data keys) matching the phone: 1');
+    expect(writes(db)).toEqual([]);
+    expect(db.queries.map((q) => q.sql)).not.toContain('BEGIN');
+    expect(db.keys).toEqual(seed.keys);
   });
 });

@@ -622,3 +622,34 @@ export function circleEventCursorKey(
 ): string {
   return `whatsapp-events:${streamName}:${definingPackageId}:${network}`;
 }
+
+/** The link a CircleUnlinked event disabled: its circle and its anchor nonce. */
+export interface UnlinkedLinkRef {
+  circleId: string;
+  /** Lowercase hex of the 32-byte `link_nonce` the link was anchored with. */
+  linkNonceHex: string;
+}
+
+/**
+ * Reads the circle and link nonce out of a CircleUnlinked event, or null
+ * when either is missing. The nonce names the link's data key row
+ * (src/lib/whatsapp-pii-keys.ts), which the cron deletes once the unlink
+ * confirmation is settled. JSON-RPC renders a `vector<u8>` as an array of
+ * byte values; a hex or base64 string is accepted too.
+ */
+export function parseUnlinkedLinkRef(parsedJson: unknown): UnlinkedLinkRef | null {
+  const raw = asRecord(parsedJson);
+  const circleId = raw && stringField(raw, 'circle_id');
+  if (!raw || !circleId) return null;
+  const nonce = raw.link_nonce;
+  let bytes: Buffer | null = null;
+  if (Array.isArray(nonce)) {
+    const valid = nonce.every((b) => Number.isInteger(b) && b >= 0 && b <= 255);
+    bytes = valid ? Buffer.from(nonce as number[]) : null;
+  } else if (typeof nonce === 'string') {
+    const hex = nonce.replace(/^0x/, '');
+    bytes = /^(?:[0-9a-fA-F]{2})+$/.test(hex) ? Buffer.from(hex, 'hex') : Buffer.from(nonce, 'base64');
+  }
+  if (!bytes || bytes.length === 0) return null;
+  return { circleId, linkNonceHex: bytes.toString('hex') };
+}

@@ -51,10 +51,12 @@ import {
   circleEventCursorKey,
   circleEventDedupeKey,
   parseEscrowSubject,
+  parseUnlinkedLinkRef,
   type CircleEventStream,
   type CircleEventMessageContext,
   type EscrowSubject,
 } from '../../../lib/whatsapp-bot/circle-events';
+import { deleteUnlinkedLinkKey } from '../../../lib/whatsapp-pii-keys';
 import {
   resolveCircleName,
   resolveCirclePhone,
@@ -314,7 +316,12 @@ async function drainStream(
           hasNextPage: page.hasNextPage,
         };
       },
-      notify: (event) => notifyCircleEvent(stream, event, ctx),
+      notify: async (event) => {
+        const outcome = await notifyCircleEvent(stream, event, ctx);
+        return stream.name === 'circle_unlinked'
+          ? forgetUnlinkedLinkKey(event, outcome, ctx)
+          : outcome;
+      },
       persistCursor: (cursor: EventCursor) =>
         saveCycleFinalizedCursor(cursorKey, cursor, leaseToken),
     });
@@ -467,6 +474,43 @@ async function notifyCircleEvent(
   }
   // 'duplicate' (crash-retry window) or 'no_link'.
   return 'skipped';
+}
+
+/**
+ * After a CircleUnlinked event is settled (its "Circle disconnected"
+ * message sent, failed for good or skipped, a stale event included),
+ * deletes the data key of the link it disabled, found by the event's link
+ * nonce (src/lib/whatsapp-pii-keys.ts). From then on no copy of that link's
+ * blob opens. The key was kept until now only because that message needs
+ * the number. A halted event keeps its key for the retry, and a failed
+ * delete halts the stream, so the next run deletes it (its send is then a
+ * duplicate and skipped). Links made before per-link keys have no key row.
+ */
+async function forgetUnlinkedLinkKey(
+  event: { parsedJson: unknown },
+  outcome: NotifyOutcome,
+  ctx: DrainStreamContext,
+): Promise<NotifyOutcome> {
+  if (outcome === 'halt') return outcome;
+  const link = parseUnlinkedLinkRef(event.parsedJson);
+  if (!link) return outcome;
+  try {
+    const deleted = await deleteUnlinkedLinkKey(link.circleId, link.linkNonceHex);
+    if (deleted > 0) {
+      appLogger.info('[cron/whatsapp-circle-events] deleted the data key of an unlinked link', {
+        circleId: link.circleId,
+      });
+    }
+  } catch (err) {
+    appLogger.error('[cron/whatsapp-circle-events] could not delete an unlinked link\'s data key; halting', {
+      circleId: link.circleId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return 'halt';
+  }
+  // Later events this run must not reuse a number resolved before the unlink.
+  ctx.phoneCache.delete(link.circleId);
+  return outcome;
 }
 
 /**

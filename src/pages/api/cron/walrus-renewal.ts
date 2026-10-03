@@ -14,11 +14,15 @@
  * active link from the authoritative Postgres index, and re-store any blob
  * within RENEWAL_THRESHOLD_EPOCHS (default 2) of its recorded end epoch,
  * the leases closest to running out first. Re-storing
- * decrypts with the current master key (or WALRUS_PII_PREVIOUS_MASTER_KEY
- * while a key rotation is in progress) and re-encrypts under the current key
- * before upload, so renewals are what move blobs onto a new key. The renewed
+ * re-seals a v2 envelope under its link's own data key and a legacy v1
+ * envelope under the current master key (restorePiiBlob). The renewed
  * (blob id, end epoch) is written back to the index row via a compare-and-
- * set + audit row in one transaction.
+ * set + audit row in one transaction. A link whose data key was deleted
+ * (erased or unlinked) is not renewed, and its index row is dropped.
+ *
+ * Each run also deletes the data keys of links unlinked more than
+ * UNLINKED_KEY_GRACE_HOURS ago that the whatsapp-circle-events cron did not
+ * delete after the unlink confirmation (src/lib/whatsapp-pii-keys.ts).
  *
  * The on-chain anchor keeps the OLD blob id — the index is authoritative
  * for webhook routing and outbound sends (each resolves the index FIRST,
@@ -39,8 +43,9 @@
  * Failures: an unreadable Walrus epoch fails the run (500) before anything
  * is listed or renewed. A run that renews a blob whose new lease ends within
  * the threshold also answers 500, after its renewals: the publisher and the
- * epoch source disagree, so those rows would be re-stored every day. No new
- * renewal starts after RUN_TIME_BUDGET_MS; what is left counts as `deferred`.
+ * epoch source disagree, so those rows would be re-stored every day. A failed
+ * unlinked-key sweep answers 500 too, after the renewals. No new renewal
+ * starts after RUN_TIME_BUDGET_MS; what is left counts as `deferred`.
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
@@ -52,9 +57,11 @@ import {
 } from '../../../lib/cycle-finalized-cron';
 import {
   applyWalrusRenewal,
+  deleteIndexRowForErasedLink,
   listActiveLinksForRenewal,
 } from '../../../lib/whatsapp-link-index';
 import { restorePiiBlob } from '../../../lib/walrus-pii';
+import { sweepUnlinkedLinkKeys } from '../../../lib/whatsapp-pii-keys';
 import { readCurrentWalrusEpoch } from '../../../lib/walrus-epoch';
 import {
   DEFAULT_RENEWAL_THRESHOLD_EPOCHS,
@@ -126,6 +133,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         rpcUrl: getNetworkConfig(network).rpcUrl,
       });
 
+      // Unlinked links' data keys past their grace period. Needs nothing
+      // from Walrus, so it runs first; a failure is reported below and never
+      // holds up the renewals.
+      let unlinkedKeysDeleted: number | null = null;
+      let sweepError: string | null = null;
+      try {
+        unlinkedKeysDeleted = await sweepUnlinkedLinkKeys();
+      } catch (err) {
+        sweepError = err instanceof Error ? err.message : String(err);
+        appLogger.error('[cron/walrus-renewal] could not delete the data keys of unlinked links', {
+          error: sweepError,
+        });
+      }
+
       const result = await runWalrusRenewal({
         thresholdEpochs,
         deadlineMs: startedAt + RUN_TIME_BUDGET_MS,
@@ -144,9 +165,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           return { newBlobId, newEndEpoch };
         },
         applyRenewal: applyWalrusRenewal,
+        dropErasedLink: deleteIndexRowForErasedLink,
       });
 
-      const summary = { network, thresholdEpochs, ...result };
+      const summary = { network, thresholdEpochs, ...result, unlinkedKeysDeleted };
       if (result.leaseMismatches > 0) {
         // The renewals stand, so the links stay alive, but a 200 would hide
         // broken epoch math the way daily "renewed == considered" summaries
@@ -157,6 +179,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           'Either the publisher stores on another Walrus deployment than the System object ' +
           'this cron reads, or WALRUS_STORAGE_EPOCHS is not above RENEWAL_THRESHOLD_EPOCHS.';
         appLogger.error(`[cron/walrus-renewal] ${error}`, summary);
+        return res.status(500).json({ error, ...summary });
+      }
+      if (sweepError) {
+        // The renewals stand; the unlinked keys are retried tomorrow.
+        const error = `Could not delete the data keys of unlinked WhatsApp links: ${sweepError}`;
         return res.status(500).json({ error, ...summary });
       }
       appLogger.info('[cron/walrus-renewal] run complete', summary);

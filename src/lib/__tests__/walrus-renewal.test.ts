@@ -20,6 +20,7 @@ import {
   type RenewalDeps,
   type RestoreResult,
 } from '../walrus-renewal';
+import { PiiKeyErasedError, PiiKeyReadError } from '../pii-key-errors';
 
 function link(overrides: Partial<RenewableLink> = {}): RenewableLink {
   return {
@@ -482,5 +483,91 @@ describe('runWalrusRenewal lease mismatches', () => {
     const result = await runWalrusRenewal(h.deps);
 
     expect(result).toMatchObject({ renewed: 2, leaseMismatches: 0 });
+  });
+});
+
+describe('runWalrusRenewal and erased links (per-link data keys)', () => {
+  const erasedKid = 'ef'.repeat(16);
+
+  it('counts a link whose data key was deleted as erased, renews nothing for it, and drops its row', async () => {
+    const links = [
+      link({ id: 1, walrusBlobId: 'erased', walrusEndEpoch: 100 }),
+      link({ id: 2, walrusBlobId: 'live', walrusEndEpoch: 100 }),
+    ];
+    const dropped: Array<{ id: number; expectedBlobId: string }> = [];
+    const h = harness(links, 100, {
+      thresholdEpochs: 2,
+      restore: async (blobId) => {
+        if (blobId === 'erased') throw new PiiKeyErasedError(erasedKid);
+        return { newBlobId: `${blobId}-renewed`, newEndEpoch: 150 };
+      },
+    });
+    h.deps.dropErasedLink = async (params) => {
+      dropped.push(params);
+      return true;
+    };
+
+    const result = await runWalrusRenewal(h.deps);
+
+    expect(result).toMatchObject({ renewed: 1, erased: 1, failed: 0 });
+    expect(h.applyCalls.map((c) => c.expectedBlobId)).toEqual(['live']);
+    expect(dropped).toEqual([{ id: 1, expectedBlobId: 'erased' }]);
+  });
+
+  it('still counts a failed key-store read as a failure, never as erased', async () => {
+    const links = [link({ id: 1, walrusBlobId: 'blob', walrusEndEpoch: 100 })];
+    const drop = jest.fn(async () => true);
+    const h = harness(links, 100, {
+      thresholdEpochs: 2,
+      restore: async () => {
+        throw new PiiKeyReadError('Could not read the data key: Connection terminated unexpectedly');
+      },
+    });
+    h.deps.dropErasedLink = drop;
+
+    const result = await runWalrusRenewal(h.deps);
+
+    expect(result).toMatchObject({ erased: 0, failed: 1 });
+    expect(drop).not.toHaveBeenCalled();
+  });
+
+  it('keeps going when dropping an erased row fails', async () => {
+    const links = [
+      link({ id: 1, walrusBlobId: 'erased', walrusEndEpoch: 100 }),
+      link({ id: 2, walrusBlobId: 'live', walrusEndEpoch: 100 }),
+    ];
+    const h = harness(links, 100, {
+      thresholdEpochs: 2,
+      restore: async (blobId) => {
+        if (blobId === 'erased') throw new PiiKeyErasedError(erasedKid);
+        return { newBlobId: `${blobId}-renewed`, newEndEpoch: 150 };
+      },
+    });
+    h.deps.dropErasedLink = async () => {
+      throw new Error('db down');
+    };
+
+    const result = await runWalrusRenewal(h.deps);
+
+    expect(result).toMatchObject({ renewed: 1, erased: 1, failed: 0 });
+  });
+
+  it('counts erased links against the per-run cap', async () => {
+    const links = [
+      link({ id: 1, walrusBlobId: 'erased', walrusEndEpoch: 100 }),
+      link({ id: 2, walrusBlobId: 'live', walrusEndEpoch: 100 }),
+    ];
+    const h = harness(links, 100, {
+      thresholdEpochs: 2,
+      maxRenewalsPerRun: 1,
+      restore: async (blobId) => {
+        if (blobId === 'erased') throw new PiiKeyErasedError(erasedKid);
+        return { newBlobId: `${blobId}-renewed`, newEndEpoch: 150 };
+      },
+    });
+
+    const result = await runWalrusRenewal(h.deps);
+
+    expect(result).toMatchObject({ erased: 1, renewed: 0, capped: true, deferred: 1 });
   });
 });

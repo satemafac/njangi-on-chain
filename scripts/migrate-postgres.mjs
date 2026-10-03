@@ -10,6 +10,7 @@
 //   4. mainnet_signups                (src/services/mainnet-signup-database.ts)
 //   5. whatsapp_phone_index           (src/lib/whatsapp-link-index.ts)
 //   5b. walrus_renewal_audit          (src/lib/whatsapp-link-index.ts)
+//   5c. whatsapp_pii_keys             (src/lib/whatsapp-pii-keys.ts)
 //   6. compliance_attestation_queue   (src/lib/attestation-queue.ts)
 //   7. whatsapp_notifications         (src/lib/whatsapp-notifier.ts)
 //   8. cycle_finalized_cursor         (src/lib/cycle-finalized-cron.ts)
@@ -178,6 +179,34 @@ const STATEMENTS = [
           );
           CREATE INDEX IF NOT EXISTS walrus_renewal_audit_circle_idx
             ON walrus_renewal_audit (circle_id, renewed_at DESC);`,
+  },
+  {
+    // Per-link data keys for WhatsApp PII envelopes (src/lib/whatsapp-pii-keys.ts).
+    // One row per link, keyed by the key id its envelope carries: the link's
+    // AES-256 data key, wrapped under WALRUS_PII_MASTER_KEY (kek_id names
+    // which key wrapped it). A row is the only copy of its key, so deleting it
+    // makes every copy of that link's envelope unreadable. Unlink deletes the
+    // circle's rows (unlinked_at marks them until the unlink confirmation is
+    // sent) and erasure deletes a number's rows by phone_hmac, the same HMAC
+    // as whatsapp_phone_index. link_nonce is the nonce the on-chain anchor
+    // carries; the CircleUnlinked event names the link by it.
+    name: 'whatsapp_pii_keys',
+    sql: `CREATE TABLE IF NOT EXISTS whatsapp_pii_keys (
+            kid TEXT PRIMARY KEY,
+            wrapped_dek TEXT NOT NULL,
+            kek_id TEXT NOT NULL,
+            phone_hmac TEXT NOT NULL,
+            circle_id TEXT NOT NULL,
+            link_nonce TEXT NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            unlinked_at TIMESTAMPTZ
+          );
+          CREATE INDEX IF NOT EXISTS whatsapp_pii_keys_phone_hmac_idx
+            ON whatsapp_pii_keys (phone_hmac);
+          CREATE INDEX IF NOT EXISTS whatsapp_pii_keys_circle_idx
+            ON whatsapp_pii_keys (circle_id);
+          CREATE INDEX IF NOT EXISTS whatsapp_pii_keys_unlinked_idx
+            ON whatsapp_pii_keys (unlinked_at) WHERE unlinked_at IS NOT NULL;`,
   },
   {
     name: 'compliance_attestation_queue',
@@ -404,10 +433,10 @@ const STATEMENTS = [
   {
     // GDPR deletion pipeline: the executor (scripts/
     // process-deletion-request.mjs) records the HMAC of the requester's
-    // WhatsApp number on the request row, which (a) documents what was
-    // erased and (b) lets the walrus-renewal query exclude any index row
-    // matching a completed deletion — so a stale re-index can never
-    // resurrect a deleted user's blob renewals.
+    // WhatsApp number on the request row, the record of which number the
+    // request erased. (It also used to keep that number's index rows out of
+    // Walrus renewal. Per-link data keys made that unnecessary: see
+    // listActiveLinksForRenewal in src/lib/whatsapp-link-index.ts.)
     name: 'deletion_requests_phone_hmac',
     sql: `ALTER TABLE deletion_requests
             ADD COLUMN IF NOT EXISTS phone_hmac TEXT;

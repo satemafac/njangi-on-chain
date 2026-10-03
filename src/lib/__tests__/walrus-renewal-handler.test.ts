@@ -21,9 +21,13 @@ jest.mock('../cycle-finalized-cron', () => ({
 jest.mock('../whatsapp-link-index', () => ({
   listActiveLinksForRenewal: jest.fn(async () => []),
   applyWalrusRenewal: jest.fn(async () => true),
+  deleteIndexRowForErasedLink: jest.fn(async () => true),
 }));
 jest.mock('../walrus-pii', () => ({
   restorePiiBlob: jest.fn(),
+}));
+jest.mock('../whatsapp-pii-keys', () => ({
+  sweepUnlinkedLinkKeys: jest.fn(async () => 0),
 }));
 jest.mock('../../services/network-config', () => ({
   getCurrentNetwork: jest.fn(() => 'testnet'),
@@ -42,15 +46,20 @@ import {
 import {
   listActiveLinksForRenewal,
   applyWalrusRenewal,
+  deleteIndexRowForErasedLink,
 } from '../whatsapp-link-index';
 import { restorePiiBlob } from '../walrus-pii';
+import { sweepUnlinkedLinkKeys } from '../whatsapp-pii-keys';
+import { PiiKeyErasedError } from '../pii-key-errors';
 import { getPooledSuiClient } from '../../services/sui-rpc-failover';
 
 const acquireMock = acquireCycleFinalizedLease as jest.Mock;
 const releaseMock = releaseCycleFinalizedLease as jest.Mock;
 const listMock = listActiveLinksForRenewal as jest.Mock;
 const applyMock = applyWalrusRenewal as jest.Mock;
+const dropMock = deleteIndexRowForErasedLink as jest.Mock;
 const restoreMock = restorePiiBlob as jest.Mock;
+const sweepMock = sweepUnlinkedLinkKeys as jest.Mock;
 const clientMock = getPooledSuiClient as jest.Mock;
 
 const TESTNET_WALRUS_SYSTEM = '0x6c2547cbbc38025cf3adac45f63cb0a8d12ecf777cdc75a4971612bf97fdf6af';
@@ -147,7 +156,9 @@ beforeEach(() => {
   releaseMock.mockReset().mockResolvedValue(undefined);
   listMock.mockReset().mockResolvedValue([]);
   applyMock.mockReset().mockResolvedValue(true);
+  dropMock.mockReset().mockResolvedValue(true);
   restoreMock.mockReset();
+  sweepMock.mockReset().mockResolvedValue(0);
   clientMock.mockReset().mockReturnValue(chainClient(100));
 });
 
@@ -364,6 +375,70 @@ it('starts no renewal once 45s of the invocation have passed', async () => {
   expect(res.body).toMatchObject({ renewed: 1, capped: true, deferred: 1 });
   expect(restoreMock).toHaveBeenCalledTimes(1);
   expect(releaseMock).toHaveBeenCalledWith('walrus-renewal:testnet', 'lease-token');
+});
+
+describe('per-link data keys', () => {
+  it('renews nothing for a link whose data key was deleted, and drops its index row', async () => {
+    clientMock.mockReturnValue(chainClient(538));
+    listMock.mockResolvedValue([
+      { id: 4, circleId: '0xa', walrusBlobId: 'erased-blob', walrusEndEpoch: 539 },
+      { id: 5, circleId: '0xb', walrusBlobId: 'live-blob', walrusEndEpoch: 539 },
+    ]);
+    restoreMock.mockImplementation(async (blobId: string) => {
+      if (blobId === 'erased-blob') throw new PiiKeyErasedError('ab'.repeat(16));
+      return { newBlobId: `${blobId}-renewed`, newEndEpoch: 543 };
+    });
+    const res = makeRes();
+
+    await handler(makeReq(), res as unknown as NextApiResponse);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toMatchObject({ renewed: 1, erased: 1, failed: 0 });
+    expect(dropMock).toHaveBeenCalledWith({ id: 4, expectedBlobId: 'erased-blob' });
+    expect(applyMock).toHaveBeenCalledTimes(1);
+    expect(applyMock).toHaveBeenCalledWith(expect.objectContaining({ id: 5 }));
+  });
+
+  it('deletes the keys of links unlinked past the grace period on every run', async () => {
+    sweepMock.mockResolvedValue(3);
+    const res = makeRes();
+
+    await handler(makeReq(), res as unknown as NextApiResponse);
+
+    expect(res.statusCode).toBe(200);
+    expect(sweepMock).toHaveBeenCalledTimes(1);
+    expect(res.body).toMatchObject({ unlinkedKeysDeleted: 3 });
+  });
+
+  it('still renews when the unlinked-key sweep fails, then answers 500', async () => {
+    sweepMock.mockRejectedValue(new Error('Connection terminated unexpectedly'));
+    listMock.mockResolvedValue([
+      { id: 1, circleId: '0xc', walrusBlobId: 'blob-old', walrusEndEpoch: 100 },
+    ]);
+    restoreMock.mockResolvedValue({ newBlobId: 'blob-new', newEndEpoch: 142 });
+    const res = makeRes();
+
+    await handler(makeReq(), res as unknown as NextApiResponse);
+
+    expect(applyMock).toHaveBeenCalledTimes(1);
+    expect(res.statusCode).toBe(500);
+    expect(res.body).toMatchObject({
+      renewed: 1,
+      unlinkedKeysDeleted: null,
+      error: expect.stringContaining('Could not delete the data keys of unlinked WhatsApp links'),
+    });
+    expect(releaseMock).toHaveBeenCalledWith('walrus-renewal:testnet', 'lease-token');
+  });
+
+  it('sweeps unlinked keys even when the Walrus epoch is unreadable', async () => {
+    clientMock.mockReturnValue(chainClient(new Error('fetch failed')));
+    const res = makeRes();
+
+    await handler(makeReq(), res as unknown as NextApiResponse);
+
+    expect(res.statusCode).toBe(500);
+    expect(sweepMock).toHaveBeenCalledTimes(1);
+  });
 });
 
 it('fails closed with 500 when Postgres is not configured', async () => {
