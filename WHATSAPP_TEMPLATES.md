@@ -1,8 +1,8 @@
 # WhatsApp Message Templates Guide
 
 ## Account Info
-- **WhatsApp Business Account ID**: 1907226853259565
-- **Phone Number**: 15557862168
+- **WhatsApp Business Account ID**: `<WHATSAPP_BUSINESS_ACCOUNT_ID>` (from WhatsApp Manager)
+- **Phone Number**: `<business phone number>` (from WhatsApp Manager)
 - **Display Name**: Njangi On-Chain (In Review)
 
 ## Template Creation Instructions
@@ -12,9 +12,15 @@ https://business.facebook.com/wa/manage/message-templates/
 
 **Settings for ALL templates:**
 - Category: `UTILITY`
-- Language: `English (US)` / `en_US`
+- Language: `English (US)` / `en_US`. This is the language WhatsApp Manager approved the templates in.
 - Header: None (text only for simplicity)
 - Footer: None (or optional short text)
+
+**Language code must match**: every template send has to use `en_US`, the approved
+code. Meta does not fall back between language codes: a send as `en` to a template
+approved only as `en_US` fails with error 132001. The code has sent circle-event
+templates as `en` (`legacyTemplate` in `src/lib/whatsapp-bot/circle-events.ts`), so
+before you set `WHATSAPP_TEMPLATES_ENABLED=true`, check that it sends `en_US`.
 
 **IMPORTANT**: 
 - Variables (`{{1}}`, `{{2}}`, etc.) cannot be at the start or end of the template body.
