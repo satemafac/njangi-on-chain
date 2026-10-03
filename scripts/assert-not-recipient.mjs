@@ -19,9 +19,11 @@
  * guard. The identity assert is the first one in the function, so anything
  * other than 207 means the recipient cleared the gate that stopped everyone
  * else — on an escrow that has already paid out, for instance, the recipient
- * gets E_ALREADY_FINALIZED (205) while non-recipients still get 207. That is
- * a sharper demonstration than a bare success, and it means this script stays
- * meaningful after the pot has been claimed.
+ * gets E_ALREADY_FINALIZED (205), or E_ALREADY_CLAIMED (206) from the package
+ * version whose finalize_and_redeem also collects a finalized escrow, while
+ * non-recipients still get 207. That is a sharper demonstration than a bare
+ * success, and it means this script stays meaningful after the pot has been
+ * claimed.
  *
  * Usage (from the repo root, so @mysten/sui resolves):
  *   node scripts/assert-not-recipient.mjs \
