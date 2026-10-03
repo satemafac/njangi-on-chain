@@ -87,6 +87,14 @@ const GROUP_LINKS_UNSUPPORTED = {
     'receive anything. Link a phone number instead.',
 };
 
+// The GET probe could not read the on-chain registry, so whether this circle
+// is linked is unknown. Never `isLinked: false` — see handleGet.
+const REGISTRY_UNREADABLE = {
+  success: false,
+  code: 'WHATSAPP_REGISTRY_UNREADABLE',
+  error: "Couldn't read the WhatsApp registry, so the link status is unknown. Try again.",
+};
+
 function buildPayload(phoneE164: string): WhatsAppPiiPayload {
   return {
     schema_version: 1,
@@ -136,25 +144,27 @@ async function handleGet(req: NextApiRequest, res: NextApiResponse) {
       options: { showContent: true },
     });
 
-    if (!registryObject.data?.content || !('fields' in registryObject.data.content)) {
-      return res
-        .status(200)
-        .json({ success: true, data: { isLinked: false, message: 'Registry not yet indexed' } });
-    }
-
-    const content = registryObject.data.content as Record<string, unknown>;
-    const registryFields = content.fields as Record<string, unknown> | undefined;
-    if (!registryFields) {
-      return res
-        .status(200)
-        .json({ success: true, data: { isLinked: false, message: 'Registry fields not found' } });
-    }
-
-    const links = registryFields.links as unknown[];
+    // Only a registry we actually read can say "not linked". A reply with no
+    // content (a wrong or deleted registry id, or a node error) or without a
+    // `links` vector is a failed read, and used to answer `isLinked: false`
+    // ("Registry not yet indexed"), so the card offered to link a circle that
+    // may already be linked. It answers 503 instead, so callers can tell
+    // "couldn't check" from "not linked". (A getObject that throws already
+    // lands in the 500 below.)
+    const content = registryObject.data?.content as Record<string, unknown> | undefined;
+    const registryFields =
+      content && 'fields' in content
+        ? (content.fields as Record<string, unknown> | undefined)
+        : undefined;
+    const links = registryFields?.links;
     if (!Array.isArray(links)) {
-      return res
-        .status(200)
-        .json({ success: true, data: { isLinked: false, message: 'No links found in registry' } });
+      console.error('[admin-link-circle] WhatsApp registry unreadable; link status unknown', {
+        network,
+        registryObjectId,
+        error: registryObject.error ?? null,
+        hasContent: Boolean(content),
+      });
+      return res.status(503).json(REGISTRY_UNREADABLE);
     }
 
     for (const link of links) {
