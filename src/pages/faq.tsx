@@ -69,7 +69,7 @@ export default function FAQPage() {
         {
           id: "smart-contracts-work",
           question: "How is the money actually held?",
-          answer: "Each cycle's contributions are held by a contract — a set of rules fixed before anyone pays in, which nobody can quietly change afterwards, including us. It holds the contributions in escrow, releases the pot to the member whose turn it is under the rotation order your circle agreed, records every contribution and payout on chain, and applies the same rules to everyone. The rotation order is set by the circle admin before the circle starts, not drawn at random."
+          answer: "Each cycle's contributions are held by a contract — a set of rules fixed before anyone pays in. It holds the contributions in escrow, releases the pot to the member whose turn it is under the rotation order your circle agreed, records every contribution and payout on chain, and applies the same rules to everyone. The rotation order is set by the circle admin before the circle starts, not drawn at random. During the testnet pilot, Njangi holds the contract's upgrade key so we can fix bugs, and every upgrade is public on the Sui blockchain. Before mainnet, that key moves to a multi-signature account, so no upgrade can happen without several people approving it, and we'll publish our upgrade policy."
         },
         {
           id: "payout-order",
