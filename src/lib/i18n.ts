@@ -87,6 +87,10 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
       "Everyone has paid. It's your turn — tap below to send the pot straight to your wallet.",
     'escrow.action.collect': 'Collect my payout',
     'escrow.action.collecting': 'Collecting…',
+    'escrow.collect.claimUnreadable':
+      "We couldn't reach the network to look up this round's payout. Nothing was sent — try again in a moment.",
+    'escrow.collect.claimNotFound':
+      "This round's pot has already been closed, but the claim that pays it out isn't in this wallet. If it was closed moments ago, refresh in a minute and try again. If it still isn't there, please contact support.",
     'escrow.prompt.someoneElseCollects':
       'The pot is full. {recipient} can collect their payout now.',
     'escrow.completed.openNextRound':
@@ -586,6 +590,10 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
       "Tout le monde a payé. C'est votre tour — appuyez ci-dessous pour envoyer la cagnotte à votre portefeuille.",
     'escrow.action.collect': 'Récupérer mon versement',
     'escrow.action.collecting': 'Récupération…',
+    'escrow.collect.claimUnreadable':
+      "Impossible de joindre le réseau pour retrouver le versement de ce tour. Rien n'a été envoyé — réessayez dans un instant.",
+    'escrow.collect.claimNotFound':
+      "La cagnotte de ce tour a déjà été clôturée, mais le bon qui permet de la récupérer n'est pas dans ce portefeuille. Si elle vient d'être clôturée, actualisez dans une minute et réessayez. S'il n'y est toujours pas, contactez l'assistance.",
     'escrow.prompt.someoneElseCollects':
       'La cagnotte est complète. {recipient} peut récupérer son versement maintenant.',
     'escrow.completed.openNextRound':
