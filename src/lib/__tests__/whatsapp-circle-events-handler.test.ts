@@ -65,7 +65,9 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import handler from '../../pages/api/cron/whatsapp-circle-events';
 import {
   acquireCycleFinalizedLease,
+  loadCycleFinalizedCursor,
   releaseCycleFinalizedLease,
+  saveCycleFinalizedCursor,
 } from '../cycle-finalized-cron';
 import { sendMemberNotification } from '../whatsapp-notifier';
 import { resolveCirclePhone } from '../whatsapp-bot/circle-phone';
@@ -74,6 +76,8 @@ import { CIRCLE_EVENT_STREAMS } from '../whatsapp-bot/circle-events';
 
 const acquireMock = acquireCycleFinalizedLease as jest.Mock;
 const releaseMock = releaseCycleFinalizedLease as jest.Mock;
+const loadCursorMock = loadCycleFinalizedCursor as jest.Mock;
+const saveCursorMock = saveCycleFinalizedCursor as jest.Mock;
 const sendMock = sendMemberNotification as jest.Mock;
 const phoneMock = resolveCirclePhone as jest.Mock;
 const clientMock = getPooledSuiClient as jest.Mock;
@@ -81,9 +85,15 @@ const clientMock = getPooledSuiClient as jest.Mock;
 const SECRET = 'test-cron-secret';
 const CIRCLE = '0x' + 'c1'.repeat(32);
 const MEMBER = '0x' + 'ab'.repeat(32);
-const CONTRIBUTION_TYPE = '0xcore::njangi_payments::ContributionMade';
+const RECIPIENT = '0x' + '1f'.repeat(32);
+const ESCROW = '0x' + 'e3'.repeat(32);
+const USDC = '0x' + '26'.repeat(32) + '::usdc::USDC';
+const CONTRIBUTION_TYPE = '0xcore::njangi_cycle_escrow::ContributionRecorded';
+const CLAIM_TYPE = '0xcore::njangi_cycle_escrow::ClaimRedeemed';
+const HOUR_MS = 60 * 60 * 1000;
 
 const ORIGINAL_CRON_SECRET = process.env.CRON_SECRET;
+const ORIGINAL_MAX_AGE = process.env.WHATSAPP_EVENTS_MAX_EVENT_AGE_MS;
 
 interface FakeRes {
   statusCode: number;
@@ -127,45 +137,81 @@ interface FakeEventPage {
   hasNextPage: boolean;
 }
 
-/** Sui client stub: one fresh ContributionMade event, all other streams empty. */
+/**
+ * getObject response for the round's CycleEscrow<USDC>, in the shape
+ * testnet returns: the escrow names its circle; the round target sits in
+ * the frozen snapshot.
+ */
+const ESCROW_OBJECT = {
+  data: {
+    objectId: ESCROW,
+    type: `0xcore::njangi_cycle_escrow::CycleEscrow<${USDC}>`,
+    content: {
+      dataType: 'moveObject',
+      type: `0xcore::njangi_cycle_escrow::CycleEscrow<${USDC}>`,
+      fields: {
+        circle_id: CIRCLE,
+        snapshot: {
+          type: '0xcore::njangi_cycle_escrow::CycleSnapshot',
+          fields: { cycle_no: '5', recipient: RECIPIENT, required_contributors: '2' },
+        },
+      },
+    },
+  },
+};
+
+function contributionEvent(txDigest: string, ageMs = 0, contributor = MEMBER) {
+  return {
+    id: { txDigest, eventSeq: '0' },
+    parsedJson: {
+      escrow_id: ESCROW,
+      cycle_no: '5',
+      contributor,
+      amount: '100000',
+      contributors_so_far: '1',
+      total_contributed: '100000',
+    },
+    timestampMs: String(Date.now() - ageMs),
+  };
+}
+
+function page(...data: FakeEventPage['data']): FakeEventPage {
+  const last = data[data.length - 1];
+  return { data, nextCursor: last ? last.id : null, hasNextPage: false };
+}
+
+const EMPTY_PAGE: FakeEventPage = { data: [], nextCursor: null, hasNextPage: false };
+
+/** Sui client stub: one fresh ContributionRecorded event, all other streams empty. */
 function makeClient() {
   return {
-    getObject: jest.fn(async ({ id }: { id: string }) =>
-      id === '0xregistry'
-        ? { data: { type: '0xwa::whatsapp_integration::WhatsAppRegistry' } }
-        : { data: undefined },
-    ),
+    getObject: jest.fn(async ({ id }: { id: string }) => {
+      if (id === '0xregistry') {
+        return { data: { type: '0xwa::whatsapp_integration::WhatsAppRegistry' } };
+      }
+      if (id === ESCROW) return ESCROW_OBJECT;
+      return { error: { code: 'notExists', object_id: id } };
+    }),
     queryEvents: jest.fn(
-      async ({ query }: { query: { MoveEventType: string } }): Promise<FakeEventPage> => {
-        if (query.MoveEventType === CONTRIBUTION_TYPE) {
-          return {
-            data: [
-              {
-                id: { txDigest: 'tx1', eventSeq: '0' },
-                parsedJson: {
-                  circle_id: CIRCLE,
-                  member: MEMBER,
-                  amount: '1500000000',
-                  cycle: '2',
-                },
-                timestampMs: String(Date.now()),
-              },
-            ],
-            nextCursor: { txDigest: 'tx1', eventSeq: '0' },
-            hasNextPage: false,
-          };
-        }
-        return { data: [], nextCursor: null, hasNextPage: false };
-      },
+      async ({ query }: { query: { MoveEventType: string } }): Promise<FakeEventPage> =>
+        query.MoveEventType === CONTRIBUTION_TYPE ? page(contributionEvent('tx1')) : EMPTY_PAGE,
     ),
     getTransactionBlock: jest.fn(),
   };
 }
 
+/** Escrow reads the client served (the registry type probe excluded). */
+function escrowReads(client: ReturnType<typeof makeClient>): number {
+  return client.getObject.mock.calls.filter(([arg]) => arg.id === ESCROW).length;
+}
+
 beforeEach(() => {
   process.env.CRON_SECRET = SECRET;
+  delete process.env.WHATSAPP_EVENTS_MAX_EVENT_AGE_MS;
   acquireMock.mockReset().mockResolvedValue('lease-token');
   releaseMock.mockReset().mockResolvedValue(undefined);
+  loadCursorMock.mockReset().mockResolvedValue(null);
+  saveCursorMock.mockReset().mockResolvedValue(undefined);
   sendMock.mockReset().mockResolvedValue({ sent: true, phoneE164: '+237650000001' });
   phoneMock.mockReset().mockResolvedValue('+237650000001');
   clientMock.mockReset().mockReturnValue(makeClient());
@@ -174,6 +220,8 @@ beforeEach(() => {
 afterAll(() => {
   if (ORIGINAL_CRON_SECRET === undefined) delete process.env.CRON_SECRET;
   else process.env.CRON_SECRET = ORIGINAL_CRON_SECRET;
+  if (ORIGINAL_MAX_AGE === undefined) delete process.env.WHATSAPP_EVENTS_MAX_EVENT_AGE_MS;
+  else process.env.WHATSAPP_EVENTS_MAX_EVENT_AGE_MS = ORIGINAL_MAX_AGE;
 });
 
 async function run(req: NextApiRequest = makeReq()) {
@@ -203,24 +251,29 @@ describe('auth and preconditions', () => {
 });
 
 describe('ported event dispatch (smoke)', () => {
-  it('drains the contribution event into a circle-event WhatsApp send', async () => {
+  it('drains an escrow contribution into a send for the escrow circle', async () => {
     const res = await run();
     expect(res.statusCode).toBe(200);
 
     expect(sendMock).toHaveBeenCalledTimes(1);
     const call = sendMock.mock.calls[0][0];
     expect(call.kind).toBe('circle_event');
+    // The event names only its escrow; the circle comes from the escrow read.
     expect(call.memberAddress).toBe(CIRCLE);
+    expect(phoneMock).toHaveBeenCalledWith(expect.anything(), CIRCLE, 'testnet');
     expect(call.phoneOverride).toBe('+237650000001');
     expect(call.network).toBe('testnet');
-    expect(call.dedupeKey).toBe('contribution:tx1:0');
-    // Enriched body: circle name + member display name + amount + cycle.
-    expect(call.body).toContain('Bamenda Savers');
-    expect(call.body).toContain('Aminata');
-    expect(call.body).toContain('Cycle 2:');
-    expect(call.body).toContain('paid 1.5000 SUI');
-    // contribution maps to the aggregate-heavy `recieve_contribution`
-    // template the cron can't fill, so it stays on the freeform fallback.
+    expect(call.dedupeKey).toBe('contribution_recorded:tx1:0');
+    // Enriched body: circle name + member display name + USDC amount
+    // (6 decimals, from the escrow's type) + round progress.
+    expect(call.body).toBe(
+      'Contribution received in Bamenda Savers.\n' +
+        `Round 5: Aminata (0xabab...abab) paid 0.10 USDC. ` +
+        '1 of 2 members have paid in for this round.\n' +
+        `View progress: https://njangionchain.com/circle/${CIRCLE}`,
+    );
+    // recieve_contribution is not on the approved reuse list, so the
+    // contribution stays on the freeform fallback.
     expect(call.template).toBeUndefined();
 
     const body = res.body as { sent: number; halted: boolean; streams: unknown[] };
@@ -231,6 +284,192 @@ describe('ported event dispatch (smoke)', () => {
     // One lease per stream, all released.
     expect(acquireMock).toHaveBeenCalledTimes(CIRCLE_EVENT_STREAMS.length);
     expect(releaseMock).toHaveBeenCalledTimes(CIRCLE_EVENT_STREAMS.length);
+  });
+
+  it('never queries the retired legacy rail, and pages the escrow events on their own cursor rows', async () => {
+    const client = makeClient();
+    clientMock.mockReturnValue(client);
+    await run();
+
+    const queried = client.queryEvents.mock.calls.map(([arg]) => arg.query.MoveEventType);
+    expect(queried).toEqual(expect.arrayContaining([CONTRIBUTION_TYPE, CLAIM_TYPE]));
+    expect(
+      queried.filter((type) =>
+        /::(ContributionMade|StablecoinContributionMade|PayoutProcessed)$/.test(type),
+      ),
+    ).toEqual([]);
+
+    const cursorKeys = loadCursorMock.mock.calls.map(([key]) => key);
+    expect(cursorKeys).toEqual(
+      expect.arrayContaining([
+        'whatsapp-events:contribution_recorded:0xcore:testnet',
+        'whatsapp-events:claim_redeemed:0xcore:testnet',
+      ]),
+    );
+    for (const retired of ['contribution', 'contribution_stablecoin', 'payout_processed']) {
+      expect(cursorKeys).not.toContain(`whatsapp-events:${retired}:0xcore:testnet`);
+    }
+    // The page's cursor is saved on the new stream's own row.
+    expect(saveCursorMock).toHaveBeenCalledWith(
+      'whatsapp-events:contribution_recorded:0xcore:testnet',
+      { txDigest: 'tx1', eventSeq: '0' },
+      'lease-token',
+    );
+  });
+
+  it('relays a payout collection with the payout_processed template', async () => {
+    const client = makeClient();
+    client.queryEvents.mockImplementation(async ({ query }) =>
+      query.MoveEventType === CLAIM_TYPE
+        ? page({
+            id: { txDigest: 'tx-claim', eventSeq: '1' },
+            parsedJson: {
+              escrow_id: ESCROW,
+              cycle_no: '5',
+              recipient: RECIPIENT,
+              amount: '200000',
+            },
+            timestampMs: String(Date.now()),
+          })
+        : EMPTY_PAGE,
+    );
+    clientMock.mockReturnValue(client);
+
+    const res = await run();
+    expect(res.statusCode).toBe(200);
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    const call = sendMock.mock.calls[0][0];
+    expect(call.memberAddress).toBe(CIRCLE);
+    expect(call.dedupeKey).toBe('claim_redeemed:tx-claim:1');
+    expect(call.body).toContain('Payout collected in Bamenda Savers.');
+    expect(call.body).toContain('Round 5: Aminata (0x1f1f...1f1f) received 0.20 USDC.');
+    expect(call.template.name).toBe('payout_processed');
+    expect(call.template.components[0].parameters.map((p: { text: string }) => p.text)).toEqual([
+      'Bamenda Savers',
+      '5',
+      'Aminata',
+      '0.20 USDC',
+      expect.any(String),
+    ]);
+  });
+
+  it('reads each escrow once per run', async () => {
+    const client = makeClient();
+    client.queryEvents.mockImplementation(async ({ query }) => {
+      if (query.MoveEventType === CONTRIBUTION_TYPE) {
+        return page(contributionEvent('tx-a'), contributionEvent('tx-b', 0, '0x' + 'df'.repeat(32)));
+      }
+      if (query.MoveEventType === CLAIM_TYPE) {
+        return page({
+          id: { txDigest: 'tx-claim', eventSeq: '1' },
+          parsedJson: { escrow_id: ESCROW, cycle_no: '5', recipient: RECIPIENT, amount: '200000' },
+          timestampMs: String(Date.now()),
+        });
+      }
+      return EMPTY_PAGE;
+    });
+    clientMock.mockReturnValue(client);
+
+    const res = await run();
+    expect((res.body as { sent: number }).sent).toBe(3);
+    // Two contributions and the payout of one round: a single object read.
+    expect(escrowReads(client)).toBe(1);
+  });
+
+  it('halts without advancing when the escrow read fails', async () => {
+    const client = makeClient();
+    const registryAndMissing = client.getObject.getMockImplementation()!;
+    client.getObject.mockImplementation(async (arg: { id: string }) => {
+      if (arg.id === ESCROW) throw new Error('fetch failed');
+      return registryAndMissing(arg);
+    });
+    clientMock.mockReturnValue(client);
+
+    const res = await run();
+    expect(res.statusCode).toBe(500);
+    expect((res.body as { halted: boolean }).halted).toBe(true);
+    expect(sendMock).not.toHaveBeenCalled();
+    // An unreadable escrow is not a missing one: the cursor stays put so
+    // the next run retries this event.
+    expect(saveCursorMock).not.toHaveBeenCalled();
+    const summary = (res.body as { streams: Array<{ stream: string; halted: boolean }> }).streams;
+    expect(summary.find((s) => s.stream === 'contribution_recorded')?.halted).toBe(true);
+  });
+
+  it('skips (and advances past) an event whose escrow does not exist', async () => {
+    const client = makeClient();
+    client.getObject.mockImplementation(async ({ id }: { id: string }) =>
+      id === '0xregistry'
+        ? { data: { type: '0xwa::whatsapp_integration::WhatsAppRegistry' } }
+        : { error: { code: 'notExists', object_id: id } },
+    );
+    clientMock.mockReturnValue(client);
+
+    const res = await run();
+    expect(res.statusCode).toBe(200);
+    expect(sendMock).not.toHaveBeenCalled();
+    expect((res.body as { skipped: number }).skipped).toBe(1);
+    expect(saveCursorMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('age-skips a first pass over old escrow history without reading any escrow', async () => {
+    // A fresh cursor drains the stream from genesis: weeks of past rounds
+    // must advance silently, and cost no object reads doing it.
+    const client = makeClient();
+    client.queryEvents.mockImplementation(async ({ query }) =>
+      query.MoveEventType === CONTRIBUTION_TYPE
+        ? page(
+            contributionEvent('tx-june', 90 * 24 * HOUR_MS),
+            contributionEvent('tx-sept', 20 * 24 * HOUR_MS),
+          )
+        : EMPTY_PAGE,
+    );
+    clientMock.mockReturnValue(client);
+
+    const res = await run();
+    expect(res.statusCode).toBe(200);
+    expect(sendMock).not.toHaveBeenCalled();
+    expect((res.body as { skipped: number }).skipped).toBe(2);
+    expect(escrowReads(client)).toBe(0);
+    expect(saveCursorMock).toHaveBeenCalledWith(
+      'whatsapp-events:contribution_recorded:0xcore:testnet',
+      { txDigest: 'tx-sept', eventSeq: '0' },
+      'lease-token',
+    );
+  });
+
+  it('honors WHATSAPP_EVENTS_MAX_EVENT_AGE_MS', async () => {
+    process.env.WHATSAPP_EVENTS_MAX_EVENT_AGE_MS = String(HOUR_MS);
+    const client = makeClient();
+    client.queryEvents.mockImplementation(async ({ query }) =>
+      query.MoveEventType === CONTRIBUTION_TYPE
+        ? page(contributionEvent('tx-old', 2 * HOUR_MS), contributionEvent('tx-new', 60_000))
+        : EMPTY_PAGE,
+    );
+    clientMock.mockReturnValue(client);
+
+    const res = await run();
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(sendMock.mock.calls[0][0].dedupeKey).toBe('contribution_recorded:tx-new:0');
+    expect((res.body as { skipped: number }).skipped).toBe(1);
+  });
+
+  it('keeps the replay guard when WHATSAPP_EVENTS_MAX_EVENT_AGE_MS is malformed', async () => {
+    // Number('24h') is NaN and `age > NaN` is false: without the fallback a
+    // typo would mark every event fresh and replay a stream's history.
+    process.env.WHATSAPP_EVENTS_MAX_EVENT_AGE_MS = '24h';
+    const client = makeClient();
+    client.queryEvents.mockImplementation(async ({ query }) =>
+      query.MoveEventType === CONTRIBUTION_TYPE
+        ? page(contributionEvent('tx-old', 48 * HOUR_MS))
+        : EMPTY_PAGE,
+    );
+    clientMock.mockReturnValue(client);
+
+    const res = await run();
+    expect(res.statusCode).toBe(200);
+    expect(sendMock).not.toHaveBeenCalled();
+    expect((res.body as { skipped: number }).skipped).toBe(1);
   });
 
   it('forwards the approved template alongside the body for template-backed streams', async () => {
@@ -276,28 +515,18 @@ describe('ported event dispatch (smoke)', () => {
 
   it('skips stale events (cursor still advances) without sending', async () => {
     const client = makeClient();
-    client.queryEvents.mockImplementation(async ({ query }) => {
-      if (query.MoveEventType === CONTRIBUTION_TYPE) {
-        return {
-          data: [
-            {
-              id: { txDigest: 'tx-old', eventSeq: '0' },
-              parsedJson: { circle_id: CIRCLE, member: MEMBER, amount: '1', cycle: 1 },
-              timestampMs: String(Date.now() - 48 * 60 * 60 * 1000),
-            },
-          ],
-          nextCursor: null,
-          hasNextPage: false,
-        };
-      }
-      return { data: [], nextCursor: null, hasNextPage: false };
-    });
+    client.queryEvents.mockImplementation(async ({ query }) =>
+      query.MoveEventType === CONTRIBUTION_TYPE
+        ? page(contributionEvent('tx-old', 48 * HOUR_MS))
+        : EMPTY_PAGE,
+    );
     clientMock.mockReturnValue(client);
 
     const res = await run();
     expect(res.statusCode).toBe(200);
     expect(sendMock).not.toHaveBeenCalled();
     expect((res.body as { skipped: number }).skipped).toBe(1);
+    expect(saveCursorMock).toHaveBeenCalledTimes(1);
   });
 
   it('halts the stream (500, no cursor advance past the event) on missing credentials', async () => {

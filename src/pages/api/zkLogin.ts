@@ -36,6 +36,7 @@ import { getCircleConfigFields } from '@/lib/circle-config';
 import { getMinimumAutoReleaseDelayMsForMoveCycleLength } from '@/lib/auto-release';
 import { normalizeRecoveryDelegateAddress } from '@/lib/recovery-delegate';
 import { isResolvedSuiObjectId } from '@/lib/sui-object-id';
+import { readBalanceField } from '@/lib/custody-wallet-balance';
 import {
   countZkLoginSessions,
   deleteZkLoginSession,
@@ -1803,7 +1804,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           // Only perform wallet validation if walletObj exists (network match)
           if (walletObj && walletObj.data?.content) {
             // Check if wallet belongs to the circle
-            const walletContent = walletObj.data.content as { fields?: { circle_id?: string, balance?: { fields?: { value?: string } } } };
+            const walletContent = walletObj.data.content as { fields?: { circle_id?: string, balance?: unknown } };
             if (walletContent?.fields?.circle_id !== circleId) {
               console.error(`Wallet ${walletId} does not belong to circle ${circleId}`);
               return res.status(400).json({ 
@@ -1811,18 +1812,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               });
             }
             
-            // NEW: Check wallet balance before attempting deletion
-            if (walletContent?.fields?.balance?.fields?.value) {
-              const balance = BigInt(walletContent.fields.balance.fields.value);
-              if (balance > 0) {
-                console.log(`Wallet has non-zero balance: ${balance}`);
-                return res.status(400).json({
-                  error: 'Cannot delete: The wallet has SUI balance. Please withdraw all funds first.',
-                  code: 'EWalletHasBalance',
-                  walletBalance: balance.toString(),
-                  walletId: walletId
-                });
-              }
+            // Courtesy pre-check: delete_circle itself refuses a wallet that
+            // still holds funds (abort 6), in every published version.
+            // JSON-RPC renders the Balance<SUI> as a plain string, which this
+            // used to miss; an unreadable balance falls through to that
+            // on-chain guard rather than reading as empty.
+            const balance = readBalanceField(walletContent?.fields?.balance);
+            if (balance !== null && balance > 0n) {
+              console.log(`Wallet has non-zero balance: ${balance}`);
+              return res.status(400).json({
+                error: 'Cannot delete: The wallet has SUI balance. Please withdraw all funds first.',
+                code: 'EWalletHasBalance',
+                walletBalance: balance.toString(),
+                walletId: walletId
+              });
             }
             
             // NEW: Check for any coins in dynamic fields
