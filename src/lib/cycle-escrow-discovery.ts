@@ -487,6 +487,40 @@ export async function findCurrentCycleEscrow(
 }
 
 /**
+ * The value of a `Balance<T>` field. JSON-RPC renders one as a plain string
+ * of base units (testnet, 2026-10-02: `"balance": "0"`), not the
+ * `{ fields: { value } }` of an ordinary struct, which this used to expect —
+ * so every pot read as '0'. Both forms are accepted; anything else is '0'.
+ */
+function readBalanceValue(raw: unknown): string {
+  if (typeof raw === 'string' && /^\d+$/.test(raw)) return raw;
+  if (typeof raw === 'number' && Number.isSafeInteger(raw) && raw >= 0) return String(raw);
+  const value = unwrapStruct(raw)?.value;
+  if (typeof value === 'string' && /^\d+$/.test(value)) return value;
+  if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) return String(value);
+  return '0';
+}
+
+/**
+ * The round's pot in base units: the escrow balance, or — when that reads
+ * as zero — the snapshot share times the recorded contributors. The two
+ * agree by construction (every contribution is exactly the snapshot amount,
+ * and the balance only leaves through a claim or a refund, neither of which
+ * applies to a round that is still waiting to be collected), so the product
+ * is the pot whenever the balance field could not be read.
+ */
+export function potBaseUnits(
+  state: Pick<CycleEscrowLiveState, 'totalContributed' | 'contributionAmount' | 'contributorsSoFar'>,
+): string {
+  try {
+    if (BigInt(state.totalContributed) > 0n) return state.totalContributed;
+    return (BigInt(state.contributionAmount) * BigInt(state.contributorsSoFar)).toString();
+  } catch {
+    return '0';
+  }
+}
+
+/**
  * Fetches the current on-chain state of a CycleEscrow for UI progress
  * displays ("4 of 7 members have paid in", "finalized / claimed").
  */
@@ -528,10 +562,7 @@ export async function readCycleEscrowState(
     : 0;
   const contributorsCount = Number(fields.contributors_count ?? tableSize ?? 0);
 
-  const balance = fields.balance as { fields?: { value?: unknown } } | undefined;
-  const totalContributed = balance && balance.fields?.value !== undefined
-    ? String(balance.fields.value)
-    : '0';
+  const totalContributed = readBalanceValue(fields.balance);
 
   const contributedMembers: string[] = [];
   // The full contributor list is only retrievable via dynamic field pagination

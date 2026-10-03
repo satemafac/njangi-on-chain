@@ -14,6 +14,7 @@ import { useTranslation } from '@/hooks/useTranslation';
 import {
   findCurrentCycleEscrow,
   listContributors,
+  potBaseUnits,
   readCircleRotationPointer,
   readCycleEscrowState,
   type CycleEscrowLiveState,
@@ -363,6 +364,9 @@ export function CycleEscrowPanel({
   }, [liveState?.members, contributors, recipient, memberNames]);
 
   const friendlyAmount = formatAmount(contributionAmountBase, coinDecimals, coinSymbol);
+  // The whole pot, which is what a collect pays out. Taken from the state
+  // read before the claim, which drains the balance.
+  const potBase = useMemo(() => (liveState ? potBaseUnits(liveState) : '0'), [liveState]);
 
   const runWithSigner = useCallback(
     async (action: 'pay' | 'claim' | 'advance', build: TransactionBuilder, gasBudget: number) => {
@@ -383,16 +387,12 @@ export function CycleEscrowPanel({
         );
         if (action === 'claim') {
           // The member just collected their own turn: open the payout
-          // moment. friendlyAmount is the per-member contribution; the pot
-          // itself is contributionAmount × contributors, which the summary
-          // carries when it is known.
-          const potBase = liveState?.totalContributed;
+          // moment with the pot they received. friendlyAmount (one member's
+          // share) is only the fallback for a pot that could not be read.
           setCelebration({
             digest: result.digest,
             amount:
-              potBase && potBase !== '0'
-                ? formatAmount(potBase, coinDecimals, coinSymbol)
-                : friendlyAmount,
+              potBase !== '0' ? formatAmount(potBase, coinDecimals, coinSymbol) : friendlyAmount,
             cycleNo: liveState?.cycleNo ?? summary?.cycleNo ?? '—',
           });
         }
@@ -430,7 +430,7 @@ export function CycleEscrowPanel({
       t,
       friendlyAmount,
       summary?.cycleNo,
-      liveState?.totalContributed,
+      potBase,
       liveState?.cycleNo,
       coinDecimals,
       coinSymbol,

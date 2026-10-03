@@ -4,6 +4,7 @@ import { ArrowRight, Coins, Hourglass } from 'lucide-react';
 import { useTranslation } from '@/hooks/useTranslation';
 import {
   findCurrentCycleEscrow,
+  potBaseUnits,
   readCircleIsActive,
   readCycleEscrowState,
   listContributors,
@@ -112,7 +113,8 @@ export function NjangiRoundAlerts({ circles, userAddress, network }: NjangiRound
               circleId: circle.id,
               circleName: circle.name,
               cycleNo: state.cycleNo,
-              amount: formatAmount(state.totalContributed, decimals, symbol),
+              // The pot, not one share: it is what this member will collect.
+              amount: formatAmount(potBaseUnits(state), decimals, symbol),
             });
             continue;
           }
