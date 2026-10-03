@@ -51,8 +51,8 @@ export type NotificationKind =
 //      template names are reused so already-approved templates keep working:
 //      payout_processed, circle_link, circle_unlink, member_joins,
 //      member_removed, deposit_returned, order_changed (see
-//      src/lib/whatsapp-bot/circle-events.ts and
-//      whatsapp-bot-backend/DEPRECATED.md for the historical inventory).
+//      src/lib/whatsapp-bot/circle-events.ts, and WHATSAPP_TEMPLATES.md for
+//      the full inventory and template bodies).
 //   2. Add a language variant for EVERY language code the app will send
 //      with. Meta does not fall back across languages — sending
 //      language 'fr' when only 'en' is approved fails with error 132001.

@@ -1,5 +1,10 @@
 # Counsel review brief — Njangi On-Chain
 
+> **Status (October 2026): superseded.** This is an older internal draft, kept
+> for history. The current counsel package is kept outside this repository.
+> Don't forward this file, and don't read it as a current description of the
+> product or its compliance posture.
+
 _Forward this to counsel with the three draft documents in `docs/legal-drafts/` (Terms of Service, Privacy Policy, Risk Disclosure — EN + FR). It describes the product, the specific questions we need answered, and the 6 blanks to fill. Goal: sign-off on the drafts + a clear licensing posture before we take real money from real users._
 
 ---
