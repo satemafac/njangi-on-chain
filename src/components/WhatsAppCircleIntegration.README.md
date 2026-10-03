@@ -2,7 +2,7 @@
 
 ## Overview
 
-The `WhatsAppCircleIntegration` component provides a seamless, user-friendly interface for circle admins to link/unlink their circles to WhatsApp, directly within the circle management page. No additional authentication is required since it reuses the existing zkLogin session.
+The `WhatsAppCircleIntegration` component provides a seamless, user-friendly interface for circle admins to link/unlink their circles to WhatsApp, directly within the circle management page. No additional authentication is required: the API calls ride on the zkLogin session cookie, and the on-chain link/unlink is signed in the browser with the admin's zkLogin account.
 
 ## Usage
 
@@ -16,7 +16,8 @@ export default function YourPage() {
     <WhatsAppCircleIntegration
       circleId="0x123abc..."
       adminAddress="0x456def..."
-      adminToken="session-token-here"
+      account={account} // the signed-in zkLogin AccountData
+      isAdmin
       onLinked={(status) => {
         console.log('Linked status changed:', status);
       }}
@@ -34,7 +35,8 @@ export default function YourPage() {
     <WhatsAppCircleIntegration
       circleId={id as string}
       adminAddress={userAddress || ''}
-      adminToken={account.provider === 'zkLogin' ? account.userAddr : ''}
+      account={account}
+      isAdmin={Boolean(userAddress && circle.admin === userAddress)}
       onLinked={(status) => {
         if (status) {
           toast.success('Circle linked to WhatsApp!');
@@ -51,7 +53,7 @@ export default function YourPage() {
 |------|------|----------|-------------|
 | `circleId` | string | Yes | The ID of the circle to link/unlink |
 | `adminAddress` | string | Yes | The admin's Sui address |
-| `adminToken` | string | Yes | The admin's authentication token (from zkLogin session) |
+| `account` | `AccountData` | Yes | The admin's zkLogin account. The card signs the on-chain link/unlink with it in the browser; no signing material goes to the server |
 | `isAdmin` | boolean | No (default `false`) | Set by the manage page from `circle.admin === userAddress`. Only then does the card ask for the masked linked number (see [Link Status Endpoint](#link-status-endpoint)) |
 | `onLinked` | (status: boolean) => void | No | Callback when link status changes |
 
@@ -113,46 +115,47 @@ export default function YourPage() {
 
 ### Link Circle Endpoint
 
+The card makes two POSTs and signs the on-chain anchor in the browser between
+them. Both send the `session-id` cookie (see [Security](#security)).
+
 ```
 POST /api/whatsapp/admin-link-circle
-Authorization: Bearer <token>
 
+1. Prepare. The server encrypts the number, uploads it to Walrus and returns
+   the anchor inputs.
 Body:
 {
   "circleId": "0x123...",
   "linkType": 1,  // 2 (a group) is refused: 400 WHATSAPP_GROUP_LINKS_UNSUPPORTED
-  "phoneOrGroup": "+1234567890"
+  "phoneOrGroup": "+1234567890",
+  "adminAddress": "0x456...",
+  "network": "testnet"
 }
+Response data: { packageId, registryObjectId, walrusBlobId, linkNonceHex,
+                 walrusEndEpoch, status: "pending", ... }
 
-Response:
-{
-  "success": true,
-  "data": {
-    "message": "Circle linked to WhatsApp successfully",
-    "circleId": "0x123..."
-  }
-}
+2. The card signs whatsapp_integration::link_circle with `account`
+   (ZkLoginClient.linkCircleToWhatsApp).
+
+3. Confirm. The same body plus "anchoredDigest", "walrusBlobId" and
+   "walrusEndEpoch". The server then writes the webhook's link index.
+Response data: { circleId, linkType, walrusBlobId, txDigest, status: "confirmed" }
 ```
 
 ### Unlink Circle Endpoint
 
+The same pattern: prepare, sign `whatsapp_integration::unlink_circle` in the
+browser (ZkLoginClient.unlinkCircleFromWhatsApp), confirm.
+
 ```
 POST /api/whatsapp/admin-unlink-circle
-Authorization: Bearer <token>
 
-Body:
-{
-  "circleId": "0x123..."
-}
+Prepare. Body: { "circleId": "0x123...", "adminAddress": "0x456...", "network": "testnet" }
+Response data: { packageId, registryObjectId, status: "pending", ... }
 
-Response:
-{
-  "success": true,
-  "data": {
-    "message": "Circle unlinked from WhatsApp successfully",
-    "circleId": "0x123..."
-  }
-}
+Confirm, after signing. The same body plus "anchoredDigest". The server drops
+the link index.
+Response data: { circleId, txDigest, status: "confirmed" }
 ```
 
 ### Link Status Endpoint
@@ -205,11 +208,16 @@ All errors display user-friendly toast messages.
 
 ## Security
 
-- ✅ Requires admin token for all operations
-- ✅ Token passed in Authorization header
-- ✅ Middleware verifies permissions on backend
-- ✅ Unlink requires `unlink_circle` permission
-- ✅ All actions audited and logged
+- ✅ Both POST routes, and the status GET with `includeRecipient=true`, require
+  the HttpOnly `session-id` cookie from `/api/zkLogin`. The server resolves it
+  to an address and checks that address is the circle's on-chain admin
+  (`withCircleAdminAuth` in `src/middleware/admin-auth.middleware.ts`): no
+  session → 401, not the admin → 403. There is no token prop and no
+  Authorization header.
+- ✅ The on-chain link and unlink are signed in the browser with `account`. The
+  server never receives signing material, and the contract checks again that
+  the sender is the circle's admin.
+- ✅ Admin actions are logged (`logAdminAction`)
 
 ## Responsive Design
 
@@ -306,21 +314,20 @@ Potential improvements:
 
 ### Component not showing
 - Check if `circle && account` conditions are true
-- Verify `adminToken` is not empty
 
 ### Link not working
 - Verify phone number format (include country code)
 - Group IDs (`…@g.us`) are refused; link a phone number
-- Ensure admin has required permissions
+- The signed-in address must be the circle's on-chain admin (the routes answer 403 otherwise)
 
-### Token expired error
-- Component doesn't refresh token automatically
-- User should refresh page to get new session
+### Session expired (401)
+- The routes answer 401 when the `session-id` cookie is missing or its session has ended
+- Sign in again to get a new session
 
 ### API errors
 - Check browser console for detailed error
 - Verify admin-link-circle endpoint is running
-- Check Authorization header is being sent
+- Check that the request carries the `session-id` cookie
 
 ## Support
 
