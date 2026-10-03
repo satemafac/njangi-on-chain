@@ -7,6 +7,7 @@
 import { getConfiguredNetworkFromEnv, type NetworkType } from '@/config/public-env';
 import { getNetworkConfig } from './network-config';
 import { getPooledSuiClient } from './sui-rpc-failover';
+import joinRequestDatabase from './join-request-database';
 import { readObject, queryEventsCached } from '@/lib/sui-read';
 import { resolveCircleLifecycleState } from '@/lib/circle-chain';
 
@@ -399,26 +400,18 @@ export async function getCircleStatus(circleId: string, network?: 'testnet' | 'm
 export async function formatCircleStatusForWhatsAppWithNames(status: CircleStatusData, circleId: string): Promise<string> {
   const shortenAddress = (addr: string) => `${addr.slice(0, 6)}...${addr.slice(-4)}`;
   
-  // Look up member names from join requests database
+  // Look up member names from join requests database. Read in-process:
+  // /api/join-requests/lookup-user answers only a signed-in admin or member
+  // of the circle, and this server-side caller has no session.
   const memberNames = new Map<string, string>();
   
   try {
     // Fetch names for all members
     for (const member of status.members.slice(0, 10)) {
       try {
-        const baseUrl = process.env.VERCEL_URL 
-          ? `https://${process.env.VERCEL_URL}` 
-          : (process.env.NODE_ENV === 'production' ? 'https://njangionchain.com' : 'http://localhost:3000');
-        
-        const response = await fetch(
-          `${baseUrl}/api/join-requests/lookup-user?circleId=${encodeURIComponent(circleId)}&userAddress=${encodeURIComponent(member.address)}`
-        );
-        
-        if (response.ok) {
-          const data = await response.json();
-          if (data.success && data.data?.userName) {
-            memberNames.set(member.address, data.data.userName);
-          }
+        const row = await joinRequestDatabase.getUserByAddress(circleId, member.address);
+        if (row?.user_name) {
+          memberNames.set(member.address, row.user_name);
         }
       } catch (err) {
         // Silently fail for individual lookups

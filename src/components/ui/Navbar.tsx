@@ -86,7 +86,11 @@ export const Navbar: React.FC = () => {
       
       // Only fetch requests for circles where the user is an admin
       const allRequests: JoinRequest[] = [];
-      
+      // The pending route answers only a live admin session. A 401 means
+      // that session lapsed: say so instead of showing an empty bell. A 403
+      // (no longer this circle's admin) is skipped quietly.
+      let signInExpired = false;
+
       // If we have admin circles to check, use them
       if (adminCircleIds.length > 0) {
         for (const circleId of adminCircleIds) {
@@ -105,6 +109,7 @@ export const Navbar: React.FC = () => {
             
             if (!response.ok) {
               console.error(`[Navbar] Error response from API for circle ${circleId}:`, response.status, response.statusText);
+              if (response.status === 401) signInExpired = true;
               continue;
             }
             
@@ -143,6 +148,7 @@ export const Navbar: React.FC = () => {
           
           if (!response.ok) {
             console.error(`[Navbar] Error response from API for circle ${circleId}:`, response.status, response.statusText);
+            if (response.status === 401) signInExpired = true;
           } else {
             const data = await response.json();
             console.log(`[Navbar] API response for circle ${circleId}:`, data);
@@ -169,7 +175,10 @@ export const Navbar: React.FC = () => {
       
       console.log('[Navbar] Final pending requests:', allRequests);
       setPendingRequests(allRequests);
-      
+      if (signInExpired && allRequests.length === 0) {
+        setFetchError('Your sign-in has expired. Sign in again to see join requests.');
+      }
+
       // Reset retry count on successful fetch
       retryCount.current = 0;
       
