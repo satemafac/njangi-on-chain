@@ -42,7 +42,7 @@ answers every text message sent to the business number:
 
 | Message | Reply |
 | --- | --- |
-| `help` or `?` | What the channel sends, and these commands |
+| `help` or `?` | The updates a linked number gets, from [`src/content/whatsapp-updates.ts`](../src/content/whatsapp-updates.ts), and the `/status <circle-id>` and `/help` commands |
 | `/status <circle-id>` | That circle's live status, read from the chain |
 | `/status` | The status of every circle linked to the sender's number |
 | Anything else | A short acknowledgment that points to `/status` and `/help` |
@@ -88,12 +88,31 @@ any other message that contains `status` counts as `/status`.
   collected, and the nudge follows at the next cron run. It arrives first
   only when someone finalizes the round outside the app, for example with
   `finalize_to_recipient`.
-- **Group links receive nothing.** The link form also accepts a WhatsApp
-  group id (`…@g.us`), and the link is stored, but every sender reads only a
-  phone number.
-- **The help reply promises more than is sent.** It lists deadline reminders
-  and circle insights, which nothing sends, along with the contribution and
-  payout updates above.
+- **Group links are refused.** A business number can message only groups it
+  created through Meta's Groups API. That API is open only to Official
+  Business Accounts, members join by invite link (8 at most), and a send
+  addresses the group by the id the API returned, not a `…@g.us` id from the
+  WhatsApp app. So the link form takes only a phone number, and
+  `POST /api/whatsapp/admin-link-circle` answers `linkType` 2 with 400
+  `WHATSAPP_GROUP_LINKS_UNSUPPORTED`. The check is in the route only: the
+  Move module still accepts `LINK_TYPE_GROUP`. A group link made before
+  PR #64 stays linked until the admin unlinks it. It receives nothing,
+  because every sender reads only a phone number, and the manage card marks
+  it "⚠️ Not supported".
+- **The link confirmation promises more than is sent.** The help reply and
+  the manage card list only the updates in
+  [`src/content/whatsapp-updates.ts`](../src/content/whatsapp-updates.ts),
+  but the confirmation is not built from that file. Its text, from the
+  `circle_linked` stream, says contribution and payout updates will follow,
+  and the `circle_link` template in
+  [`WHATSAPP_TEMPLATES.md`](../WHATSAPP_TEMPLATES.md) adds cycle deadlines.
+  None of those go out today.
+- **A deposit refunded by a stop-and-refund gets no message.** The help reply
+  and the manage card promise "Security deposits paid or returned". A return
+  is sent only when an admin removes a member, which emits
+  `SecurityDepositReturned`. A stop-and-refund (`execute_recovery` or
+  `trigger_auto_release`) emits `RecoveryMemberRefunded` instead, and no
+  stream reads it.
 
 ## Setting it up
 
