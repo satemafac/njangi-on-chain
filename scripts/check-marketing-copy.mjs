@@ -31,7 +31,9 @@ const SCAN_DIRS = [
   'src/content',
   'whatsapp-bot-backend/src/services',
 ];
-const SCAN_FILES = ['src/lib/i18n.ts'];
+// your-turn-notification.ts holds the "your turn" WhatsApp nudge copy, in
+// seven languages, that members receive outside the app.
+const SCAN_FILES = ['src/lib/i18n.ts', 'src/lib/your-turn-notification.ts'];
 const EXTENSIONS = new Set(['.tsx', '.ts', '.md']);
 const IGNORE_DIRS = new Set(['api', '__tests__', 'node_modules']);
 
