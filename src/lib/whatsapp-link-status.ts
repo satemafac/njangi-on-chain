@@ -49,7 +49,13 @@ function statusUrl(circleId: string, network: string, includeRecipient: boolean)
  */
 function readStatus(body: unknown): WhatsAppLinkStatus {
   const data = (body as { data?: Record<string, unknown> } | null | undefined)?.data;
-  if (!data || data.isLinked !== true) return { isLinked: false };
+  // A reply without a boolean isLinked is not an answer. Throw, so a failed
+  // admin read falls back to the probe and a failed probe reads as unknown,
+  // never as "not linked".
+  if (!data || typeof data.isLinked !== 'boolean') {
+    throw new Error('WhatsApp link status reply has no isLinked flag');
+  }
+  if (!data.isLinked) return { isLinked: false };
 
   const status: WhatsAppLinkStatus = { isLinked: true };
   if (data.linkType === 1 || data.linkType === 2) status.linkType = data.linkType;
@@ -65,9 +71,10 @@ function readStatus(body: unknown): WhatsAppLinkStatus {
 /**
  * Reads a circle's WhatsApp link status for the manage page's card.
  *
- * A refused or failed admin read never throws: it falls back to the public
- * probe and records why the number is missing. Only a failed probe throws,
- * so the caller keeps deciding what an unknown status shows.
+ * A refused, failed or malformed admin read never throws: it falls back to the
+ * public probe and records why the number is missing. Only a failed probe, or
+ * a probe reply without a boolean isLinked, throws, so the caller keeps
+ * deciding what an unknown status shows.
  */
 export async function fetchWhatsAppLinkStatus(
   { circleId, network, includeRecipient }: FetchWhatsAppLinkStatusParams,

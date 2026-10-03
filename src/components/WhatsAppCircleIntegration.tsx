@@ -9,7 +9,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { MessageCircle, Link as LinkIcon, Unlink, Loader } from 'lucide-react';
+import { MessageCircle, Link as LinkIcon, Unlink, Loader, RefreshCw } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { AccountData } from '@/services/zkLoginService';
 import { ZkLoginClient } from '@/services/zkLoginClient';
@@ -71,7 +71,13 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
   onLinked
 }) => {
   const [linkedStatus, setLinkedStatus] = useState<WhatsAppLinkStatus>({ isLinked: false });
-  const [loading, setLoading] = useState(false);
+  // Starts true: until the first read answers, the status is unknown and the
+  // card shows the spinner, not the "Link to WhatsApp" button.
+  const [loading, setLoading] = useState(true);
+  // Distinguishes "couldn't check" from "not linked". A failed read used to
+  // set isLinked: false, so a 500 from the status route offered to link a
+  // circle that may already be linked on chain.
+  const [loadError, setLoadError] = useState(false);
   const [linking, setLinking] = useState(false);
   const [showLinkForm, setShowLinkForm] = useState(false);
   const [showUnlinkConfirm, setShowUnlinkConfirm] = useState(false);
@@ -89,13 +95,16 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
   }, [circleId, isAdmin]);
 
   const checkLinkStatus = async () => {
+    setLoadError(false);
     try {
       setLoading(true);
 
-      // Query the API to check if circle is linked on blockchain. The admin
-      // view also asks for the masked number; a 401/403 falls back to the
-      // public probe (src/lib/whatsapp-link-status.ts). Don't log the result:
-      // it can carry that number.
+      // Only the route's answer is a status: fetchWhatsAppLinkStatus throws
+      // when the read fails or the reply has no isLinked flag, and the catch
+      // below shows "couldn't check". The admin view also asks for the masked
+      // number; a 401/403 falls back to the public probe
+      // (src/lib/whatsapp-link-status.ts). Don't log the result: it can carry
+      // that number.
       setLinkedStatus(
         await fetchWhatsAppLinkStatus({
           circleId,
@@ -104,9 +113,12 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
         }),
       );
     } catch (error) {
-      console.error('Error checking link status:', error);
-      // Default to not linked on error
-      setLinkedStatus({ isLinked: false });
+      // warn, not error: the failure is handled below, and in dev
+      // console.error opens Next's error overlay over the card.
+      console.warn('Error checking link status:', error);
+      // Not "not linked": the circle may already be linked on chain. Leave
+      // linkedStatus alone; the card shows "Couldn't check" and Retry instead.
+      setLoadError(true);
     } finally {
       setLoading(false);
     }
@@ -322,6 +334,33 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
       setLinking(false);
     }
   };
+
+  // Returns before the views below: while the status is unknown the card
+  // offers no link form, no Link button and no Unlink, only Retry.
+  if (loadError) {
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center space-x-2">
+          <MessageCircle className="w-5 h-5 text-green-600" />
+          <h3 className="font-semibold text-gray-900">WhatsApp Integration</h3>
+        </div>
+        <div role="alert" className="rounded-[18px] border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+          <p className="font-semibold">{"Couldn't check WhatsApp status"}</p>
+          <p className="mt-2">
+            {"This circle may already be linked, so we're not offering to link or unlink it until a check succeeds."}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => checkLinkStatus()}
+          className="w-full px-4 py-2 bg-white text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50 transition flex items-center justify-center text-sm font-medium"
+        >
+          <RefreshCw className="w-4 h-4 mr-2" />
+          Retry
+        </button>
+      </div>
+    );
+  }
 
   if (loading) {
     return (

@@ -141,6 +141,15 @@ describe('fetchWhatsAppLinkStatus in the admin view', () => {
 
     await expect(fetchWhatsAppLinkStatus(params(true), impl)).rejects.toThrow('(500)');
   });
+
+  it('falls back to the probe when the admin reply has no isLinked flag', async () => {
+    const { impl, urls } = fakeFetch({ status: 200, body: { success: true, data: {} } }, linked());
+
+    const status = await fetchWhatsAppLinkStatus(params(true), impl);
+
+    expect(status).toEqual({ isLinked: true, linkType: 1, recipientGap: 'unavailable' });
+    expect(urls).toHaveLength(2);
+  });
 });
 
 describe('fetchWhatsAppLinkStatus outside the admin view', () => {
@@ -158,5 +167,18 @@ describe('fetchWhatsAppLinkStatus outside the admin view', () => {
     const { impl } = fakeFetch({ status: 500 });
 
     await expect(fetchWhatsAppLinkStatus(params(false), impl)).rejects.toThrow();
+  });
+
+  it.each([
+    ['no data', { success: true }],
+    ['no isLinked flag', { success: true, data: {} }],
+    ['a non-boolean isLinked', { success: true, data: { isLinked: 'yes' } }],
+    ['an empty body', null],
+  ])('throws on a 200 reply with %s instead of reading it as not linked', async (_label, body) => {
+    const { impl } = fakeFetch({ status: 200, body });
+
+    await expect(fetchWhatsAppLinkStatus(params(false), impl)).rejects.toThrow(
+      'no isLinked flag',
+    );
   });
 });
