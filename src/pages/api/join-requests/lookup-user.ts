@@ -1,5 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import joinRequestDatabase from '../../../services/join-request-database';
+import { requireCircleParticipant, sendJoinRequestAuthFailure } from '../../../lib/join-request-auth';
 
 type ResponseData = {
   success: boolean;
@@ -11,8 +12,11 @@ type ResponseData = {
 };
 
 /**
- * API endpoint to look up user name from join requests database
- * Used by WhatsApp bot to include names in notifications
+ * Looks up the display name a member gave when they applied to a circle.
+ * Used by the contribute page to show members' names. Only the circle's
+ * admin and members may read them: a name tied to an on-chain address is
+ * personal data. Server code (the WhatsApp status reply) reads the same row
+ * in-process through `joinRequestDatabase.getUserByAddress`.
  */
 export default async function handler(
   req: NextApiRequest,
@@ -31,6 +35,11 @@ export default async function handler(
         success: false,
         message: 'Missing required query parameters: circleId and userAddress'
       });
+    }
+
+    const auth = await requireCircleParticipant(req, circleId);
+    if (!auth.ok) {
+      return sendJoinRequestAuthFailure(res, auth);
     }
 
     console.log(`[LookupUser] Looking up user: ${userAddress} for circle: ${circleId}`);
