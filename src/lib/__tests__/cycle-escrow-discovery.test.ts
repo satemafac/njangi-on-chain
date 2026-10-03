@@ -21,6 +21,7 @@ import {
   findCurrentCycleEscrow,
   isCycleEscrowForCircle,
   listContributors,
+  potBaseUnits,
   readCircleEscrowHistory,
   readCircleRotationPointer,
   readCircleIsActive,
@@ -69,6 +70,8 @@ const escrowObject = (opts: {
   finalized?: boolean;
   claimed?: boolean;
   refunded?: boolean;
+  /** As JSON-RPC renders `Balance<T>`: a plain string of base units. */
+  balance?: unknown;
 }) => ({
   data: {
     objectId: opts.id,
@@ -77,6 +80,7 @@ const escrowObject = (opts: {
       dataType: 'moveObject',
       type: CYCLE_ESCROW_TYPE,
       fields: {
+        balance: opts.balance ?? '0',
         circle_id: opts.circleId ?? CIRCLE,
         claimed: opts.claimed ?? false,
         finalized: opts.finalized ?? false,
@@ -322,6 +326,58 @@ describe('readCycleEscrowState', () => {
 
     expect((await readCycleEscrowState(ESCROW_2, 'testnet', client))?.refunded).toBe(true);
     expect((await readCycleEscrowState(ESCROW_3, 'testnet', client))?.refunded).toBe(false);
+  });
+
+  // Regression: the pot was read as `balance.fields.value`, but JSON-RPC
+  // renders `Balance<T>` as a plain string (testnet, 2026-10-02), so every
+  // pot read as '0' — the payout celebration fell back to one member's share
+  // and the dashboard said "Your payout of 0 USDC is ready".
+  it('reads the pot from a Balance<T> rendered as a plain string', async () => {
+    const client = makeClient({ [ESCROW_3]: escrowObject({ id: ESCROW_3, balance: '200000' }) });
+    expect((await readCycleEscrowState(ESCROW_3, 'testnet', client))?.totalContributed).toBe(
+      '200000',
+    );
+  });
+
+  it('still reads the nested { fields: { value } } form', async () => {
+    const client = makeClient({
+      [ESCROW_3]: escrowObject({ id: ESCROW_3, balance: { fields: { value: '200000' } } }),
+    });
+    expect((await readCycleEscrowState(ESCROW_3, 'testnet', client))?.totalContributed).toBe(
+      '200000',
+    );
+  });
+
+  it('reads an unrecognised balance shape as 0 rather than guessing', async () => {
+    const client = makeClient({
+      [ESCROW_3]: escrowObject({ id: ESCROW_3, balance: { amount: '200000' } }),
+    });
+    expect((await readCycleEscrowState(ESCROW_3, 'testnet', client))?.totalContributed).toBe('0');
+  });
+});
+
+describe('potBaseUnits', () => {
+  it('is the escrow balance when it reads', () => {
+    expect(
+      potBaseUnits({ totalContributed: '200000', contributionAmount: '100000', contributorsSoFar: 2 }),
+    ).toBe('200000');
+  });
+
+  it('falls back to share x contributors, never to one share', () => {
+    // Every contribution is exactly the snapshot amount, so the product is
+    // the pot of a round still waiting to be collected.
+    expect(
+      potBaseUnits({ totalContributed: '0', contributionAmount: '100000', contributorsSoFar: 2 }),
+    ).toBe('200000');
+  });
+
+  it('is 0 for a round nobody has paid into, or for values that do not parse', () => {
+    expect(
+      potBaseUnits({ totalContributed: '0', contributionAmount: '100000', contributorsSoFar: 0 }),
+    ).toBe('0');
+    expect(
+      potBaseUnits({ totalContributed: 'n/a', contributionAmount: '100000', contributorsSoFar: 2 }),
+    ).toBe('0');
   });
 });
 
