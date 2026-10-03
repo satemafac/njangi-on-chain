@@ -8,7 +8,10 @@
  * the anchor had expired, it returned null, which the cron records as
  * "circle not linked": the cursor advanced and the event's message was
  * lost for good. It now rethrows the index error, so the cron halts and
- * retries.
+ * retries. A transient Walrus read failure (aggregator unreachable, 5xx,
+ * 429) used to read as "no phone" the same way, and now follows the same
+ * rule, as does a 401/403 refusal from a misconfigured aggregator (logged
+ * as an error); a 404 stays a per-blob warning.
  */
 
 jest.mock('../walrus-pii', () => ({
@@ -27,7 +30,9 @@ jest.mock('../../utils/logger', () => ({
 import type { SuiClient } from '@mysten/sui/client';
 import { resolveCirclePhone } from '../whatsapp-bot/circle-phone';
 import { fetchAndDecryptPII } from '../walrus-pii';
+import type * as WalrusPii from '../walrus-pii';
 import type { WhatsAppPiiPayload } from '../walrus-pii';
+import { WalrusReadError } from '../walrus-read-error';
 import { lookupBlobsForCircle } from '../whatsapp-link-index';
 import { getActiveWhatsAppRegistries } from '../../services/whatsapp-registry-service';
 import { appLogger } from '../../utils/logger';
@@ -82,9 +87,49 @@ function walrusStores(blobs: Record<string, WhatsAppPiiPayload | Error>) {
   decryptMock.mockImplementation(async (blobId: string) => {
     const stored = blobs[blobId];
     if (stored instanceof Error) throw stored;
-    if (!stored) throw new Error(`Walrus aggregator returned 404: ${blobId} not found`);
+    if (!stored) {
+      throw new WalrusReadError(`Walrus aggregator returned 404: ${blobId} not found`, {
+        status: 404,
+        transient: false,
+      });
+    }
     return stored;
   });
+}
+
+/** A read a retry may fix: a 5xx or 429 answer, or no answer (status null). */
+function unavailable(status: number | null): WalrusReadError {
+  return new WalrusReadError(
+    status === null
+      ? 'Walrus aggregator unreachable: fetch failed'
+      : `Walrus aggregator returned ${status}: try again later`,
+    { status, transient: true },
+  );
+}
+
+/**
+ * The error the REAL fetchEnvelopeFromWalrus throws when the aggregator
+ * refuses the read, as it does behind a misconfigured
+ * WALRUS_AGGREGATOR_URL (walrus-pii is mocked here, so it is loaded
+ * actual).
+ */
+async function refusal(status: 401 | 403): Promise<WalrusReadError> {
+  const { fetchEnvelopeFromWalrus } = jest.requireActual<typeof WalrusPii>('../walrus-pii');
+  const realFetch = global.fetch;
+  global.fetch = (async () => ({
+    ok: false,
+    status,
+    text: async () => 'forbidden',
+  })) as unknown as typeof fetch;
+  try {
+    await fetchEnvelopeFromWalrus(RENEWED_BLOB);
+  } catch (err) {
+    if (err instanceof WalrusReadError) return err;
+    throw err;
+  } finally {
+    global.fetch = realFetch;
+  }
+  throw new Error('expected the aggregator to refuse the read');
 }
 
 /** Blob ids the lookup fetched from Walrus, in order. */
@@ -254,5 +299,108 @@ describe('includeDisabled (unlink confirmations)', () => {
 
     await expect(resolve({ includeDisabled: true })).rejects.toBe(INDEX_DOWN);
     expect(fetchedBlobs()).toEqual([ANCHORED_BLOB]);
+  });
+});
+
+describe('Walrus read failures', () => {
+  it('reads a 404 on every copy of the blob as a warning and null', async () => {
+    indexMock.mockResolvedValue([RENEWED_BLOB]);
+    registryHolds(onChainLink({ circleId: CIRCLE, blobId: ANCHORED_BLOB }));
+    walrusStores({});
+
+    await expect(resolve()).resolves.toBeNull();
+    expect(fetchedBlobs()).toEqual([RENEWED_BLOB, ANCHORED_BLOB]);
+    expect(appLogger.warn).toHaveBeenCalledWith(
+      '[circle-phone] failed to decrypt PII envelope',
+      expect.objectContaining({ circleId: CIRCLE, transient: false }),
+    );
+  });
+
+  it.each([503, 429, null])(
+    'rethrows a transient failure (%p) on the renewed blob once the anchor has expired',
+    async (status) => {
+      const outage = unavailable(status);
+      indexMock.mockResolvedValue([RENEWED_BLOB]);
+      registryHolds(onChainLink({ circleId: CIRCLE, blobId: ANCHORED_BLOB }));
+      walrusStores({ [RENEWED_BLOB]: outage });
+
+      await expect(resolve()).rejects.toBe(outage);
+      // The anchored blob was still tried before giving up.
+      expect(fetchedBlobs()).toEqual([RENEWED_BLOB, ANCHORED_BLOB]);
+      expect(appLogger.warn).toHaveBeenCalledWith(
+        '[circle-phone] failed to decrypt PII envelope',
+        expect.objectContaining({ circleId: CIRCLE, transient: true }),
+      );
+    },
+  );
+
+  it.each([401, 403] as const)(
+    'rethrows a refusal (%i) that fails every read, logged as an error',
+    async (status) => {
+      // A refusal is the aggregator turning this server away, not an answer
+      // about the blob: the circle may well be linked.
+      const refused = await refusal(status);
+      indexMock.mockResolvedValue([RENEWED_BLOB]);
+      registryHolds(onChainLink({ circleId: CIRCLE, blobId: ANCHORED_BLOB }));
+      walrusStores({ [RENEWED_BLOB]: refused, [ANCHORED_BLOB]: refused });
+
+      await expect(resolve()).rejects.toBe(refused);
+      expect(fetchedBlobs()).toEqual([RENEWED_BLOB, ANCHORED_BLOB]);
+      expect(appLogger.error).toHaveBeenCalledTimes(2);
+      expect(appLogger.error).toHaveBeenCalledWith(
+        '[circle-phone] Walrus aggregator refused the read',
+        {
+          circleId: CIRCLE,
+          transient: true,
+          error: `Walrus aggregator returned ${status} (read refused: check WALRUS_AGGREGATOR_URL): forbidden`,
+        },
+      );
+      expect(appLogger.warn).not.toHaveBeenCalled();
+    },
+  );
+
+  it('resolves through the anchored blob while the renewed copy cannot be read', async () => {
+    indexMock.mockResolvedValue([RENEWED_BLOB]);
+    registryHolds(onChainLink({ circleId: CIRCLE, blobId: ANCHORED_BLOB }));
+    walrusStores({ [RENEWED_BLOB]: unavailable(503), [ANCHORED_BLOB]: individual(PHONE) });
+
+    await expect(resolve()).resolves.toBe(PHONE);
+  });
+
+  it('rethrows a transient failure on the anchored blob when the index has no row', async () => {
+    const outage = unavailable(429);
+    indexMock.mockResolvedValue([]);
+    registryHolds(onChainLink({ circleId: CIRCLE, blobId: ANCHORED_BLOB }));
+    walrusStores({ [ANCHORED_BLOB]: outage });
+
+    await expect(resolve()).rejects.toBe(outage);
+  });
+
+  it('rethrows the first failure, the index read, when the anchored blob cannot be read either', async () => {
+    indexMock.mockRejectedValue(INDEX_DOWN);
+    registryHolds(onChainLink({ circleId: CIRCLE, blobId: ANCHORED_BLOB }));
+    walrusStores({ [ANCHORED_BLOB]: unavailable(503) });
+
+    await expect(resolve()).rejects.toBe(INDEX_DOWN);
+  });
+
+  it('still answers "not linked" for an unlinked circle during an outage', async () => {
+    // Nothing to read means nothing to fail: events of unlinked circles keep
+    // advancing instead of halting the stream behind them.
+    indexMock.mockResolvedValue([]);
+    registryHolds(onChainLink({ circleId: OTHER_CIRCLE, blobId: 'not-this-circle' }));
+    walrusStores({ 'not-this-circle': unavailable(503) });
+
+    await expect(resolve()).resolves.toBeNull();
+    expect(decryptMock).not.toHaveBeenCalled();
+  });
+
+  it('rethrows a transient failure on the just-disabled link of an unlink confirmation', async () => {
+    const outage = unavailable(null);
+    indexMock.mockResolvedValue([]);
+    registryHolds(onChainLink({ circleId: CIRCLE, blobId: ANCHORED_BLOB, enabled: false }));
+    walrusStores({ [ANCHORED_BLOB]: outage });
+
+    await expect(resolve({ includeDisabled: true })).rejects.toBe(outage);
   });
 });

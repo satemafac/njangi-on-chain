@@ -6,7 +6,14 @@ import {
   buildFinalizeAndRedeemTx,
   buildFinalizeAndRedeemWithAttestationTx,
   buildOpenCycleTx,
+  buildRedeemClaimTx,
 } from '@/services/cycle-escrow-service';
+import {
+  findRecipientClaim,
+  resolveCollectRoute,
+  resolveEscrowStage,
+  type EscrowStage,
+} from '@/lib/cycle-escrow-collect';
 import { preparePaymentCoin } from '@/lib/payment-coin-builder';
 import { useZkLoginSigner } from '@/hooks/useZkLoginSigner';
 import type { TransactionBuilder } from '@/lib/zklogin-client-signer';
@@ -123,15 +130,6 @@ function explain(error: unknown): string {
   return String(error);
 }
 
-type Stage =
-  | 'loading'
-  | 'no-round-open'
-  | 'in-progress'
-  | 'full-waiting-for-claim'
-  | 'completed'
-  /** Refunds began on chain; only a re-open (by the admin) moves the round on. */
-  | 'refunded';
-
 export function CycleEscrowPanel({
   circleId,
   network,
@@ -157,6 +155,13 @@ export function CycleEscrowPanel({
   // that the admin has not opened the round.
   const [loadError, setLoadError] = useState(false);
   const [busy, setBusy] = useState<null | 'pay' | 'claim' | 'advance'>(null);
+  // Why the last Collect on a finalized round did not sign, keyed to its
+  // escrow so a later round never inherits it. `unreadable` is a failed
+  // lookup (retry); `missing` means the claim is not in this wallet.
+  const [collectIssue, setCollectIssue] = useState<{
+    escrowId: string;
+    kind: 'unreadable' | 'missing';
+  } | null>(null);
   // The one in-flight flag for every control that opens a round. Held past
   // the transaction's resolution until discovery shows the new escrow (or
   // a bounded timeout) — see cycle-open-round-lock.ts for the incident
@@ -281,17 +286,16 @@ export function CycleEscrowPanel({
   const isUserRecipient =
     !!userAddress && !!recipient && userAddress.toLowerCase() === recipient.toLowerCase();
 
-  const stage: Stage = useMemo(() => {
-    if (loading) return 'loading';
-    if (!summary || !liveState) return 'no-round-open';
-    // Checked first: a refunded escrow is unfinalized/unclaimed on chain and
-    // would otherwise render as an in-progress round whose "pay" aborts.
-    if (liveState.refunded) return 'refunded';
-    if (liveState.claimed) return 'completed';
-    if (liveState.finalized) return 'full-waiting-for-claim';
-    if (paidSoFar >= totalRequired && totalRequired > 0) return 'full-waiting-for-claim';
-    return 'in-progress';
-  }, [loading, summary, liveState, paidSoFar, totalRequired]);
+  const stage: EscrowStage = useMemo(
+    () =>
+      resolveEscrowStage({
+        loading,
+        state: summary ? liveState : null,
+        paidSoFar,
+        totalRequired,
+      }),
+    [loading, summary, liveState, paidSoFar, totalRequired],
+  );
 
   // What a settled round can do next. Only meaningful in the `completed`
   // stage; everywhere else the escrow itself already says what happens.
@@ -698,9 +702,64 @@ export function CycleEscrowPanel({
   }, [summary, userAddress, network, coinType, contributionAmountBase, runWithSigner, resolveAttestationIdOrAbort]);
 
   const onCollectPayout = useCallback(async () => {
-    if (!summary) return;
+    if (!summary || !liveState) return;
+    if (!isReady || !userAddress) {
+      toast.error(t('toast.signInAgain'));
+      return;
+    }
+    setCollectIssue(null);
+    // Someone else may already have finalized this round
+    // (`finalize_to_recipient` is permissionless); finalize_and_redeem*
+    // would then abort 205. See cycle-escrow-collect.ts.
+    const route = resolveCollectRoute(liveState);
+    if (route.kind === 'none') {
+      if (route.reason === 'gated-claim') {
+        toast.error(
+          'This round requires verification, so its payout cannot be collected here. Please contact support.',
+        );
+        return;
+      }
+      // Collected or refunded since this view rendered: re-read it.
+      void refresh();
+      return;
+    }
+
     const attestationId = await resolveAttestationIdOrAbort();
     if (attestationId === 'ABORT') return;
+
+    if (route.kind === 'redeem-claim') {
+      // Ungated escrows only: the route refuses gated ones. The pass
+      // resolved above still applies the deployment's verification policy
+      // (the gate flag) to this path, but `redeem_claim` takes none.
+      setBusy('claim');
+      const lookup = await findRecipientClaim({
+        client: rpcClient,
+        network,
+        owner: userAddress,
+        escrowId: summary.escrowId,
+        cycleNo: liveState.cycleNo,
+        coinType,
+      });
+      if (lookup.kind !== 'found') {
+        setBusy(null);
+        // A failed read is "try again", never "no claim".
+        setCollectIssue({
+          escrowId: summary.escrowId,
+          kind: lookup.kind === 'absent' ? 'missing' : 'unreadable',
+        });
+        return;
+      }
+      const redeem = buildRedeemClaimTx({
+        network,
+        escrowId: summary.escrowId,
+        claimId: lookup.claim.claimId,
+        coinType,
+        // Same atomic rotation advance as the one-step collect below.
+        circleId,
+      });
+      void runWithSigner('claim', redeem, 120_000_000);
+      return;
+    }
 
     // Same arity requirement as the gated contribute: the on-chain entry
     // takes the escrow-pinned ComplianceConfig, so resolve it or refuse
@@ -735,7 +794,20 @@ export function CycleEscrowPanel({
           circleId,
         });
     void runWithSigner('claim', build, 120_000_000);
-  }, [summary, network, coinType, circleId, runWithSigner, resolveAttestationIdOrAbort]);
+  }, [
+    summary,
+    liveState,
+    isReady,
+    userAddress,
+    network,
+    coinType,
+    circleId,
+    rpcClient,
+    refresh,
+    runWithSigner,
+    resolveAttestationIdOrAbort,
+    t,
+  ]);
 
   // Recovery: advance a circle whose payout was collected but whose rotation
   // never moved on (e.g. claimed before the collect flow chained the advance).
@@ -1142,6 +1214,17 @@ export function CycleEscrowPanel({
               </div>
             ) : null}
           </div>
+
+          {stage === 'full-waiting-for-claim' &&
+          isUserRecipient &&
+          collectIssue &&
+          collectIssue.escrowId === summary?.escrowId ? (
+            <p role="status" className="mt-3 text-sm text-amber-700">
+              {collectIssue.kind === 'missing'
+                ? t('escrow.collect.claimNotFound')
+                : t('escrow.collect.claimUnreadable')}
+            </p>
+          ) : null}
         </>
       )}
 

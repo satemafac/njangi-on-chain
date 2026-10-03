@@ -9,11 +9,16 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { MessageCircle, Link as LinkIcon, Unlink, Loader } from 'lucide-react';
+import { MessageCircle, Link as LinkIcon, Unlink, Loader, RefreshCw } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { AccountData } from '@/services/zkLoginService';
 import { ZkLoginClient } from '@/services/zkLoginClient';
 import { getCurrentNetwork } from '@/services/network-config';
+import {
+  fetchWhatsAppLinkStatus,
+  type WhatsAppLinkStatus,
+} from '@/lib/whatsapp-link-status';
+import WhatsAppLinkedRecipient from './WhatsAppLinkedRecipient';
 import ConfirmationModal from './ConfirmationModal';
 import BillingUpsellModal, {
   parseUpgradeRequired,
@@ -35,14 +40,10 @@ interface WhatsAppIntegrationProps {
   circleId: string;
   adminAddress: string;
   account: AccountData;  // Full zkLogin account data
+  // The manage page's own admin check. Only then does the card ask the
+  // server for the masked linked number; the server checks again.
+  isAdmin?: boolean;
   onLinked?: (status: boolean) => void;
-}
-
-interface LinkedStatus {
-  isLinked: boolean;
-  linkType?: 1 | 2; // 1 = phone number; 2 = group, unsupported (see PHONE_LINK_TYPE)
-  recipient?: string;
-  linkedAt?: string;
 }
 
 // Validation functions
@@ -66,10 +67,17 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
   circleId,
   adminAddress,
   account,
+  isAdmin = false,
   onLinked
 }) => {
-  const [linkedStatus, setLinkedStatus] = useState<LinkedStatus>({ isLinked: false });
-  const [loading, setLoading] = useState(false);
+  const [linkedStatus, setLinkedStatus] = useState<WhatsAppLinkStatus>({ isLinked: false });
+  // Starts true: until the first read answers, the status is unknown and the
+  // card shows the spinner, not the "Link to WhatsApp" button.
+  const [loading, setLoading] = useState(true);
+  // Distinguishes "couldn't check" from "not linked". A failed read used to
+  // set isLinked: false, so a 500 from the status route offered to link a
+  // circle that may already be linked on chain.
+  const [loadError, setLoadError] = useState(false);
   const [linking, setLinking] = useState(false);
   const [showLinkForm, setShowLinkForm] = useState(false);
   const [showUnlinkConfirm, setShowUnlinkConfirm] = useState(false);
@@ -84,43 +92,33 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
   useEffect(() => {
     checkLinkStatus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [circleId]);
+  }, [circleId, isAdmin]);
 
   const checkLinkStatus = async () => {
+    setLoadError(false);
     try {
       setLoading(true);
-      
-      // Get current network selection
-      const currentNetwork = getCurrentNetwork();
-      
-      // Query the API to check if circle is linked on blockchain
-      const response = await fetch(`/api/whatsapp/admin-link-circle?circleId=${circleId}&network=${currentNetwork}`, {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json'
-        }
-      });
 
-      if (response.ok) {
-        const data = await response.json();
-        if (data.data?.isLinked) {
-          setLinkedStatus({
-            isLinked: true,
-            linkType: data.data.linkType,
-            recipient: data.data.recipient,
-            linkedAt: data.data.linkedAt
-          });
-        } else {
-          setLinkedStatus({ isLinked: false });
-        }
-      } else {
-        // Assume not linked if query fails
-      setLinkedStatus({ isLinked: false });
-      }
+      // Only the route's answer is a status: fetchWhatsAppLinkStatus throws
+      // when the read fails or the reply has no isLinked flag, and the catch
+      // below shows "couldn't check". The admin view also asks for the masked
+      // number; a 401/403 falls back to the public probe
+      // (src/lib/whatsapp-link-status.ts). Don't log the result: it can carry
+      // that number.
+      setLinkedStatus(
+        await fetchWhatsAppLinkStatus({
+          circleId,
+          network: getCurrentNetwork(),
+          includeRecipient: isAdmin,
+        }),
+      );
     } catch (error) {
-      console.error('Error checking link status:', error);
-      // Default to not linked on error
-      setLinkedStatus({ isLinked: false });
+      // warn, not error: the failure is handled below, and in dev
+      // console.error opens Next's error overlay over the card.
+      console.warn('Error checking link status:', error);
+      // Not "not linked": the circle may already be linked on chain. Leave
+      // linkedStatus alone; the card shows "Couldn't check" and Retry instead.
+      setLoadError(true);
     } finally {
       setLoading(false);
     }
@@ -337,6 +335,33 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
     }
   };
 
+  // Returns before the views below: while the status is unknown the card
+  // offers no link form, no Link button and no Unlink, only Retry.
+  if (loadError) {
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center space-x-2">
+          <MessageCircle className="w-5 h-5 text-green-600" />
+          <h3 className="font-semibold text-gray-900">WhatsApp Integration</h3>
+        </div>
+        <div role="alert" className="rounded-[18px] border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+          <p className="font-semibold">{"Couldn't check WhatsApp status"}</p>
+          <p className="mt-2">
+            {"This circle may already be linked, so we're not offering to link or unlink it until a check succeeds."}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => checkLinkStatus()}
+          className="w-full px-4 py-2 bg-white text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50 transition flex items-center justify-center text-sm font-medium"
+        >
+          <RefreshCw className="w-4 h-4 mr-2" />
+          Retry
+        </button>
+      </div>
+    );
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center p-4">
@@ -389,15 +414,7 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
                   <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-green-700">Link Type</p>
                   <p className="mt-2 text-lg font-semibold text-gray-900">📱 Individual</p>
                 </div>
-                <div className="rounded-[18px] border border-stone-200 bg-white p-3">
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Recipient</p>
-                  <p className="mt-2 break-all text-lg font-semibold text-gray-900">{linkedStatus.recipient}</p>
-                  {linkedStatus.linkedAt && (
-                    <p className="mt-2 text-xs text-gray-500">
-                      Linked on: {new Date(linkedStatus.linkedAt).toLocaleDateString()}
-                    </p>
-                  )}
-                </div>
+                <WhatsAppLinkedRecipient status={linkedStatus} />
               </div>
 
               <div className="rounded-[18px] bg-gradient-to-r from-green-50 to-emerald-50 p-3">
