@@ -135,13 +135,15 @@ requireValue(
   read(`ENOKI_API_KEY_${networkUpper}`),
 );
 
+// The WhatsApp values the webhook and the notifier read. The webhook callback
+// URL is set in Meta's App Dashboard, not here. WHATSAPP_BUSINESS_ACCOUNT_ID
+// is optional: no code reads it, and only template management in WhatsApp
+// Manager uses the account id.
 for (const key of [
   'WHATSAPP_PHONE_NUMBER_ID',
   'WHATSAPP_ACCESS_TOKEN',
   'WHATSAPP_VERIFY_TOKEN',
   'WHATSAPP_APP_SECRET',
-  'WHATSAPP_WEBHOOK_URL',
-  'WHATSAPP_BUSINESS_ACCOUNT_ID',
 ]) {
   requireValue(key, read(key));
 }
@@ -210,6 +212,18 @@ if (piiPreviousKey && !piiMasterKey) {
     'WALRUS_PII_PREVIOUS_MASTER_KEY is the same key as WALRUS_PII_MASTER_KEY. During a key rotation the previous key ' +
       'is the OLD key and the master key the NEW one; see docs/environment.md.',
   );
+}
+
+// Walrus System object overrides (src/lib/walrus-epoch.ts). Optional: the
+// renewal cron reads the current Walrus epoch from each network's documented
+// System object unless one is set, and a malformed value fails every run.
+for (const key of ['WALRUS_SYSTEM_OBJECT_ID_TESTNET', 'WALRUS_SYSTEM_OBJECT_ID_MAINNET']) {
+  const value = read(key);
+  if (value && (!/^0x[0-9a-fA-F]{1,64}$/.test(value) || /^0x0+$/.test(value))) {
+    errors.push(
+      `${key} is "${value}", not a Sui object id. Leave it empty to use the documented Walrus System object.`,
+    );
+  }
 }
 
 if (read('NEXT_PUBLIC_FACEBOOK_CLIENT_SECRET')) {
@@ -329,6 +343,17 @@ for (const key of [
     warnings.push(
       `${key} is set but unused — it belonged to the retired whatsapp-bot-backend service. Remove it from .env.local.`,
     );
+  }
+}
+
+// October 2026: no code ever read these two, and an env var must not choose
+// the Graph API version (see src/lib/whatsapp-graph-api.ts).
+for (const [key, reason] of [
+  ['WHATSAPP_API_VERSION', 'the Graph API version is the WHATSAPP_GRAPH_API_VERSION constant in src/lib/whatsapp-graph-api.ts'],
+  ['WHATSAPP_WEBHOOK_URL', "the webhook callback URL is set in Meta's App Dashboard"],
+]) {
+  if (read(key)) {
+    warnings.push(`${key} is set but unused — ${reason}. Remove it from .env.local and the Vercel project.`);
   }
 }
 

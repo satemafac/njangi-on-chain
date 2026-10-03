@@ -52,6 +52,13 @@ code reads them; `npm run validate:env` warns when one is set in `.env.local`.
 Delete any that are still set, locally or in Vercel. `.env.example` lists the
 other variables that were removed with the bot.
 
+`WHATSAPP_API_VERSION` and `WHATSAPP_WEBHOOK_URL` were removed in October
+2026. No code read either one; `npm run validate:env` warns when one is set.
+The Graph API version is the `WHATSAPP_GRAPH_API_VERSION` constant in
+[`src/lib/whatsapp-graph-api.ts`](../src/lib/whatsapp-graph-api.ts), and the
+webhook callback URL is set in Meta's App Dashboard. Delete both, locally and
+in Vercel. `WHATSAPP_BUSINESS_ACCOUNT_ID` is optional: no code reads it.
+
 ## Deprecated aliases
 
 The app still tolerates these as one-release shims and warns when it uses them:
@@ -105,6 +112,57 @@ Validate the local env before deploying:
 npm run validate:env
 ```
 
+## Walrus blob renewal
+
+Each linked WhatsApp number or group id is stored as an encrypted Walrus blob,
+and Walrus keeps a blob only for the epochs it was paid for
+(`WALRUS_STORAGE_EPOCHS`, default 5). The on-chain link anchors never expire,
+so `/api/cron/walrus-renewal` (daily at 03:00 UTC) re-stores every blob that has
+`RENEWAL_THRESHOLD_EPOCHS` (default 2) or fewer epochs left, and points
+`whatsapp_phone_index` at the new copy.
+
+Both settings count **Walrus** epochs, which are not Sui epochs: a Walrus epoch
+lasts a day on testnet and two weeks on mainnet. With the defaults a blob is
+re-stored about 3 epochs after it was stored (3 days on testnet, 6 weeks on
+mainnet), for 5 more. Keep `WALRUS_STORAGE_EPOCHS` above
+`RENEWAL_THRESHOLD_EPOCHS`, and the threshold at 1 or more (lower values fall
+back to 2).
+
+The cron reads the current Walrus epoch from the Walrus System object of the
+active network:
+
+| Network | System object (default) | Override |
+| --- | --- | --- |
+| testnet | `0x6c2547cbbc38025cf3adac45f63cb0a8d12ecf777cdc75a4971612bf97fdf6af` | `WALRUS_SYSTEM_OBJECT_ID_TESTNET` |
+| mainnet | `0x2134d52768ea07e8c43570ef975eb3e4c27a39fa6396bef985b5abc58d03ddd2` | `WALRUS_SYSTEM_OBJECT_ID_MAINNET` |
+
+The defaults come from the
+[Walrus network reference](https://docs.wal.app/docs/network-reference). Leave
+the overrides empty unless `WALRUS_PUBLISHER_URL` stores on a different Walrus
+deployment, for example after a testnet redeploy.
+
+Each run logs `[cron/walrus-renewal] run complete` with `walrusEpoch`,
+`considered`, `skipped`, `renewed`, `failed`, `raced`, `deferred` and
+`leaseMismatches`. It answers 500 instead when:
+
+- the Walrus epoch can't be read. Nothing is renewed, and the error names the
+  System object and its override variable.
+- a renewed blob's new lease ends within `RENEWAL_THRESHOLD_EPOCHS` epochs of
+  the current one (`leaseMismatches`). The renewals stand, but those rows would
+  be re-stored every day: either the publisher stores on another Walrus
+  deployment than the System object the cron reads, or `WALRUS_STORAGE_EPOCHS`
+  is not above `RENEWAL_THRESHOLD_EPOCHS`.
+
+A run renews the blobs closest to expiry first, then blobs with no recorded end
+epoch, then blobs whose lease has already ended. It starts no renewal after 45
+seconds (the function may run for 60), and counts what it didn't reach as
+`deferred`. Those are tried again the next day, ahead of any lease with more
+time left. Renewals run one at a time, each a Walrus download plus an upload,
+so a run renews only as many blobs as fit in those 45 seconds. If `deferred`
+stays above zero day after day, renewals are falling behind; a larger
+`WALRUS_STORAGE_EPOCHS` (Walrus allows up to 53) makes each blob need renewal
+less often.
+
 ## Rotating the WhatsApp PII keys
 
 `WALRUS_PII_MASTER_KEY` encrypts each linked WhatsApp number or group id
@@ -119,7 +177,8 @@ renewal all fail, and the blobs then lapse unrenewed.
 decrypts with the current key first and falls back to the previous one (the GCM
 authentication tag shows which key sealed an envelope). Everything the app
 encrypts, renewals included, uses the current key. The renewal cron
-(`/api/cron/walrus-renewal`, daily at 03:00 UTC) re-stores each blob before its
+(`/api/cron/walrus-renewal`, daily at 03:00 UTC; see
+[Walrus blob renewal](#walrus-blob-renewal)) re-stores each blob before its
 lease runs out, so every blob moves to the new key within one lease. Leave the
 variable empty outside a rotation. `npm run validate:env` rejects a previous key
 that equals the master key or doesn't decode to 32 bytes.
@@ -148,14 +207,17 @@ that equals the master key or doesn't decode to 32 bytes.
      That includes the original blobs the on-chain link anchors point at:
      renewal updates only `whatsapp_phone_index`, and the app's on-chain
      fallbacks still read the anchors.
-   - This query, run against the production database with your timestamp,
-     returns no rows. It lists the index rows with no renewal since that cron
-     run, each recorded in `walrus_renewal_audit`:
+   - This query, run against the production database with your timestamp in
+     both places, in UTC (`created_at` has no time zone; Neon writes it in
+     UTC), returns no rows. It lists the index rows that already existed at
+     that cron run and have had no renewal since, each renewal being recorded
+     in `walrus_renewal_audit`:
 
      ```sql
      SELECT idx.id, idx.circle_id
        FROM whatsapp_phone_index idx
-      WHERE NOT EXISTS (
+      WHERE idx.created_at < TIMESTAMP '2026-10-03 03:00:00'
+        AND NOT EXISTS (
               SELECT 1
                 FROM walrus_renewal_audit audit
                WHERE audit.index_row_id = idx.id
@@ -163,12 +225,17 @@ that equals the master key or doesn't decode to 32 bytes.
             );
      ```
 
-     A row linked after the deploy is already on the new key and drops off the
-     list at its first renewal. A row that never drops off is one the cron
-     fails to re-store; its `[walrus-renewal] blob renewal failed` log line
-     names the row id and the error. If that blob's lease has already run out,
-     the link is broken with or without the old key, and the circle admin has to
-     link WhatsApp again.
+     The cron re-stores a blob once `RENEWAL_THRESHOLD_EPOCHS` or fewer of its
+     epochs remain, so each of these rows comes up within
+     `WALRUS_STORAGE_EPOCHS` − `RENEWAL_THRESHOLD_EPOCHS` Walrus epochs of that
+     run (3 with the defaults; later if runs report `deferred`), before the
+     first condition holds. Rows linked after that run were sealed with the new
+     key, so the query leaves them out; a row linked between the deploy and that
+     run is on the new key too, and drops off the list at its first renewal. A
+     row that never drops off is one the cron fails to re-store; its
+     `[walrus-renewal] blob renewal failed` log line names the row id and the
+     error. If that blob's lease has already run out, the link is broken with or
+     without the old key, and the circle admin has to link WhatsApp again.
 6. Delete `WALRUS_PII_PREVIOUS_MASTER_KEY` and redeploy. Then destroy your
    copies of the old key.
 

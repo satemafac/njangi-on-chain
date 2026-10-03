@@ -85,7 +85,10 @@ const PACKAGE_LINEAGE_BY_NETWORK: Record<NetworkType, PublishedPackageMetadata> 
   // `release_open_round` for abandoned escrows (PR #20); v9 (2026-09-06)
   // made `create_circle` store the real custody wallet id instead of the
   // circle's own id (PR #14) — circles created from v9 on resolve their
-  // wallet from the `wallet_id` field alone.
+  // wallet from the `wallet_id` field alone; v10 (2026-10-03) lets
+  // `finalize_and_redeem*` collect a round that is already finalized (PR #83)
+  // — a body-only change that defines no new types, so nothing new is
+  // anchored to it.
   //
   // published-at = latest package (move-call target); original-id stays v1
   // (type identity + event filters). Every version since has been an UPGRADE,
@@ -96,7 +99,7 @@ const PACKAGE_LINEAGE_BY_NETWORK: Record<NetworkType, PublishedPackageMetadata> 
   // Either would have been upgrade-incompatible and forced a new lineage,
   // stranding every existing circle.
   testnet: {
-    publishedAt: '0xf8afd3dfcf94f152ec9d1f8cb870b77525353a20564bb0224bcad5520d621614',
+    publishedAt: '0x1ee9995cae5c5e6c5aab75b278733511889b2a67f8dad53773ac36f3215f86b3',
     originalId: '0x89cddf4dfe654e7c7b16333096d9e750cf04bb96f7de934403a512d460594f02',
     // v6 introduced the timed-escrow types; they stay anchored here even
     // after future upgrades move published-at.

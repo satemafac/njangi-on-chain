@@ -69,6 +69,14 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'escrow.refunded':
       'Round {cycle} was cancelled and every contribution went back to the member who paid it. The circle admin can open this round again.',
     'escrow.reopenRound': 'Open this round again',
+    'escrow.refundedExpired':
+      "Round {cycle}'s payout wasn't collected within its 30-day window, so every contribution went back to the member who paid it. The circle admin can open this round again.",
+    'escrow.claimExpired':
+      "The window to collect round {cycle}'s payout closed on {date}, so it can no longer be collected. Sending the contributions back gives each member back the share they paid in.",
+    'escrow.action.sendBack': 'Send the contributions back',
+    'escrow.action.sendingBack': 'Sending back…',
+    'escrow.sendBack.membershipUnknown':
+      "We couldn't check whether you're a member of this round, so sending the contributions back isn't offered here yet. Refresh to try again.",
     'escrow.onlyAdminOpens': 'Only the circle admin can open the round.',
     'escrow.yourShare': 'Your share this round',
     'escrow.whoseTurn': 'Whose turn it is',
@@ -87,15 +95,27 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
       "Everyone has paid. It's your turn — tap below to send the pot straight to your wallet.",
     'escrow.action.collect': 'Collect my payout',
     'escrow.action.collecting': 'Collecting…',
+    'escrow.collect.claimUnreadable':
+      "We couldn't reach the network to look up this round's payout. Nothing was sent — try again in a moment.",
+    'escrow.collect.claimNotFound':
+      "This round's pot has already been closed, but the claim that pays it out isn't in this wallet. If it was closed moments ago, refresh in a minute and try again. If it still isn't there, please contact support.",
     'escrow.prompt.someoneElseCollects':
       'The pot is full. {recipient} can collect their payout now.',
-    'escrow.completed':
+    'escrow.completed.openNextRound':
       '✓ Round {cycle} complete. {recipient} has collected the payout. The circle admin can open the next round whenever everyone is ready.',
+    'escrow.completed.resumeCycle':
+      '✓ Round {cycle} complete. {recipient} has collected the payout, and that was the last member of this rotation, so everyone in it has now been paid once. To continue, the circle admin needs to resume the cycle to start the next lap, then open its first round. Security deposits already posted stay in place, so no one has to post one again.',
+    'escrow.completed.advanceRotation':
+      '✓ Round {cycle} complete. {recipient} has collected the payout, but the circle has not yet moved on to the next member. The circle admin needs to advance the rotation before the next round can open.',
+    'escrow.completed.unknown':
+      "✓ Round {cycle} complete. {recipient} has collected the payout. We couldn't confirm this circle's next step, so none is shown yet.",
     'escrow.lastTx': 'Last transaction: {digest}',
     // Toasts
     'toast.roundOpened': 'This round is now open — members can pay their share.',
     'toast.sharePaid': 'Thanks! Your share is in the pot.',
     'toast.payoutSent': 'Your payout is on its way to your wallet.',
+    'toast.contributionsSentBack':
+      'The contributions are on their way back to the members who paid in.',
     'toast.signInAgain': 'Please sign in again to continue.',
     'toast.genericError': 'Something went wrong: {error}',
     // Dashboard alerts
@@ -407,7 +427,9 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'pricing.free.feature.zklogin': 'zkLogin sign-in with self-custodied wallets',
     'pricing.premium.feature.members': 'Up to {count} members per circle',
     'pricing.premium.feature.circles': 'Run up to {count} circles at once',
-    'pricing.premium.feature.whatsapp': 'WhatsApp linking + turn and payout notifications',
+    // WhatsApp copy here and in billing.whatsappSuite.* names only updates
+    // listed in src/content/whatsapp-updates.ts (guard: copy-guards.test.ts).
+    'pricing.premium.feature.whatsapp': 'Circle updates on WhatsApp, sent to the number you link',
     'pricing.premium.feature.goals': 'Smart savings goals for your circles',
     'pricing.premium.feature.everything': 'Everything in Free',
     'pricing.alwaysFreeNoteLabel': 'Always free, on every plan:',
@@ -422,7 +444,7 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'billing.generic.body': 'Upgrade to Premium to unlock it for your circles.',
     'billing.whatsappSuite.title': 'WhatsApp updates are a Premium feature',
     'billing.whatsappSuite.body':
-      'Link your circle to WhatsApp so members get turn reminders and payout alerts right where they already chat.',
+      "Link a WhatsApp number to your circle, and that number gets the circle's updates: who joins or is removed, security deposits paid or returned, changes to the payout order, and the circle going live.",
     'billing.maxMembers.title': 'Bigger circles are a Premium feature',
     'billing.maxMembers.body':
       'Free circles hold a few close members. Premium grows a circle to the full rotation the contract supports.',
@@ -560,6 +582,14 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'escrow.refunded':
       "Le tour {cycle} a été annulé et chaque versement est revenu au membre qui l'avait fait. L'administrateur du cercle peut rouvrir ce tour.",
     'escrow.reopenRound': 'Rouvrir ce tour',
+    'escrow.refundedExpired':
+      "Le versement du tour {cycle} n'a pas été récupéré dans le délai de 30 jours : chaque contribution est revenue au membre qui l'avait versée. L'administrateur du cercle peut rouvrir ce tour.",
+    'escrow.claimExpired':
+      "Le délai pour récupérer le versement du tour {cycle} a pris fin le {date} : il ne peut plus être récupéré. Renvoyer les contributions rend à chaque membre la part qu'il a versée.",
+    'escrow.action.sendBack': 'Renvoyer les contributions',
+    'escrow.action.sendingBack': 'Renvoi en cours…',
+    'escrow.sendBack.membershipUnknown':
+      "Nous n'avons pas pu vérifier si vous faites partie de ce tour : le renvoi des contributions n'est donc pas encore proposé ici. Actualisez pour réessayer.",
     'escrow.onlyAdminOpens': "Seul l'administrateur du cercle peut ouvrir le tour.",
     'escrow.yourShare': 'Votre part ce tour',
     'escrow.whoseTurn': "C'est le tour de",
@@ -580,16 +610,28 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
       "Tout le monde a payé. C'est votre tour — appuyez ci-dessous pour envoyer la cagnotte à votre portefeuille.",
     'escrow.action.collect': 'Récupérer mon versement',
     'escrow.action.collecting': 'Récupération…',
+    'escrow.collect.claimUnreadable':
+      "Impossible de joindre le réseau pour retrouver le versement de ce tour. Rien n'a été envoyé — réessayez dans un instant.",
+    'escrow.collect.claimNotFound':
+      "La cagnotte de ce tour a déjà été clôturée, mais le bon qui permet de la récupérer n'est pas dans ce portefeuille. Si elle vient d'être clôturée, actualisez dans une minute et réessayez. S'il n'y est toujours pas, contactez l'assistance.",
     'escrow.prompt.someoneElseCollects':
       'La cagnotte est complète. {recipient} peut récupérer son versement maintenant.',
-    'escrow.completed':
+    'escrow.completed.openNextRound':
       '✓ Tour {cycle} terminé. {recipient} a récupéré le versement. L\'administrateur peut ouvrir le prochain tour quand tout le monde est prêt.',
+    'escrow.completed.resumeCycle':
+      "✓ Tour {cycle} terminé. {recipient} a récupéré le versement, et c'était le dernier membre de cette rotation, donc tous ses membres ont maintenant été payés une fois. Ensuite, l'administrateur doit reprendre le cycle pour démarrer une nouvelle rotation, puis en ouvrir le premier tour. Les dépôts de garantie déjà versés restent en place : personne n'a à en verser un autre.",
+    'escrow.completed.advanceRotation':
+      "✓ Tour {cycle} terminé. {recipient} a récupéré le versement, mais le cercle n'est pas encore passé au membre suivant. L'administrateur doit faire avancer la rotation avant que le prochain tour puisse être ouvert.",
+    'escrow.completed.unknown':
+      "✓ Tour {cycle} terminé. {recipient} a récupéré le versement. Nous n'avons pas pu confirmer la prochaine étape pour ce cercle, donc aucune n'est affichée pour le moment.",
     'escrow.lastTx': 'Dernière transaction : {digest}',
     // Toasts
     'toast.roundOpened':
       'Le tour est ouvert — les membres peuvent maintenant verser leur part.',
     'toast.sharePaid': 'Merci ! Votre part est dans la cagnotte.',
     'toast.payoutSent': 'Votre versement est en route vers votre portefeuille.',
+    'toast.contributionsSentBack':
+      'Les contributions sont en route vers les membres qui les ont versées.',
     'toast.signInAgain': 'Veuillez vous reconnecter pour continuer.',
     'toast.genericError': 'Quelque chose ne va pas : {error}',
     // Dashboard alerts
@@ -902,7 +944,7 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'pricing.free.feature.zklogin': 'Connexion zkLogin avec portefeuilles en autodétention',
     'pricing.premium.feature.members': "Jusqu'à {count} membres par cercle",
     'pricing.premium.feature.circles': "Gérez jusqu'à {count} cercles à la fois",
-    'pricing.premium.feature.whatsapp': 'Liaison WhatsApp + notifications de tour et de paiement',
+    'pricing.premium.feature.whatsapp': 'Mises à jour du cercle sur WhatsApp, envoyées au numéro que vous reliez',
     'pricing.premium.feature.goals': "Objectifs d'épargne intelligents pour vos cercles",
     'pricing.premium.feature.everything': 'Tout ce qui est inclus dans Gratuit',
     'pricing.alwaysFreeNoteLabel': 'Toujours gratuit, sur tous les forfaits :',
@@ -917,7 +959,7 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'billing.generic.body': 'Passez à Premium pour la débloquer pour vos cercles.',
     'billing.whatsappSuite.title': 'Les notifications WhatsApp sont une fonctionnalité Premium',
     'billing.whatsappSuite.body':
-      "Reliez votre cercle à WhatsApp pour que les membres reçoivent les rappels de tour et les alertes de paiement là où ils discutent déjà.",
+      "Reliez un numéro WhatsApp à votre cercle, et ce numéro reçoit ses mises à jour : qui le rejoint ou en est retiré, les dépôts de garantie versés ou restitués, les changements de l'ordre des versements et le démarrage du cercle.",
     'billing.maxMembers.title': 'Les cercles plus grands sont une fonctionnalité Premium',
     'billing.maxMembers.body':
       "Les cercles gratuits réunissent quelques membres proches. Premium étend un cercle à la rotation complète prise en charge par le contrat.",
@@ -1062,8 +1104,14 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'escrow.action.collecting': 'Dey collect…',
     'escrow.prompt.someoneElseCollects':
       'Di pot don full. {recipient} go fit collect dem payout now.',
-    'escrow.completed':
+    'escrow.completed.openNextRound':
       '✓ Round {cycle} don finish. {recipient} don collect di payout. Admin fit open di next round when everybody ready.',
+    'escrow.completed.resumeCycle':
+      '✓ Round {cycle} don finish. {recipient} don collect di payout, and na di last person for dis rotation be dat: everybody for di rotation don collect one time. Now di admin need to resume di cycle make di next lap start, then open di first round. Security deposit wey people don already pay still dey dia, so nobody go need pay am again.',
+    'escrow.completed.advanceRotation':
+      '✓ Round {cycle} don finish. {recipient} don collect di payout, but di circle neva move go di next person. Di admin need to advance di rotation before di next round fit open.',
+    'escrow.completed.unknown':
+      '✓ Round {cycle} don finish. {recipient} don collect di payout. We no fit confirm di next step for dis circle, so we neva show any step.',
     'escrow.lastTx': 'Last transaction: {digest}',
     'toast.roundOpened': 'Di round don open — members fit pay dem share now.',
     'toast.sharePaid': 'Thanks! Your share dey inside di pot.',
@@ -1116,8 +1164,14 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'escrow.action.collecting': 'Inakusanya…',
     'escrow.prompt.someoneElseCollects':
       'Kibanda kimejaa. {recipient} anaweza kuchukua malipo yake sasa.',
-    'escrow.completed':
+    'escrow.completed.openNextRound':
       '✓ Raundi {cycle} imekamilika. {recipient} amechukua malipo. Msimamizi anaweza kufungua raundi inayofuata wakati wote wako tayari.',
+    'escrow.completed.resumeCycle':
+      '✓ Raundi {cycle} imekamilika. {recipient} amechukua malipo, na huyo alikuwa mwanachama wa mwisho wa mzunguko huu, hivyo kila mwanachama wake sasa amelipwa mara moja. Hatua inayofuata: msimamizi anahitaji kuendeleza mzunguko ili mzunguko mpya uanze, kisha kufungua raundi yake ya kwanza. Dhamana za usalama zilizokwisha kuwekwa zinabaki palepale, kwa hivyo hakuna atakayehitaji kuweka dhamana tena.',
+    'escrow.completed.advanceRotation':
+      '✓ Raundi {cycle} imekamilika. {recipient} amechukua malipo, lakini duara bado halijasonga kwa mwanachama anayefuata. Msimamizi anahitaji kusogeza mzunguko mbele kabla ya raundi inayofuata kufunguliwa.',
+    'escrow.completed.unknown':
+      '✓ Raundi {cycle} imekamilika. {recipient} amechukua malipo. Hatukuweza kuthibitisha hatua inayofuata ya duara hili, kwa hivyo hakuna hatua inayoonyeshwa bado.',
     'escrow.lastTx': 'Muamala wa mwisho: {digest}',
     'toast.roundOpened': 'Raundi imefunguliwa — wanachama wanaweza kulipa mchango wao.',
     'toast.sharePaid': 'Asante! Mchango wako uko kwenye kibanda.',
@@ -1170,8 +1224,14 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'escrow.action.collecting': 'በመሰብሰብ ላይ…',
     'escrow.prompt.someoneElseCollects':
       'ገንዘቡ ሞልቷል። {recipient} አሁን ክፍያውን ሊወስድ ይችላል።',
-    'escrow.completed':
+    'escrow.completed.openNextRound':
       '✓ ዙር {cycle} ተጠናቅቋል። {recipient} ክፍያውን ወስዷል። ሁሉም ሲዘጋጅ አስተዳዳሪው ቀጣዩን ዙር ሊከፍት ይችላል።',
+    'escrow.completed.resumeCycle':
+      '✓ ዙር {cycle} ተጠናቅቋል። {recipient} ክፍያውን ወስዷል፣ እሱም የዚህ መዞሪያ የመጨረሻ አባል ነበር፤ በዚህም በዚህ መዞሪያ ውስጥ ያሉ ሁሉም አሁን አንድ ጊዜ ተከፍለዋል። በመቀጠል አስተዳዳሪው ቀጣዩን መዞሪያ ለመጀመር ዑደቱን መቀጠል፣ ከዚያም የመጀመሪያ ዙሩን መክፈት አለበት። አስቀድመው የገቡ የዋስትና ተቀማጮች ባሉበት ይቆያሉ፤ ስለዚህ ማንም እንደገና ተቀማጭ ማስገባት አያስፈልገውም።',
+    'escrow.completed.advanceRotation':
+      '✓ ዙር {cycle} ተጠናቅቋል። {recipient} ክፍያውን ወስዷል፣ ነገር ግን ክበቡ ገና ወደ ቀጣዩ አባል አልተሸጋገረም። ቀጣዩ ዙር ከመከፈቱ በፊት አስተዳዳሪው መዞሪያውን ማራመድ አለበት።',
+    'escrow.completed.unknown':
+      '✓ ዙር {cycle} ተጠናቅቋል። {recipient} ክፍያውን ወስዷል። የዚህን ክበብ ቀጣይ እርምጃ ማረጋገጥ አልቻልንም፣ ስለዚህ ገና ምንም እርምጃ አልታየም።',
     'escrow.lastTx': 'የመጨረሻ ግብይት: {digest}',
     'toast.roundOpened': 'ዙሩ ተከፍቷል — አባላት አሁን ድርሻቸውን ሊከፍሉ ይችላሉ።',
     'toast.sharePaid': 'እናመሰግናለን! ድርሻዎ በገንዘቡ ውስጥ ነው።',
@@ -1222,8 +1282,14 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'escrow.action.collecting': 'جاري الاستلام…',
     'escrow.prompt.someoneElseCollects':
       'الصندوق ممتلئ. يمكن لـ {recipient} استلام مستحقاته الآن.',
-    'escrow.completed':
+    'escrow.completed.openNextRound':
       '✓ اكتملت الجولة {cycle}. لقد استلم {recipient} المستحقات. يمكن للمشرف فتح الجولة التالية عندما يكون الجميع جاهزاً.',
+    'escrow.completed.resumeCycle':
+      '✓ اكتملت الجولة {cycle}. لقد استلم {recipient} المستحقات، وكان آخر عضو في هذا الدوران، لذا حصل كل أعضائه الآن على مستحقاتهم مرة واحدة. بعد ذلك، يحتاج المشرف إلى استئناف الدورة لبدء الدوران التالي، ثم فتح جولته الأولى. تبقى ودائع الضمان المدفوعة مسبقاً في مكانها، فلا يتعيّن على أحد دفع وديعة مرة أخرى.',
+    'escrow.completed.advanceRotation':
+      '✓ اكتملت الجولة {cycle}. لقد استلم {recipient} المستحقات، لكن الدائرة لم تنتقل بعد إلى العضو التالي. يحتاج المشرف إلى تقديم الدوران قبل أن يمكن فتح الجولة التالية.',
+    'escrow.completed.unknown':
+      '✓ اكتملت الجولة {cycle}. لقد استلم {recipient} المستحقات. لم نتمكن من التأكد من الخطوة التالية لهذه الدائرة، لذا لا تُعرض أي خطوة بعد.',
     'escrow.lastTx': 'آخر معاملة: {digest}',
     'toast.roundOpened': 'الجولة مفتوحة الآن — يمكن للأعضاء دفع حصتهم.',
     'toast.sharePaid': 'شكراً لك! حصتك في الصندوق.',
@@ -1274,8 +1340,14 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'escrow.action.collecting': 'در حال دریافت…',
     'escrow.prompt.someoneElseCollects':
       'صندوق پر است. {recipient} اکنون می‌تواند مبلغ خود را دریافت کند.',
-    'escrow.completed':
+    'escrow.completed.openNextRound':
       '✓ دور {cycle} به پایان رسید. {recipient} مبلغ را دریافت کرده است. مدیر می‌تواند هر زمان که همه آماده بودند دور بعدی را باز کند.',
+    'escrow.completed.resumeCycle':
+      '✓ دور {cycle} به پایان رسید. {recipient} مبلغ را دریافت کرده است و آخرین عضو این چرخش بود، پس اکنون همه اعضای آن یک بار مبلغ خود را گرفته‌اند. در گام بعد، مدیر باید چرخه را از سر بگیرد تا چرخش بعدی آغاز شود و سپس نخستین دور آن را باز کند. سپرده‌های تضمینی که پیش‌تر گذاشته شده‌اند سر جای خود می‌مانند، بنابراین لازم نیست کسی دوباره سپرده بگذارد.',
+    'escrow.completed.advanceRotation':
+      '✓ دور {cycle} به پایان رسید. {recipient} مبلغ را دریافت کرده است، اما حلقه هنوز به عضو بعدی نرفته است. مدیر باید پیش از باز شدن دور بعدی، چرخش را جلو ببرد.',
+    'escrow.completed.unknown':
+      '✓ دور {cycle} به پایان رسید. {recipient} مبلغ را دریافت کرده است. نتوانستیم گام بعدی این حلقه را مشخص کنیم، بنابراین هنوز گامی نمایش داده نمی‌شود.',
     'escrow.lastTx': 'آخرین تراکنش: {digest}',
     'toast.roundOpened': 'دور باز شد — اعضا اکنون می‌توانند سهم خود را پرداخت کنند.',
     'toast.sharePaid': 'ممنون! سهم شما در صندوق است.',

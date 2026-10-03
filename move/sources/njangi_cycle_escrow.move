@@ -29,6 +29,8 @@ module njangi::njangi_cycle_escrow {
     // address may finalize the cycle, which mints an owned `Claim<T>`
     // for the predetermined recipient. Only the recipient can redeem the
     // claim, and they redeem the entire balance directly into a `Coin<T>`.
+    // They can also collect a finalized cycle without the claim
+    // (`finalize_and_redeem`), from the escrow's own record of it.
     // No admin discretion exists at any point in the lifecycle; no other
     // module can pull funds out of the escrow.
     //
@@ -791,10 +793,20 @@ module njangi::njangi_cycle_escrow {
         payout_coin
     }
 
-    /// Convenience entry function: finalize + redeem in a single tx,
-    /// transferring the resulting coin to the scheduled recipient. Only
+    /// Convenience entry function: the scheduled recipient collects the
+    /// round's pot in a single tx, and the coin goes straight to them. Only
     /// callable by the scheduled recipient themselves so it preserves the
     /// pull-only semantics.
+    ///
+    /// Works whether or not the round is finalized yet. Unfinalized, it
+    /// finalizes and redeems. Already finalized (`finalize_to_recipient` is
+    /// permissionless, so anyone may have settled the round), it pays out
+    /// from the escrow's own record of the claim: the recipient is frozen in
+    /// the snapshot, the expiry is mirrored in `claim_expires_at_ms`, and the
+    /// pot is the balance. Collecting therefore never depends on where the
+    /// transferable `Claim<T>` object is. Either way the escrow ends up
+    /// claimed, so that Claim can never be redeemed afterwards
+    /// (`E_ALREADY_CLAIMED`) and the pot cannot be paid twice.
     public fun finalize_and_redeem<T>(
         escrow: &mut CycleEscrow<T>,
         clock: &Clock,
@@ -831,10 +843,40 @@ module njangi::njangi_cycle_escrow {
     ) {
         let sender = tx_context::sender(ctx);
         assert!(sender == escrow.snapshot.recipient, E_NOT_RECIPIENT);
-        let claim = mint_claim_internal<T>(escrow, clock, ctx);
         let recipient = escrow.snapshot.recipient;
-        let coin = redeem_claim<T>(escrow, claim, clock, ctx);
+        let coin = if (escrow.finalized) {
+            redeem_finalized<T>(escrow, clock, ctx)
+        } else {
+            let claim = mint_claim_internal<T>(escrow, clock, ctx);
+            redeem_claim<T>(escrow, claim, clock, ctx)
+        };
         transfer::public_transfer(coin, recipient);
+    }
+
+    /// Pays out an already-finalized escrow without its `Claim<T>`, for
+    /// `finalize_and_redeem_internal`, which has checked the sender. The
+    /// guards are `redeem_claim`'s, in the same order, read off the escrow
+    /// instead of the claim. The balance is exactly the amount the claim was
+    /// minted for: contributions abort once finalized, and the only other
+    /// way out is a refund, which sets `refunded` first.
+    fun redeem_finalized<T>(
+        escrow: &mut CycleEscrow<T>,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ): Coin<T> {
+        assert!(!escrow.claimed, E_ALREADY_CLAIMED);
+        assert!(!escrow.refunded, E_ESCROW_REFUNDED);
+        assert!(clock::timestamp_ms(clock) <= escrow.claim_expires_at_ms, E_CLAIM_EXPIRED);
+
+        escrow.claimed = true;
+        let payout = balance::withdraw_all(&mut escrow.balance);
+        event::emit(ClaimRedeemed {
+            escrow_id: object::uid_to_inner(&escrow.id),
+            cycle_no: escrow.snapshot.cycle_no,
+            recipient: escrow.snapshot.recipient,
+            amount: balance::value(&payout),
+        });
+        coin::from_balance(payout, ctx)
     }
 
     /// Advance the circle's rotation after this escrow's payout has been
@@ -2144,6 +2186,230 @@ module njangi::njangi_cycle_escrow {
         let mut circle = ts::take_shared<Circle>(&scenario);
         let escrow = ts::take_shared<CycleEscrow<SUI>>(&scenario);
         advance_circle_after_claim(&mut circle, &escrow, &clock, ts::ctx(&mut scenario));
+        abort 0
+    }
+
+    // --- collect after a third-party finalize --------------------------
+    //
+    // `finalize_to_recipient` is permissionless, so the recipient can find
+    // their round already finalized, with the Claim<T> in their wallet or,
+    // since it is transferable, somewhere else entirely. Either way they can
+    // collect: redeem that Claim (`redeem_claim`), or call
+    // `finalize_and_redeem`, which pays a finalized escrow out from its own
+    // record of the claim and needs no Claim at all. Both are recipient-only
+    // and both leave the rotation to `advance_circle_after_claim`.
+
+    #[test_only]
+    fun settle_round_as(scenario: &mut ts::Scenario, who: address, clock: &Clock) {
+        ts::next_tx(scenario, who);
+        let mut escrow = ts::take_shared<CycleEscrow<SUI>>(scenario);
+        finalize_to_recipient(&mut escrow, clock, ts::ctx(scenario));
+        ts::return_shared(escrow);
+    }
+
+    #[test_only]
+    fun collect_as(scenario: &mut ts::Scenario, who: address, clock: &Clock) {
+        ts::next_tx(scenario, who);
+        let mut escrow = ts::take_shared<CycleEscrow<SUI>>(scenario);
+        finalize_and_redeem(&mut escrow, clock, ts::ctx(scenario));
+        ts::return_shared(escrow);
+    }
+
+    #[test]
+    fun test_redeem_after_third_party_finalize_then_advance() {
+        let mut scenario = ts::begin(TEST_ADMIN);
+        let clock = setup_circle_and_escrow(&mut scenario);
+        contribute_as(&mut scenario, TEST_BOB);
+        contribute_as(&mut scenario, TEST_CAROL);
+
+        // Carol (not the recipient) settles the round.
+        ts::next_tx(&mut scenario, TEST_CAROL);
+        let mut escrow = ts::take_shared<CycleEscrow<SUI>>(&scenario);
+        finalize_to_recipient(&mut escrow, &clock, ts::ctx(&mut scenario));
+        ts::return_shared(escrow);
+
+        // The recipient's Collect: redeem, pay the escrow's recipient, advance.
+        ts::next_tx(&mut scenario, TEST_ADMIN);
+        let claim = ts::take_from_sender<Claim<SUI>>(&scenario);
+        let mut escrow = ts::take_shared<CycleEscrow<SUI>>(&scenario);
+        let mut circle = ts::take_shared<Circle>(&scenario);
+        let payout = redeem_claim(&mut escrow, claim, &clock, ts::ctx(&mut scenario));
+        transfer::public_transfer(payout, recipient(&escrow));
+        advance_circle_after_claim(&mut circle, &escrow, &clock, ts::ctx(&mut scenario));
+        assert!(is_claimed(&escrow), 9234);
+        assert!(circles::get_current_position(&circle) == 1, 9235);
+        let next_recipient = circles::get_next_payout_recipient(&circle);
+        assert!(option::is_some(&next_recipient), 9236);
+        assert!(*option::borrow(&next_recipient) == TEST_BOB, 9237);
+        ts::return_shared(circle);
+        ts::return_shared(escrow);
+
+        // The whole pot (two contributions) reached the recipient.
+        assert_received_refund(&mut scenario, TEST_ADMIN, 2 * TEST_CONTRIBUTION);
+
+        clock::destroy_for_testing(clock);
+        ts::end(scenario);
+    }
+
+    #[test]
+    fun test_finalize_and_redeem_collects_after_third_party_finalize() {
+        let mut scenario = ts::begin(TEST_ADMIN);
+        let clock = setup_circle_and_escrow(&mut scenario);
+        contribute_as(&mut scenario, TEST_BOB);
+        contribute_as(&mut scenario, TEST_CAROL);
+        settle_round_as(&mut scenario, TEST_CAROL, &clock);
+
+        // One call collects (the Claim stays untouched in the recipient's
+        // wallet), and the rotation advances in the same transaction.
+        ts::next_tx(&mut scenario, TEST_ADMIN);
+        let mut escrow = ts::take_shared<CycleEscrow<SUI>>(&scenario);
+        let mut circle = ts::take_shared<Circle>(&scenario);
+        finalize_and_redeem(&mut escrow, &clock, ts::ctx(&mut scenario));
+        advance_circle_after_claim(&mut circle, &escrow, &clock, ts::ctx(&mut scenario));
+        assert!(is_claimed(&escrow), 9280);
+        assert!(total_contributed(&escrow) == 0, 9281);
+        assert!(circles::get_current_position(&circle) == 1, 9282);
+        ts::return_shared(circle);
+        ts::return_shared(escrow);
+
+        // The whole pot (two contributions) reached the recipient.
+        assert_received_refund(&mut scenario, TEST_ADMIN, 2 * TEST_CONTRIBUTION);
+
+        clock::destroy_for_testing(clock);
+        ts::end(scenario);
+    }
+
+    #[test]
+    fun test_finalize_and_redeem_collects_when_claim_is_elsewhere() {
+        // The Claim is transferable, so it may not be where the recipient
+        // is. Collecting must not depend on it.
+        let mut scenario = ts::begin(TEST_ADMIN);
+        let clock = setup_circle_and_escrow(&mut scenario);
+        contribute_as(&mut scenario, TEST_BOB);
+        contribute_as(&mut scenario, TEST_CAROL);
+
+        ts::next_tx(&mut scenario, TEST_ADMIN);
+        let mut escrow = ts::take_shared<CycleEscrow<SUI>>(&scenario);
+        let claim = finalize(&mut escrow, &clock, ts::ctx(&mut scenario));
+        transfer::public_transfer(claim, @0xDEAD);
+        ts::return_shared(escrow);
+
+        collect_as(&mut scenario, TEST_ADMIN, &clock);
+        assert_received_refund(&mut scenario, TEST_ADMIN, 2 * TEST_CONTRIBUTION);
+
+        clock::destroy_for_testing(clock);
+        ts::end(scenario);
+    }
+
+    #[test]
+    fun test_finalize_and_redeem_on_last_ms_of_claim_window() {
+        // Same boundary as redeem_claim: the expiry ms itself still pays.
+        let mut scenario = ts::begin(TEST_ADMIN);
+        let mut clock = setup_circle_and_escrow(&mut scenario);
+        contribute_as(&mut scenario, TEST_BOB);
+        contribute_as(&mut scenario, TEST_CAROL);
+        settle_round_as(&mut scenario, TEST_CAROL, &clock);
+
+        clock::set_for_testing(&mut clock, TEST_START_MS + CLAIM_WINDOW_MS);
+        collect_as(&mut scenario, TEST_ADMIN, &clock);
+        assert_received_refund(&mut scenario, TEST_ADMIN, 2 * TEST_CONTRIBUTION);
+
+        clock::destroy_for_testing(clock);
+        ts::end(scenario);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = E_ALREADY_CLAIMED)]
+    fun test_claim_is_void_after_claimless_collect() {
+        // Collecting without the Claim spends it: the pot cannot be paid twice.
+        let mut scenario = ts::begin(TEST_ADMIN);
+        let clock = setup_circle_and_escrow(&mut scenario);
+        contribute_as(&mut scenario, TEST_BOB);
+        contribute_as(&mut scenario, TEST_CAROL);
+        settle_round_as(&mut scenario, TEST_CAROL, &clock);
+        collect_as(&mut scenario, TEST_ADMIN, &clock);
+
+        ts::next_tx(&mut scenario, TEST_ADMIN);
+        let claim = ts::take_from_sender<Claim<SUI>>(&scenario);
+        let mut escrow = ts::take_shared<CycleEscrow<SUI>>(&scenario);
+        let payout = redeem_claim(&mut escrow, claim, &clock, ts::ctx(&mut scenario));
+        transfer::public_transfer(payout, TEST_ADMIN);
+        abort 0
+    }
+
+    #[test]
+    #[expected_failure(abort_code = E_ALREADY_CLAIMED)]
+    fun test_finalize_and_redeem_twice_aborts() {
+        let mut scenario = ts::begin(TEST_ADMIN);
+        let clock = setup_circle_and_escrow(&mut scenario);
+        contribute_as(&mut scenario, TEST_BOB);
+        contribute_as(&mut scenario, TEST_CAROL);
+        collect_as(&mut scenario, TEST_ADMIN, &clock);
+        collect_as(&mut scenario, TEST_ADMIN, &clock);
+        abort 0
+    }
+
+    #[test]
+    #[expected_failure(abort_code = E_NOT_RECIPIENT)]
+    fun test_finalize_and_redeem_of_finalized_round_by_non_recipient_aborts() {
+        let mut scenario = ts::begin(TEST_ADMIN);
+        let clock = setup_circle_and_escrow(&mut scenario);
+        contribute_as(&mut scenario, TEST_BOB);
+        contribute_as(&mut scenario, TEST_CAROL);
+        settle_round_as(&mut scenario, TEST_CAROL, &clock);
+        collect_as(&mut scenario, TEST_BOB, &clock);
+        abort 0
+    }
+
+    #[test]
+    #[expected_failure(abort_code = E_CLAIM_EXPIRED)]
+    fun test_finalize_and_redeem_after_claim_window_aborts() {
+        // Past the window the pot belongs to the refund path, as with a Claim.
+        let mut scenario = ts::begin(TEST_ADMIN);
+        let mut clock = setup_circle_and_escrow(&mut scenario);
+        contribute_as(&mut scenario, TEST_BOB);
+        contribute_as(&mut scenario, TEST_CAROL);
+        settle_round_as(&mut scenario, TEST_CAROL, &clock);
+
+        clock::set_for_testing(&mut clock, TEST_START_MS + CLAIM_WINDOW_MS + 1);
+        collect_as(&mut scenario, TEST_ADMIN, &clock);
+        abort 0
+    }
+
+    #[test]
+    #[expected_failure(abort_code = E_ESCROW_REFUNDED)]
+    fun test_finalize_and_redeem_after_expired_refund_aborts() {
+        // `refunded` is checked before the expiry, exactly as in redeem_claim.
+        let mut scenario = ts::begin(TEST_ADMIN);
+        let mut clock = setup_circle_and_escrow(&mut scenario);
+        contribute_as(&mut scenario, TEST_BOB);
+        contribute_as(&mut scenario, TEST_CAROL);
+        settle_round_as(&mut scenario, TEST_CAROL, &clock);
+
+        clock::set_for_testing(&mut clock, TEST_START_MS + CLAIM_WINDOW_MS + 1);
+        ts::next_tx(&mut scenario, TEST_CAROL);
+        let mut escrow = ts::take_shared<CycleEscrow<SUI>>(&scenario);
+        refund_expired_claim(&mut escrow, &clock, ts::ctx(&mut scenario));
+        ts::return_shared(escrow);
+
+        collect_as(&mut scenario, TEST_ADMIN, &clock);
+        abort 0
+    }
+
+    #[test]
+    #[expected_failure(abort_code = E_ALREADY_CLAIMED)]
+    fun test_refund_after_claimless_collect_aborts() {
+        let mut scenario = ts::begin(TEST_ADMIN);
+        let mut clock = setup_circle_and_escrow(&mut scenario);
+        contribute_as(&mut scenario, TEST_BOB);
+        contribute_as(&mut scenario, TEST_CAROL);
+        settle_round_as(&mut scenario, TEST_CAROL, &clock);
+        collect_as(&mut scenario, TEST_ADMIN, &clock);
+
+        clock::set_for_testing(&mut clock, TEST_START_MS + CLAIM_WINDOW_MS + 1);
+        ts::next_tx(&mut scenario, TEST_CAROL);
+        let mut escrow = ts::take_shared<CycleEscrow<SUI>>(&scenario);
+        refund_expired_claim(&mut escrow, &clock, ts::ctx(&mut scenario));
         abort 0
     }
 

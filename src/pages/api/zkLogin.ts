@@ -36,6 +36,7 @@ import { getCircleConfigFields } from '@/lib/circle-config';
 import { getMinimumAutoReleaseDelayMsForMoveCycleLength } from '@/lib/auto-release';
 import { normalizeRecoveryDelegateAddress } from '@/lib/recovery-delegate';
 import { isResolvedSuiObjectId } from '@/lib/sui-object-id';
+import { readBalanceField } from '@/lib/custody-wallet-balance';
 import {
   countZkLoginSessions,
   deleteZkLoginSession,
@@ -982,10 +983,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const { action, jwt, account, provider, circleData, circleId, newMaxMembers, network, origin } = req.body; // Add newMaxMembers and network
     let sessionId = req.cookies['session-id'];
 
-    // Always log the current session state for debugging
+    // Always log the current session state for debugging. Never the
+    // session id itself: the cookie value is the session's credential.
     console.log('Current session state:', {
       action,
-      sessionId,
+      hasSessionCookie: Boolean(sessionId),
       hasSession: sessionId ? await sessions.has(sessionId) : false,
       sessionCount: await sessions.size()
     });
@@ -1080,7 +1082,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         // Log the setup data being stored
         console.log('Storing initial setup:', {
-          sessionId,
           provider: initialSetup.provider,
           maxEpoch: initialSetup.maxEpoch,
           network: initialSetup.network,
@@ -1108,14 +1109,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             
             // If the process has been running for less than the cooldown, return a "processing" status
             if (elapsedTime < PROCESSING_COOLDOWN) {
-              console.log(`Session ${sessionId} is already being processed (${elapsedTime}ms elapsed)`);
+              console.log(`Session is already being processed (${elapsedTime}ms elapsed)`);
               return res.status(202).json({ 
                 status: 'processing',
                 message: 'Authentication is being processed. Please wait.' 
               });
             } else {
               // If it's been too long, remove the processing lock and try again
-              console.log(`Processing timeout for session ${sessionId}, retrying`);
+              console.log('Session processing timed out, retrying');
               PROCESSING_SESSIONS.delete(sessionId);
             }
           }
@@ -1138,7 +1139,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           
           // If we already have account data, return it immediately
           if (savedSetup.account) {
-            console.log(`Session ${sessionId} already has account data, returning immediately`);
+            console.log('Session already has account data, returning immediately');
             return res.status(200).json(savedSetup.account);
           }
           
@@ -1252,7 +1253,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           const accountData = await processPromise;
           
           console.log('Storing account data:', {
-            sessionId,
             address: accountData.userAddr,
             maxEpoch: savedSetup.maxEpoch,
             protocolVersion: savedSetup.protocolVersion ?? 1,
@@ -1295,7 +1295,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         try {
           // Log the transaction attempt
           console.log('Attempting transaction:', {
-            sessionId,
             address: account.userAddr,
             hasSession: await sessions.has(sessionId),
           });
@@ -1443,8 +1442,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           // Ensure salt and address seed can be generated
           try {
             BigInt(session.account.userSalt);
-          } catch (error) {
-            console.error('Invalid salt format:', error);
+          } catch {
+            // Not the error itself: BigInt's message echoes the salt value.
+            console.error('Invalid salt format in session account data');
             await sessions.delete(sessionId);
             clearSessionCookie(res);
             return res.status(401).json({
@@ -1679,7 +1679,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         try {
           // Log the transaction attempt
           console.log('Attempting circle deletion:', {
-            sessionId,
             address: account.userAddr,
             circleId: req.body.circleId,
             hasSession: await sessions.has(sessionId),
@@ -1805,7 +1804,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           // Only perform wallet validation if walletObj exists (network match)
           if (walletObj && walletObj.data?.content) {
             // Check if wallet belongs to the circle
-            const walletContent = walletObj.data.content as { fields?: { circle_id?: string, balance?: { fields?: { value?: string } } } };
+            const walletContent = walletObj.data.content as { fields?: { circle_id?: string, balance?: unknown } };
             if (walletContent?.fields?.circle_id !== circleId) {
               console.error(`Wallet ${walletId} does not belong to circle ${circleId}`);
               return res.status(400).json({ 
@@ -1813,18 +1812,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               });
             }
             
-            // NEW: Check wallet balance before attempting deletion
-            if (walletContent?.fields?.balance?.fields?.value) {
-              const balance = BigInt(walletContent.fields.balance.fields.value);
-              if (balance > 0) {
-                console.log(`Wallet has non-zero balance: ${balance}`);
-                return res.status(400).json({
-                  error: 'Cannot delete: The wallet has SUI balance. Please withdraw all funds first.',
-                  code: 'EWalletHasBalance',
-                  walletBalance: balance.toString(),
-                  walletId: walletId
-                });
-              }
+            // Courtesy pre-check: delete_circle itself refuses a wallet that
+            // still holds funds (abort 6), in every published version.
+            // JSON-RPC renders the Balance<SUI> as a plain string, which this
+            // used to miss; an unreadable balance falls through to that
+            // on-chain guard rather than reading as empty.
+            const balance = readBalanceField(walletContent?.fields?.balance);
+            if (balance !== null && balance > 0n) {
+              console.log(`Wallet has non-zero balance: ${balance}`);
+              return res.status(400).json({
+                error: 'Cannot delete: The wallet has SUI balance. Please withdraw all funds first.',
+                code: 'EWalletHasBalance',
+                walletBalance: balance.toString(),
+                walletId: walletId
+              });
             }
             
             // NEW: Check for any coins in dynamic fields

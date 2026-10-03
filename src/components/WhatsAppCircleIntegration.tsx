@@ -3,38 +3,47 @@
  * 
  * Seamlessly integrated WhatsApp management for circle admins
  * - Link/unlink circles to WhatsApp
- * - Select individual or group chat
+ * - Link a phone number (group links are not supported; see PHONE_LINK_TYPE)
  * - View WhatsApp status
  * - No additional login required
  */
 
 import React, { useState, useEffect } from 'react';
-import { MessageCircle, Link as LinkIcon, Unlink, Loader } from 'lucide-react';
+import { MessageCircle, Link as LinkIcon, Unlink, Loader, RefreshCw } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { AccountData } from '@/services/zkLoginService';
 import { ZkLoginClient } from '@/services/zkLoginClient';
 import { getCurrentNetwork } from '@/services/network-config';
+import {
+  fetchWhatsAppLinkStatus,
+  type WhatsAppLinkStatus,
+} from '@/lib/whatsapp-link-status';
+import WhatsAppLinkedRecipient from './WhatsAppLinkedRecipient';
 import ConfirmationModal from './ConfirmationModal';
 import BillingUpsellModal, {
   parseUpgradeRequired,
   type UpgradeRequiredDetails,
 } from './BillingUpsellModal';
 import { humanizeErrorMessage } from '@/lib/user-error-messages';
+import { WHATSAPP_UPDATE_LINES } from '@/content/whatsapp-updates';
 import PhoneInput, { isValidPhoneNumber } from 'react-phone-number-input';
 import 'react-phone-number-input/style.css';
+
+// Links are always to a phone number. The WhatsApp Cloud API can message a
+// group only if our business number created it through Meta's Groups API, so a
+// group id copied from the WhatsApp app (…@g.us) never received anything, and
+// admin-link-circle now refuses linkType 2. The registry still holds any group
+// link made earlier; the linked view marks those unsupported.
+const PHONE_LINK_TYPE = 1;
 
 interface WhatsAppIntegrationProps {
   circleId: string;
   adminAddress: string;
   account: AccountData;  // Full zkLogin account data
+  // The manage page's own admin check. Only then does the card ask the
+  // server for the masked linked number; the server checks again.
+  isAdmin?: boolean;
   onLinked?: (status: boolean) => void;
-}
-
-interface LinkedStatus {
-  isLinked: boolean;
-  linkType?: 1 | 2; // 1 = individual, 2 = group
-  recipient?: string;
-  linkedAt?: string;
 }
 
 // Validation functions
@@ -51,79 +60,29 @@ const validatePhoneNumber = (phone: string | undefined): { valid: boolean; error
   return { valid: true };
 };
 
-const validateGroupId = (groupId: string): { valid: boolean; error?: string } => {
-  const trimmed = groupId.trim();
-  
-  // Check if empty
-  if (!trimmed) {
-    return { valid: false, error: 'Group ID is required' };
-  }
-  
-  // Must end with @g.us (WhatsApp group format - universal across all regions)
-  if (!trimmed.endsWith('@g.us')) {
-    return { valid: false, error: 'Group ID must end with @g.us' };
-  }
-  
-  // Extract the part before @g.us
-  const groupPart = trimmed.substring(0, trimmed.length - 5);
-  
-  // WhatsApp supports two formats:
-  // Format 1: XXXXXXXXXX-XXXXXXXXXX@g.us (timestamp-creation ID)
-  // Format 2: XXXXXXXXXXXXXXXXX@g.us (single long ID)
-  
-  // Check if it's format 1 (with hyphen)
-  if (groupPart.includes('-')) {
-    // Must be numbers-numbers
-    if (!/^\d+-\d+$/.test(groupPart)) {
-      return { valid: false, error: 'Group ID format should be: numbers-numbers@g.us' };
-    }
-    
-    const parts = groupPart.split('-');
-    const [part1, part2] = parts;
-    
-    // Each part should be reasonably sized
-    if (part1.length < 5 || part1.length > 20 || part2.length < 5 || part2.length > 20) {
-      return { valid: false, error: 'Group ID parts should be 5-20 digits each' };
-    }
-  } else {
-    // Format 2: single long ID (must be all digits)
-    if (!/^\d+$/.test(groupPart)) {
-      return { valid: false, error: 'Group ID must contain only digits' };
-    }
-    
-    // Should be 10-20 digits for a single format
-    if (groupPart.length < 10 || groupPart.length > 20) {
-      return { valid: false, error: 'Group ID should be 10-20 digits (or use timestamp-ID format)' };
-    }
-  }
-  
-  return { valid: true };
-};
-
-const getValidationError = (linkType: 1 | 2, value: string): string | null => {
-  if (linkType === 1) {
-    const result = validatePhoneNumber(value);
-    return result.error || null;
-  } else {
-    const result = validateGroupId(value);
-    return result.error || null;
-  }
-};
+const getValidationError = (value: string): string | null =>
+  validatePhoneNumber(value).error || null;
 
 const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
   circleId,
   adminAddress,
   account,
+  isAdmin = false,
   onLinked
 }) => {
-  const [linkedStatus, setLinkedStatus] = useState<LinkedStatus>({ isLinked: false });
-  const [loading, setLoading] = useState(false);
+  const [linkedStatus, setLinkedStatus] = useState<WhatsAppLinkStatus>({ isLinked: false });
+  // Starts true: until the first read answers, the status is unknown and the
+  // card shows the spinner, not the "Link to WhatsApp" button.
+  const [loading, setLoading] = useState(true);
+  // Distinguishes "couldn't check" from "not linked". A failed read used to
+  // set isLinked: false, so a 500 from the status route offered to link a
+  // circle that may already be linked on chain.
+  const [loadError, setLoadError] = useState(false);
   const [linking, setLinking] = useState(false);
   const [showLinkForm, setShowLinkForm] = useState(false);
   const [showUnlinkConfirm, setShowUnlinkConfirm] = useState(false);
-  
-  const [linkType, setLinkType] = useState<1 | 2>(1);
-  const [phoneOrGroup, setPhoneOrGroup] = useState('');
+
+  const [phone, setPhone] = useState('');
   const [validationError, setValidationError] = useState<string | null>(null);
   // WhatsApp linking is a premium feature — a 402 opens the upsell
   // modal instead of toasting the raw UPGRADE_REQUIRED code.
@@ -133,43 +92,33 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
   useEffect(() => {
     checkLinkStatus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [circleId]);
+  }, [circleId, isAdmin]);
 
   const checkLinkStatus = async () => {
+    setLoadError(false);
     try {
       setLoading(true);
-      
-      // Get current network selection
-      const currentNetwork = getCurrentNetwork();
-      
-      // Query the API to check if circle is linked on blockchain
-      const response = await fetch(`/api/whatsapp/admin-link-circle?circleId=${circleId}&network=${currentNetwork}`, {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json'
-        }
-      });
 
-      if (response.ok) {
-        const data = await response.json();
-        if (data.data?.isLinked) {
-          setLinkedStatus({
-            isLinked: true,
-            linkType: data.data.linkType,
-            recipient: data.data.recipient,
-            linkedAt: data.data.linkedAt
-          });
-        } else {
-          setLinkedStatus({ isLinked: false });
-        }
-      } else {
-        // Assume not linked if query fails
-      setLinkedStatus({ isLinked: false });
-      }
+      // Only the route's answer is a status: fetchWhatsAppLinkStatus throws
+      // when the read fails or the reply has no isLinked flag, and the catch
+      // below shows "couldn't check". The admin view also asks for the masked
+      // number; a 401/403 falls back to the public probe
+      // (src/lib/whatsapp-link-status.ts). Don't log the result: it can carry
+      // that number.
+      setLinkedStatus(
+        await fetchWhatsAppLinkStatus({
+          circleId,
+          network: getCurrentNetwork(),
+          includeRecipient: isAdmin,
+        }),
+      );
     } catch (error) {
-      console.error('Error checking link status:', error);
-      // Default to not linked on error
-      setLinkedStatus({ isLinked: false });
+      // warn, not error: the failure is handled below, and in dev
+      // console.error opens Next's error overlay over the card.
+      console.warn('Error checking link status:', error);
+      // Not "not linked": the circle may already be linked on chain. Leave
+      // linkedStatus alone; the card shows "Couldn't check" and Retry instead.
+      setLoadError(true);
     } finally {
       setLoading(false);
     }
@@ -182,8 +131,8 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
       setValidationError(null);
       setLinking(true);
 
-      if (!phoneOrGroup.trim()) {
-        const error = `${linkType === 1 ? 'Phone number' : 'Group ID'} is required`;
+      if (!phone.trim()) {
+        const error = 'Phone number is required';
         setValidationError(error);
         toast.error(error);
         setLinking(false);
@@ -191,7 +140,7 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
       }
 
       // Validate input
-      const error = getValidationError(linkType, phoneOrGroup);
+      const error = getValidationError(phone);
       if (error) {
         setValidationError(error);
         toast.error(error);
@@ -214,8 +163,8 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
         },
         body: JSON.stringify({
           circleId,
-          linkType,
-          phoneOrGroup: phoneOrGroup.trim(),
+          linkType: PHONE_LINK_TYPE,
+          phoneOrGroup: phone.trim(),
           adminAddress,
           network: currentNetwork,
         })
@@ -252,7 +201,7 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
           packageId: prepared.packageId,
           registryObjectId: prepared.registryObjectId,
           circleId,
-          linkType,
+          linkType: PHONE_LINK_TYPE,
           walrusBlobId: prepared.walrusBlobId,
           linkNonce,
           network: currentNetwork,
@@ -275,8 +224,8 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           circleId,
-          linkType,
-          phoneOrGroup: phoneOrGroup.trim(),
+          linkType: PHONE_LINK_TYPE,
+          phoneOrGroup: phone.trim(),
           adminAddress,
           network: currentNetwork,
           anchoredDigest,
@@ -291,7 +240,7 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
 
       toast.success('✅ Circle linked to WhatsApp successfully!');
       setShowLinkForm(false);
-      setPhoneOrGroup('');
+      setPhone('');
       setValidationError(null);
       onLinked?.(true);
       
@@ -386,6 +335,33 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
     }
   };
 
+  // Returns before the views below: while the status is unknown the card
+  // offers no link form, no Link button and no Unlink, only Retry.
+  if (loadError) {
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center space-x-2">
+          <MessageCircle className="w-5 h-5 text-green-600" />
+          <h3 className="font-semibold text-gray-900">WhatsApp Integration</h3>
+        </div>
+        <div role="alert" className="rounded-[18px] border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+          <p className="font-semibold">{"Couldn't check WhatsApp status"}</p>
+          <p className="mt-2">
+            {"This circle may already be linked, so we're not offering to link or unlink it until a check succeeds."}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => checkLinkStatus()}
+          className="w-full px-4 py-2 bg-white text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50 transition flex items-center justify-center text-sm font-medium"
+        >
+          <RefreshCw className="w-4 h-4 mr-2" />
+          Retry
+        </button>
+      </div>
+    );
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center p-4">
@@ -395,6 +371,10 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
     );
   }
 
+  // A group link made before admin-link-circle refused them: it is on chain,
+  // but nothing can message it (see PHONE_LINK_TYPE).
+  const isGroupLink = linkedStatus.isLinked && linkedStatus.linkType === 2;
+
   return (
     <div className="space-y-4">
       <div className="mb-3 flex flex-col gap-2 sm:mb-4 sm:flex-row sm:items-center sm:justify-between">
@@ -403,44 +383,52 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
           <h3 className="font-semibold text-gray-900">WhatsApp Integration</h3>
         </div>
         {linkedStatus.isLinked && (
-          <span className="bg-green-100 text-green-800 px-3 py-1 rounded-full text-xs font-medium">
-            ✅ Linked
-          </span>
+          isGroupLink ? (
+            <span className="bg-amber-100 text-amber-800 px-3 py-1 rounded-full text-xs font-medium">
+              ⚠️ Not supported
+            </span>
+          ) : (
+            <span className="bg-green-100 text-green-800 px-3 py-1 rounded-full text-xs font-medium">
+              ✅ Linked
+            </span>
+          )
         )}
       </div>
 
       {linkedStatus.isLinked ? (
         // Show linked status
         <div className="space-y-3">
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            <div className="rounded-[18px] border border-green-200 bg-green-50/70 p-3">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-green-700">Link Type</p>
-              <p className="mt-2 text-lg font-semibold text-gray-900">
-                {linkedStatus.linkType === 1 ? '📱 Individual' : '👥 Group'}
+          {isGroupLink ? (
+            <div className="rounded-[18px] border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+              <p className="font-semibold">👥 This circle is linked to a WhatsApp group</p>
+              <p className="mt-2">
+                Group links are not supported. WhatsApp only lets a business number message
+                groups it created itself, so this group gets no updates. Unlink it, then link
+                a phone number.
               </p>
             </div>
-            <div className="rounded-[18px] border border-stone-200 bg-white p-3">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Recipient</p>
-              <p className="mt-2 break-all text-lg font-semibold text-gray-900">{linkedStatus.recipient}</p>
-              {linkedStatus.linkedAt && (
-                <p className="mt-2 text-xs text-gray-500">
-                  Linked on: {new Date(linkedStatus.linkedAt).toLocaleDateString()}
-                </p>
-              )}
-            </div>
-          </div>
+          ) : (
+            <>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <div className="rounded-[18px] border border-green-200 bg-green-50/70 p-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-green-700">Link Type</p>
+                  <p className="mt-2 text-lg font-semibold text-gray-900">📱 Individual</p>
+                </div>
+                <WhatsAppLinkedRecipient status={linkedStatus} />
+              </div>
 
-          <div className="rounded-[18px] bg-gradient-to-r from-green-50 to-emerald-50 p-3">
-            <p className="text-sm text-gray-700">
-              ✨ This circle will receive WhatsApp notifications for:
-            </p>
-            <ul className="mt-3 space-y-1 pl-4 text-xs text-gray-600">
-              <li>✓ New cycle started</li>
-              <li>✓ Member contributions</li>
-              <li>✓ Deadline reminders</li>
-              <li>✓ Payout notifications</li>
-            </ul>
-          </div>
+              <div className="rounded-[18px] bg-gradient-to-r from-green-50 to-emerald-50 p-3">
+                <p className="text-sm text-gray-700">
+                  ✨ The linked number gets:
+                </p>
+                <ul className="mt-3 space-y-1 pl-4 text-xs text-gray-600">
+                  {WHATSAPP_UPDATE_LINES.map((line) => (
+                    <li key={line}>✓ {line}</li>
+                  ))}
+                </ul>
+              </div>
+            </>
+          )}
 
           <button
             onClick={() => setShowUnlinkConfirm(true)}
@@ -478,161 +466,122 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
             >
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Chat Type
+                  Phone Number
                 </label>
-                <select
-                  value={linkType}
-                  onChange={(e) => {
-                    setLinkType(parseInt(e.target.value) as 1 | 2);
-                    setPhoneOrGroup('');
-                    setValidationError(null);
-                  }}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-                >
-                  <option value={1}>📱 Individual (Phone Number)</option>
-                  <option value={2}>👥 Group Chat (Group ID)</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  {linkType === 1 ? 'Phone Number' : 'Group ID'}
-                </label>
-                {linkType === 1 ? (
-                  <div className="phone-input-wrapper">
-                    <PhoneInput
-                      international
-                      countryCallingCodeEditable={false}
-                      defaultCountry="US"
-                      value={phoneOrGroup}
-                      onChange={(value) => {
-                        setPhoneOrGroup(value || '');
-                        // Real-time validation
-                        if (value) {
-                          const error = getValidationError(linkType, value);
-                          setValidationError(error);
-                        } else {
-                          setValidationError(null);
-                        }
-                      }}
-                      disabled={linking}
-                      className="phone-input-custom"
-                    />
-                    <style jsx global>{`
-                      .phone-input-wrapper .PhoneInput {
-                        display: flex;
-                        flex-direction: column;
-                        align-items: stretch;
-                        gap: 10px;
-                      }
-                      @media (min-width: 640px) {
-                        .phone-input-wrapper .PhoneInput {
-                          flex-direction: row;
-                          align-items: center;
-                          gap: 8px;
-                        }
-                      }
-                      .phone-input-wrapper .PhoneInputCountry {
-                        display: flex;
-                        align-items: center;
-                        justify-content: space-between;
-                        width: 100%;
-                        padding: 8px 12px;
-                        background: #f9fafb;
-                        border: 1px solid #d1d5db;
-                        border-radius: 8px;
-                        cursor: pointer;
-                        transition: all 0.2s;
-                      }
-                      @media (min-width: 640px) {
-                        .phone-input-wrapper .PhoneInputCountry {
-                          justify-content: flex-start;
-                          width: auto;
-                        }
-                      }
-                      .phone-input-wrapper .PhoneInputCountry:hover {
-                        background: #f3f4f6;
-                        border-color: #9ca3af;
-                      }
-                      .phone-input-wrapper .PhoneInputCountryIcon {
-                        width: 24px;
-                        height: 18px;
-                        border-radius: 2px;
-                        overflow: hidden;
-                        box-shadow: 0 1px 2px rgba(0,0,0,0.1);
-                      }
-                      .phone-input-wrapper .PhoneInputCountryIcon--border {
-                        background-color: transparent;
-                        box-shadow: none;
-                      }
-                      .phone-input-wrapper .PhoneInputCountrySelectArrow {
-                        margin-left: 8px;
-                        width: 8px;
-                        height: 8px;
-                        border-style: solid;
-                        border-color: #6b7280;
-                        border-width: 0 2px 2px 0;
-                        transform: rotate(45deg);
-                        opacity: 0.7;
-                      }
-                      .phone-input-wrapper .PhoneInputInput {
-                        flex: 1;
-                        width: 100%;
-                        min-width: 0;
-                        padding: 10px 14px;
-                        border: 1px solid #d1d5db;
-                        border-radius: 8px;
-                        font-size: 15px;
-                        outline: none;
-                        transition: all 0.2s;
-                      }
-                      .phone-input-wrapper .PhoneInputInput:focus {
-                        border-color: #22c55e;
-                        box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.1);
-                      }
-                      .phone-input-wrapper .PhoneInputInput:disabled {
-                        background: #f9fafb;
-                        cursor: not-allowed;
-                      }
-                      .phone-input-wrapper .PhoneInputInput::placeholder {
-                        color: #9ca3af;
-                      }
-                      .phone-input-wrapper .PhoneInputCountrySelect {
-                        position: absolute;
-                        top: 0;
-                        left: 0;
-                        height: 100%;
-                        width: 100%;
-                        z-index: 1;
-                        border: 0;
-                        opacity: 0;
-                        cursor: pointer;
-                      }
-                      .phone-input-wrapper .PhoneInputCountrySelect option {
-                        padding: 8px;
-                      }
-                    `}</style>
-                  </div>
-                ) : (
-                  <input
-                    type="text"
-                    value={phoneOrGroup}
-                    onChange={(e) => {
-                      const newValue = e.target.value;
-                      setPhoneOrGroup(newValue);
+                <div className="phone-input-wrapper">
+                  <PhoneInput
+                    international
+                    countryCallingCodeEditable={false}
+                    defaultCountry="US"
+                    value={phone}
+                    onChange={(value) => {
+                      setPhone(value || '');
                       // Real-time validation
-                      if (newValue.trim()) {
-                        const error = getValidationError(linkType, newValue);
+                      if (value) {
+                        const error = getValidationError(value);
                         setValidationError(error);
                       } else {
                         setValidationError(null);
                       }
                     }}
-                    placeholder="123456789-1234567890@g.us or 120363043968066561@g.us"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
                     disabled={linking}
+                    className="phone-input-custom"
                   />
-                )}
+                  <style jsx global>{`
+                    .phone-input-wrapper .PhoneInput {
+                      display: flex;
+                      flex-direction: column;
+                      align-items: stretch;
+                      gap: 10px;
+                    }
+                    @media (min-width: 640px) {
+                      .phone-input-wrapper .PhoneInput {
+                        flex-direction: row;
+                        align-items: center;
+                        gap: 8px;
+                      }
+                    }
+                    .phone-input-wrapper .PhoneInputCountry {
+                      display: flex;
+                      align-items: center;
+                      justify-content: space-between;
+                      width: 100%;
+                      padding: 8px 12px;
+                      background: #f9fafb;
+                      border: 1px solid #d1d5db;
+                      border-radius: 8px;
+                      cursor: pointer;
+                      transition: all 0.2s;
+                    }
+                    @media (min-width: 640px) {
+                      .phone-input-wrapper .PhoneInputCountry {
+                        justify-content: flex-start;
+                        width: auto;
+                      }
+                    }
+                    .phone-input-wrapper .PhoneInputCountry:hover {
+                      background: #f3f4f6;
+                      border-color: #9ca3af;
+                    }
+                    .phone-input-wrapper .PhoneInputCountryIcon {
+                      width: 24px;
+                      height: 18px;
+                      border-radius: 2px;
+                      overflow: hidden;
+                      box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+                    }
+                    .phone-input-wrapper .PhoneInputCountryIcon--border {
+                      background-color: transparent;
+                      box-shadow: none;
+                    }
+                    .phone-input-wrapper .PhoneInputCountrySelectArrow {
+                      margin-left: 8px;
+                      width: 8px;
+                      height: 8px;
+                      border-style: solid;
+                      border-color: #6b7280;
+                      border-width: 0 2px 2px 0;
+                      transform: rotate(45deg);
+                      opacity: 0.7;
+                    }
+                    .phone-input-wrapper .PhoneInputInput {
+                      flex: 1;
+                      width: 100%;
+                      min-width: 0;
+                      padding: 10px 14px;
+                      border: 1px solid #d1d5db;
+                      border-radius: 8px;
+                      font-size: 15px;
+                      outline: none;
+                      transition: all 0.2s;
+                    }
+                    .phone-input-wrapper .PhoneInputInput:focus {
+                      border-color: #22c55e;
+                      box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.1);
+                    }
+                    .phone-input-wrapper .PhoneInputInput:disabled {
+                      background: #f9fafb;
+                      cursor: not-allowed;
+                    }
+                    .phone-input-wrapper .PhoneInputInput::placeholder {
+                      color: #9ca3af;
+                    }
+                    .phone-input-wrapper .PhoneInputCountrySelect {
+                      position: absolute;
+                      top: 0;
+                      left: 0;
+                      height: 100%;
+                      width: 100%;
+                      z-index: 1;
+                      border: 0;
+                      opacity: 0;
+                      cursor: pointer;
+                    }
+                    .phone-input-wrapper .PhoneInputCountrySelect option {
+                      padding: 8px;
+                    }
+                  `}</style>
+                </div>
                 {validationError && (
                   <p className="text-xs text-red-500 mt-1">{validationError}</p>
                 )}
@@ -640,13 +589,12 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
 
               <div className="rounded-[16px] bg-blue-50 p-3 text-xs text-blue-700 space-y-1">
                 <p>💡 <strong>Tip:</strong> Circle admins will receive WhatsApp notifications for circle events.</p>
-                <p className="text-xs text-blue-600">Group ID formats: <code className="bg-blue-100 px-1 rounded">123456789-1234567890@g.us</code> or <code className="bg-blue-100 px-1 rounded">120363043968066561@g.us</code></p>
               </div>
 
               <div className="flex flex-col-reverse gap-2 sm:flex-row">
                 <button
                   type="submit"
-                  disabled={linking || !phoneOrGroup.trim() || !!validationError}
+                  disabled={linking || !phone.trim() || !!validationError}
                   className="flex-1 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition text-sm font-medium disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center"
                 >
                   {linking ? (
@@ -665,7 +613,7 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
                   type="button"
                   onClick={() => {
                     setShowLinkForm(false);
-                    setPhoneOrGroup('');
+                    setPhone('');
                     setValidationError(null);
                   }}
                   disabled={linking}

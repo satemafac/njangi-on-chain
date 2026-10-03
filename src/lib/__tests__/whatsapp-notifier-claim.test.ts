@@ -6,6 +6,8 @@
  * flow CLAIMS the `(kind, target, dedupe_key)` row with a single
  * INSERT … ON CONFLICT DO UPDATE … WHERE before sending; only the claim
  * winner sends.
+ *
+ * The last test pins the Graph API URL that send goes to.
  */
 
 jest.mock('../pg-pool', () => {
@@ -37,11 +39,13 @@ import {
   __resetWhatsAppNotifierForTests,
 } from '../whatsapp-notifier';
 import { getSharedPgPool } from '../pg-pool';
+import { WHATSAPP_GRAPH_API_VERSION } from '../whatsapp-graph-api';
 
 const ORIGINAL_ENV = {
   DATABASE_URL: process.env.DATABASE_URL,
   WHATSAPP_PHONE_NUMBER_ID: process.env.WHATSAPP_PHONE_NUMBER_ID,
   WHATSAPP_ACCESS_TOKEN: process.env.WHATSAPP_ACCESS_TOKEN,
+  WHATSAPP_API_VERSION: process.env.WHATSAPP_API_VERSION,
 };
 const ORIGINAL_FETCH = global.fetch;
 
@@ -201,5 +205,21 @@ describe('atomic claim-before-send', () => {
 
     expect(result.sent).toBe(true);
     expect(getQueryMock()).not.toHaveBeenCalled();
+  });
+});
+
+describe('Graph API request', () => {
+  it('posts to the pinned Graph API version, whatever WHATSAPP_API_VERSION says', async () => {
+    // The retired variable, at the value the old docs gave. Nothing may read it.
+    process.env.WHATSAPP_API_VERSION = 'v21.0';
+    delete process.env.DATABASE_URL;
+    __resetWhatsAppNotifierForTests();
+
+    await sendMemberNotification(baseInput);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      `https://graph.facebook.com/${WHATSAPP_GRAPH_API_VERSION}/phone-id/messages`,
+      expect.objectContaining({ method: 'POST' }),
+    );
   });
 });

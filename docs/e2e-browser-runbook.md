@@ -173,8 +173,10 @@ node scripts/assert-not-recipient.mjs \
 
 Works on a settled escrow too: the identity assert is the FIRST guard in the
 function, so once a pot has been claimed the recipient gets
-E_ALREADY_FINALIZED (205) while non-recipients still get 207 — which shows the
-recipient clearing the exact gate that stopped everyone else.
+E_ALREADY_FINALIZED (205) — E_ALREADY_CLAIMED (206) from the package version
+whose `finalize_and_redeem` also collects a finalized escrow — while
+non-recipients still get 207, which shows the recipient clearing the exact gate
+that stopped everyone else.
 
 ### 9 — Compliance surfaces
 - Legal acceptance modal appears before joining and is recorded

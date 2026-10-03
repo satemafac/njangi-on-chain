@@ -1,16 +1,19 @@
 /**
  * GET /api/cron/whatsapp-circle-events
  *
- * Vercel cron (vercel.json: every minute) replacing the retired
- * whatsapp-bot-backend's CircleLinkListenerService — a 5-second polling
- * daemon on :3001 that was unreachable in the deploy layout (June 2026
- * ops-readiness audit) and parsed a registry schema that no longer exists
- * on chain. See whatsapp-bot-backend/DEPRECATED.md for the full mapping.
+ * Vercel cron (vercel.json: every 15 minutes, Sui-first probe gated)
+ * replacing the retired whatsapp-bot-backend's CircleLinkListenerService —
+ * a 5-second polling daemon on :3001 that was unreachable in the deploy
+ * layout (June 2026 ops-readiness audit) and parsed a registry schema that
+ * no longer exists on chain. See whatsapp-bot-backend/DEPRECATED.md for
+ * the full mapping.
  *
  * One invocation drains every stream in CIRCLE_EVENT_STREAMS (circle
- * linked/unlinked, member joined/removed, security deposits, cycle
- * contributions, rotation changes, activation, legacy payouts). Each
- * stream has its own durable cursor + run lease row in the shared
+ * linked/unlinked, member joined/removed, security deposits, rotation
+ * changes, activation, and the per-round escrow's contributions and payout
+ * collections — an escrow event is resolved to its circle and coin type by
+ * one read of the escrow object, cached per run). Each stream has its own
+ * durable cursor + run lease row in the shared
  * `cycle_finalized_cursor` table (same fenced-lease machinery as
  * /api/cron/cycle-finalized — the key is namespaced, the schema is
  * stream-agnostic), so overlapping invocations skip per stream and a
@@ -47,8 +50,10 @@ import {
   CIRCLE_EVENT_STREAMS,
   circleEventCursorKey,
   circleEventDedupeKey,
+  parseEscrowSubject,
   type CircleEventStream,
   type CircleEventMessageContext,
+  type EscrowSubject,
 } from '../../../lib/whatsapp-bot/circle-events';
 import {
   resolveCircleName,
@@ -120,9 +125,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     rpcUrl: getNetworkConfig(network).rpcUrl,
   });
 
-  const maxEventAgeMs = Number(
-    process.env.WHATSAPP_EVENTS_MAX_EVENT_AGE_MS ?? DEDUPE_WINDOW_MS,
-  );
+  const maxEventAgeMs = maxEventAgeMsFromEnv();
   const appBaseUrl = process.env.FRONTEND_URL || 'https://njangionchain.com';
 
   // The whatsapp_integration module's defining package: derive it from the
@@ -151,9 +154,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   // Per-run caches: one circle is usually the subject of several events in
-  // a drain (e.g. N contributions), so resolve phone/name once each.
+  // a drain (e.g. N contributions), so resolve phone/name once each — and
+  // a round's contributions and payout share one escrow read.
   const phoneCache = new Map<string, string | null>();
   const nameCache = new Map<string, string>();
+  const escrowCache = new Map<string, EscrowSubject | null>();
 
   // Computed once per run: on the hourly tick every stream drains fully
   // (probe bypassed) so no cursor can stall behind the quiet-tick skip.
@@ -187,6 +192,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           appBaseUrl,
           phoneCache,
           nameCache,
+          escrowCache,
           forceFullPass,
         }),
       );
@@ -225,8 +231,23 @@ interface DrainStreamContext {
   appBaseUrl: string;
   phoneCache: Map<string, string | null>;
   nameCache: Map<string, string>;
+  /** Escrow id → what its object read yielded (null: no readable escrow). */
+  escrowCache: Map<string, EscrowSubject | null>;
   /** Hourly tick: bypass the Sui-first probe and drain every stream. */
   forceFullPass: boolean;
+}
+
+/**
+ * WHATSAPP_EVENTS_MAX_EVENT_AGE_MS, or the dedupe window when unset or
+ * malformed. A malformed value must not switch the replay guard off:
+ * `age > NaN` is always false, so every event would count as fresh and a
+ * new stream's first pass (fresh cursor, drains from genesis) would replay
+ * its whole history into WhatsApp.
+ */
+function maxEventAgeMsFromEnv(): number {
+  const raw = process.env.WHATSAPP_EVENTS_MAX_EVENT_AGE_MS?.trim();
+  const parsed = raw ? Number(raw) : Number.NaN;
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : DEDUPE_WINDOW_MS;
 }
 
 async function drainStream(
@@ -322,22 +343,39 @@ async function notifyCircleEvent(
   event: { id: EventCursor; parsedJson: unknown; timestampMs?: string | null },
   ctx: DrainStreamContext,
 ): Promise<NotifyOutcome> {
-  const parsed = stream.parse(event.parsedJson);
+  // Fresh-cursor / outage protection: never replay old history as
+  // notifications. Checked before any I/O, so a new stream's first pass —
+  // which drains its whole history — costs no reads for stale events.
+  // Events without a chain timestamp count as fresh.
+  const eventAgeMs = event.timestampMs ? Date.now() - Number(event.timestampMs) : 0;
+  if (eventAgeMs > ctx.maxEventAgeMs) {
+    return 'skipped';
+  }
+
+  // Escrow-rail events name their escrow, not their circle. THROWS on RPC
+  // failure, which the drain maps to 'halt' (cursor not advanced) — an
+  // escrow we could not read is not an escrow that does not exist.
+  let escrow: EscrowSubject | undefined;
+  if (stream.escrowIdOf) {
+    const escrowId = stream.escrowIdOf(event.parsedJson);
+    const subject = escrowId ? await resolveEscrowSubject(ctx, escrowId) : null;
+    if (!subject) return 'skipped';
+    escrow = subject;
+  }
+
+  const parsed = stream.parse(event.parsedJson, escrow);
   if (!parsed) {
     // Malformed payload or filtered (e.g. CustodyDeposited that is not a
     // security deposit) — advance without a send.
     return 'skipped';
   }
 
-  // Fresh-cursor / outage protection: never replay old history as
-  // notifications. Events without a chain timestamp count as fresh.
-  const eventAgeMs = event.timestampMs ? Date.now() - Number(event.timestampMs) : 0;
-  if (eventAgeMs > ctx.maxEventAgeMs) {
-    return 'skipped';
-  }
-
   // Resolve the circle's linked phone. THROWS on registry-read infra
-  // failures, which the drain maps to 'halt' (cursor not advanced).
+  // failures, and on an index read or transient Walrus read failure no
+  // other source made up for; the drain maps a throw to 'halt' (cursor not
+  // advanced).
+  // A throw is never cached, so the circle's next event in this run (on
+  // another stream) looks the phone up again instead of reading a null.
   // Unlink confirmations bypass the cache — they need the disabled link.
   let phone: string | null;
   if (parsed.includeDisabledLink) {
@@ -429,6 +467,30 @@ async function notifyCircleEvent(
   }
   // 'duplicate' (crash-retry window) or 'no_link'.
   return 'skipped';
+}
+
+/**
+ * Reads the CycleEscrow<T> an escrow-rail event names, once per run. Lets
+ * RPC failures throw (the caller halts and the next run retries); null
+ * means the response held no readable escrow, which a retry would not fix.
+ */
+async function resolveEscrowSubject(
+  ctx: DrainStreamContext,
+  escrowId: string,
+): Promise<EscrowSubject | null> {
+  if (ctx.escrowCache.has(escrowId)) return ctx.escrowCache.get(escrowId) ?? null;
+  const response = await ctx.client.getObject({
+    id: escrowId,
+    options: { showType: true, showContent: true },
+  });
+  const subject = parseEscrowSubject(response);
+  if (!subject) {
+    appLogger.warn('[cron/whatsapp-circle-events] event names no readable escrow; skipping', {
+      escrowId,
+    });
+  }
+  ctx.escrowCache.set(escrowId, subject);
+  return subject;
 }
 
 /**
