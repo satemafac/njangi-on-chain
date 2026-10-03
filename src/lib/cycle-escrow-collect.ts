@@ -36,11 +36,41 @@ export type EscrowStage =
   | 'no-round-open'
   | 'in-progress'
   | 'full-waiting-for-claim'
+  /**
+   * Finalized, never collected, and past its claim window on the chain
+   * clock: nobody can collect any more, and `refund_expired_claim` sends the
+   * pot back to the contributors.
+   */
+  | 'claim-expired'
   | 'completed'
   /** Refunds began on chain; only a re-open (by the admin) moves the round on. */
   | 'refunded';
 
-export type EscrowStageState = Pick<CycleEscrowLiveState, 'finalized' | 'claimed' | 'refunded'>;
+export type EscrowStageState = Pick<
+  CycleEscrowLiveState,
+  'finalized' | 'claimed' | 'refunded' | 'claimExpiresAtMs'
+>;
+
+/**
+ * Whether a round's claim window has closed, judged on the CHAIN clock.
+ *
+ * `false` when no window is running (unfinalized, collected or refunded).
+ * `null` when one is running but the answer is unknown: the chain clock could
+ * not be read, or the escrow carries no expiry. Callers must not read null as
+ * either answer. Announcing a closed window on a guess, and offering the
+ * refund that ends it, would take a payout away from its recipient.
+ *
+ * Closed means strictly after the expiry ms, the same boundary as
+ * `refund_expired_claim` (`redeem_claim` still pays on the expiry ms itself).
+ */
+export function claimWindowClosed(
+  state: EscrowStageState,
+  chainNowMs: number | null,
+): boolean | null {
+  if (!state.finalized || state.claimed || state.refunded) return false;
+  if (chainNowMs === null || !(state.claimExpiresAtMs > 0)) return null;
+  return chainNowMs > state.claimExpiresAtMs;
+}
 
 export function resolveEscrowStage(params: {
   loading: boolean;
@@ -48,14 +78,17 @@ export function resolveEscrowStage(params: {
   state: EscrowStageState | null;
   paidSoFar: number;
   totalRequired: number;
+  /** `readChainClockMs`: null when unread, which never closes a window. */
+  chainNowMs?: number | null;
 }): EscrowStage {
-  const { loading, state, paidSoFar, totalRequired } = params;
+  const { loading, state, paidSoFar, totalRequired, chainNowMs = null } = params;
   if (loading) return 'loading';
   if (!state) return 'no-round-open';
   // Checked first: a refunded escrow is unfinalized/unclaimed on chain and
   // would otherwise render as an in-progress round whose "pay" aborts.
   if (state.refunded) return 'refunded';
   if (state.claimed) return 'completed';
+  if (claimWindowClosed(state, chainNowMs) === true) return 'claim-expired';
   // Finalized but unclaimed is waiting on the recipient no matter who
   // finalized it: Collect redeems the Claim already in their wallet (see
   // resolveCollectRoute) instead of minting a second one.

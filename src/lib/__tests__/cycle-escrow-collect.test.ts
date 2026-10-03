@@ -16,6 +16,7 @@
 import type { SuiClient } from '@mysten/sui/client';
 import {
   claimStructType,
+  claimWindowClosed,
   findRecipientClaim,
   MAX_CLAIM_PAGES,
   resolveCollectRoute,
@@ -48,7 +49,42 @@ describe('resolveEscrowStage', () => {
     finalized: false,
     claimed: false,
     refunded: false,
+    claimExpiresAtMs: 0,
     ...over,
+  });
+
+  describe('claim window', () => {
+    // Finalized by someone else; the claim window ends at EXPIRES.
+    const EXPIRES = 1_793_926_356_233;
+    const settled = state({ finalized: true, claimExpiresAtMs: EXPIRES });
+    const stageAt = (chainNowMs: number | null | undefined, s = settled) =>
+      resolveEscrowStage({ loading: false, state: s, paidSoFar: 2, totalRequired: 2, chainNowMs });
+
+    it('is claim-expired once the chain clock passes the expiry', () => {
+      expect(stageAt(EXPIRES + 1)).toBe('claim-expired');
+    });
+
+    it('still waits for the recipient on the expiry ms itself (redeem pays through it)', () => {
+      expect(stageAt(EXPIRES)).toBe('full-waiting-for-claim');
+      expect(stageAt(EXPIRES - 86_400_000)).toBe('full-waiting-for-claim');
+    });
+
+    it('never calls the window closed without a chain clock reading', () => {
+      // A device clock is never consulted, and an unread chain clock is unknown.
+      expect(stageAt(null)).toBe('full-waiting-for-claim');
+      expect(stageAt(undefined)).toBe('full-waiting-for-claim');
+    });
+
+    it('never calls it closed when the escrow records no expiry', () => {
+      expect(stageAt(EXPIRES + 1, state({ finalized: true, claimExpiresAtMs: 0 }))).toBe(
+        'full-waiting-for-claim',
+      );
+    });
+
+    it('lets collected and refunded rounds keep their own stages', () => {
+      expect(stageAt(EXPIRES + 1, { ...settled, claimed: true })).toBe('completed');
+      expect(stageAt(EXPIRES + 1, { ...settled, refunded: true })).toBe('refunded');
+    });
   });
 
   it('shows the third-party-finalized escrow as waiting for its recipient', () => {
@@ -104,6 +140,30 @@ describe('resolveEscrowStage', () => {
     expect(
       resolveEscrowStage({ loading: false, state: null, paidSoFar: 0, totalRequired: 0 }),
     ).toBe('no-round-open');
+  });
+});
+
+describe('claimWindowClosed', () => {
+  const EXPIRES = 1_793_926_356_233;
+  const running = { finalized: true, claimed: false, refunded: false, claimExpiresAtMs: EXPIRES };
+
+  it('is true strictly after the expiry, false up to it', () => {
+    expect(claimWindowClosed(running, EXPIRES + 1)).toBe(true);
+    expect(claimWindowClosed(running, EXPIRES)).toBe(false);
+  });
+
+  it('is unknown (null) while a window runs but the chain clock is unread', () => {
+    expect(claimWindowClosed(running, null)).toBeNull();
+  });
+
+  it('is unknown when a running window has no recorded expiry', () => {
+    expect(claimWindowClosed({ ...running, claimExpiresAtMs: 0 }, EXPIRES + 1)).toBeNull();
+  });
+
+  it('is false when no window is running at all', () => {
+    expect(claimWindowClosed({ ...running, finalized: false, claimExpiresAtMs: 0 }, null)).toBe(false);
+    expect(claimWindowClosed({ ...running, claimed: true }, EXPIRES + 1)).toBe(false);
+    expect(claimWindowClosed({ ...running, refunded: true }, EXPIRES + 1)).toBe(false);
   });
 });
 

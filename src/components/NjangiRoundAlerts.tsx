@@ -11,6 +11,8 @@ import {
 import { getNetworkConfig } from '@/services/network-config';
 import { getPooledSuiClient } from '@/services/sui-rpc-failover';
 import type { NetworkType } from '@/services/whatsapp-registry-service';
+import { readChainClockMs } from '@/lib/chain-clock';
+import { claimWindowClosed } from '@/lib/cycle-escrow-collect';
 
 export interface CircleForAlerts {
   id: string;
@@ -95,7 +97,23 @@ export function NjangiRoundAlerts({ circles, userAddress, network }: NjangiRound
           const escrow = await findCurrentCycleEscrow(network, circle.id);
           if (!escrow) continue;
           const state = await readCycleEscrowState(escrow.escrowId, network, client);
-          if (!state || state.claimed) continue;
+          // Refunded: nothing is due until the admin opens the round again,
+          // and paying into this escrow aborts. (An expired claim ends here.)
+          if (!state || state.claimed || state.refunded) continue;
+
+          // Past its claim window a round is no longer ready to collect: its
+          // pot can only go back to the contributors, which the round panel
+          // offers. Whether the window closed is a chain-clock question, and
+          // an unreadable clock leaves the circle unchecked, not "ready".
+          const windowClosed = claimWindowClosed(
+            state,
+            state.finalized ? await readChainClockMs(client) : null,
+          );
+          if (windowClosed === true) continue;
+          if (windowClosed === null) {
+            failed += 1;
+            continue;
+          }
 
           const symbol = circle.coinSymbol ?? 'SUI';
           const decimals = circle.coinDecimals ?? 9;

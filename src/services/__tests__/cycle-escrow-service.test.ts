@@ -4,6 +4,7 @@ import {
   buildFinalizeAndRedeemWithAttestationTx,
   buildOpenCycleTx,
   buildRedeemClaimTx,
+  buildRefundExpiredClaimTx,
   buildReleaseOpenRoundTx,
 } from '@/services/cycle-escrow-service';
 
@@ -361,6 +362,27 @@ describe('buildRedeemClaimTx', () => {
   it('fails at build time with a named error when the claim id is missing', () => {
     expect(() => buildRedeemClaimTx({ ...BASE, escrowId: '0xescrow', claimId: '' })).toThrow(
       'Missing required argument: claimId',
+    );
+  });
+});
+
+describe('buildRefundExpiredClaimTx', () => {
+  it('builds the permissionless refund (escrow, clock)', () => {
+    const { txb, calls } = makeFakeTxb();
+    buildRefundExpiredClaimTx({ ...BASE, escrowId: '0xexpired' })(txb);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].target).toBe('0xpkg::njangi_cycle_escrow::refund_expired_claim');
+    expect(calls[0].typeArguments).toEqual([BASE.coinType]);
+    expect(calls[0].arguments).toEqual([
+      { kind: 'object', id: '0xexpired' },
+      { kind: 'object', id: '0x6' },
+    ]);
+  });
+
+  it('fails at build time with a named error when the escrow id is missing', () => {
+    expect(() => buildRefundExpiredClaimTx({ ...BASE, escrowId: '' })).toThrow(
+      'Missing required argument: escrowId',
     );
   });
 });

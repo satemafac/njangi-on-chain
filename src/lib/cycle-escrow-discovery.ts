@@ -83,6 +83,13 @@ export interface CycleEscrowLiveState {
    * pins its round until released.
    */
   refunded: boolean;
+  /**
+   * When the claim window closes: the mirror of the minted Claim's expiry,
+   * written at finalize (0 until then). After it, collecting aborts 211 and
+   * `refund_expired_claim` sends the pot back to the contributors. Judge it
+   * against the chain clock (chain-clock.ts), never the device's.
+   */
+  claimExpiresAtMs: number;
   contributedMembers: string[];
   /** Full rotation member list from the frozen snapshot (includes the
    *  recipient). The UI uses this to render a per-member progress ring. */
@@ -559,6 +566,7 @@ export async function readCycleEscrowState(
     finalized: Boolean(fields.finalized),
     claimed: Boolean(fields.claimed),
     refunded: Boolean(fields.refunded),
+    claimExpiresAtMs: Number(fields.claim_expires_at_ms ?? 0) || 0,
     contributedMembers,
     members,
     requiresAttestation: Boolean(fields.requires_attestation),
