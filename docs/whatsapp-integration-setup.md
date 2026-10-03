@@ -67,6 +67,16 @@ any other message that contains `status` counts as `/status`.
   random nonce on chain, never the number itself. A confirm call then adds
   the link to the `whatsapp_phone_index` table, keyed by an HMAC of the
   number. `POST /api/whatsapp/admin-unlink-circle` removes a link.
+- **Showing the link.** The card reads
+  `GET /api/whatsapp/admin-link-circle`. For the circle admin it adds
+  `includeRecipient=true`, and the route decrypts the number only for a
+  session it can tie to the on-chain admin. Even then it returns a mask
+  (`+237 ••• ••• 1234`,
+  [`src/lib/whatsapp-recipient-mask.ts`](../src/lib/whatsapp-recipient-mask.ts))
+  and the date of the link, never the number. It opens the blob recorded in
+  `whatsapp_phone_index` first, because renewal (below) changes the blob id
+  there and not on chain. If the route refuses the session, the card still
+  shows that the circle is linked and asks the admin to sign in again.
 - **Sending.** Every notification goes through `sendMemberNotification` in
   [`src/lib/whatsapp-notifier.ts`](../src/lib/whatsapp-notifier.ts). It claims
   a dedupe slot, sends through the WhatsApp Cloud API, and records the

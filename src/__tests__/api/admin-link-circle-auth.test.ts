@@ -5,7 +5,10 @@
  * - GET ?includeRecipient=true used to decrypt and return the linked
  *   WhatsApp phone number with NO auth. It now requires the caller's
  *   zkLogin session to resolve to the on-chain circle admin; without that
- *   the response carries zero PII.
+ *   the response carries zero PII. Since October 2026 even the admin gets
+ *   only a mask ("+237 ••• ••• 1234") and the link date, read from the
+ *   renewed blob in the link index, and from the anchored blob only when
+ *   the index has no row for the circle.
  * - The plain GET link-existence probe (used by WhatsAppCircleIntegration
  *   and CycleEscrowPanel) stays public and never decrypts.
  * - POST runs authorization BEFORE any side effect (Walrus upload,
@@ -44,6 +47,7 @@ jest.mock('@/lib/walrus-pii', () => ({
 jest.mock('@/lib/whatsapp-link-index', () => ({
   indexWhatsAppLink: jest.fn(),
   deindexWhatsAppLinksForCircle: jest.fn(),
+  lookupBlobsForCircle: jest.fn(),
 }));
 jest.mock('@/lib/circle-admin-verification', () => {
   const actual = jest.requireActual('@/lib/circle-admin-verification');
@@ -65,6 +69,7 @@ import { encryptAndStorePII, fetchAndDecryptPII } from '@/lib/walrus-pii';
 import {
   indexWhatsAppLink,
   deindexWhatsAppLinksForCircle,
+  lookupBlobsForCircle,
 } from '@/lib/whatsapp-link-index';
 
 const ADMIN_ADDRESS = '0x' + 'a1'.repeat(32);
@@ -72,6 +77,9 @@ const OTHER_ADDRESS = '0x' + 'b2'.repeat(32);
 const CIRCLE_ID = '0x' + 'c3'.repeat(32);
 const SESSION_ID = 'link-circle-session';
 const PHONE = '+237650000000';
+const PHONE_NATIONAL = '650000000';
+const MASKED_PHONE = '+237 ••• ••• 0000';
+const LINKED_AT = '2026-09-30T10:15:00.000Z';
 
 function buildSessionRecord(userAddr: string): ZkLoginSessionRecord {
   return {
@@ -171,7 +179,10 @@ describe('admin-link-circle GET includeRecipient PII gate', () => {
       schema_version: 1,
       link_type: 'individual',
       phone_e164: PHONE,
+      created_at: LINKED_AT,
     });
+    // No index row by default: the anchored blob is the only candidate.
+    (lookupBlobsForCircle as jest.Mock).mockResolvedValue([]);
   });
 
   it('rejects includeRecipient=true without a session and leaks zero PII', async () => {
@@ -205,7 +216,10 @@ describe('admin-link-circle GET includeRecipient PII gate', () => {
     expect(fetchAndDecryptPII).not.toHaveBeenCalled();
   });
 
-  it('returns the decrypted recipient for the verified circle admin', async () => {
+  // This used to return the decrypted number in full. Nothing ever read it
+  // (the card called the public probe), and the card now needs only a mask,
+  // so the full E.164 no longer leaves the server, even for the admin.
+  it('returns only a masked number and the link date to the verified circle admin', async () => {
     getZkLoginSessionStore().set(SESSION_ID, buildSessionRecord(ADMIN_ADDRESS));
     (fetchCircleAdminAddress as jest.Mock).mockResolvedValue(ADMIN_ADDRESS);
     const res = createMockRes();
@@ -219,9 +233,15 @@ describe('admin-link-circle GET includeRecipient PII gate', () => {
     );
 
     expect(res.statusCode).toBe(200);
-    const body = res.jsonBody as { data: { isLinked: boolean; recipient?: string } };
+    const body = res.jsonBody as {
+      data: { isLinked: boolean; recipient?: string; maskedRecipient?: string; linkedAt?: string };
+    };
     expect(body.data.isLinked).toBe(true);
-    expect(body.data.recipient).toBe(PHONE);
+    expect(body.data.maskedRecipient).toBe(MASKED_PHONE);
+    expect(body.data.linkedAt).toBe(LINKED_AT);
+    expect(body.data.recipient).toBeUndefined();
+    expect(JSON.stringify(res.jsonBody)).not.toContain(PHONE);
+    expect(JSON.stringify(res.jsonBody)).not.toContain(PHONE_NATIONAL);
   });
 
   it('keeps the unauthenticated link-existence probe working without PII', async () => {
@@ -234,6 +254,174 @@ describe('admin-link-circle GET includeRecipient PII gate', () => {
     expect(body.data.isLinked).toBe(true);
     expect(body.data.recipient).toBeUndefined();
     expect(fetchAndDecryptPII).not.toHaveBeenCalled();
+  });
+
+  it('keeps the public probe away from the link index and the masked fields', async () => {
+    const res = createMockRes();
+
+    await handler(createGetReq({ circleId: CIRCLE_ID }), res);
+
+    const body = res.jsonBody as { data: Record<string, unknown> };
+    expect(body.data.maskedRecipient).toBeUndefined();
+    expect(body.data.linkedAt).toBeUndefined();
+    expect(lookupBlobsForCircle).not.toHaveBeenCalled();
+  });
+
+  /** GET ?includeRecipient=true as the verified circle admin. */
+  async function adminGet() {
+    getZkLoginSessionStore().set(SESSION_ID, buildSessionRecord(ADMIN_ADDRESS));
+    (fetchCircleAdminAddress as jest.Mock).mockResolvedValue(ADMIN_ADDRESS);
+    const res = createMockRes();
+    await handler(
+      createGetReq(
+        { circleId: CIRCLE_ID, includeRecipient: 'true' },
+        { 'session-id': SESSION_ID },
+      ),
+      res,
+    );
+    return {
+      statusCode: res.statusCode,
+      data: (res.jsonBody as { data: Record<string, unknown> }).data,
+      raw: JSON.stringify(res.jsonBody),
+    };
+  }
+
+  /** Opens only the listed blob ids; every other one fails like an expired blob. */
+  function openOnly(...blobIds: string[]) {
+    (fetchAndDecryptPII as jest.Mock).mockImplementation(async (blobId: string) => {
+      if (!blobIds.includes(blobId)) {
+        throw new Error(`Walrus aggregator returned 404: blob ${blobId} not found`);
+      }
+      return {
+        schema_version: 1,
+        link_type: 'individual',
+        phone_e164: PHONE,
+        created_at: LINKED_AT,
+      };
+    });
+  }
+
+  const openedBlobIds = () =>
+    (fetchAndDecryptPII as jest.Mock).mock.calls.map(([blobId]) => blobId);
+
+  // Renewal re-stores the blob under a new id and records it only in the
+  // index; the anchored id ('blob-1') expires with its first lease.
+  it('reads the renewed blob from the link index before the anchored one', async () => {
+    (lookupBlobsForCircle as jest.Mock).mockResolvedValue(['blob-renewed']);
+    openOnly('blob-renewed');
+
+    const { statusCode, data } = await adminGet();
+
+    expect(statusCode).toBe(200);
+    expect(data.maskedRecipient).toBe(MASKED_PHONE);
+    expect(data.linkedAt).toBe(LINKED_AT);
+    expect(lookupBlobsForCircle).toHaveBeenCalledWith(CIRCLE_ID);
+    expect(openedBlobIds()).toEqual(['blob-renewed']);
+  });
+
+  it('tries every indexed blob, newest first', async () => {
+    (lookupBlobsForCircle as jest.Mock).mockResolvedValue(['blob-renewed', 'blob-older']);
+    openOnly('blob-older');
+
+    const { data } = await adminGet();
+
+    expect(data.maskedRecipient).toBe(MASKED_PHONE);
+    expect(openedBlobIds()).toEqual(['blob-renewed', 'blob-older']);
+  });
+
+  // Same rule as resolveMemberPhone: the anchored id is used only when the
+  // index has no row for the circle. With a row, it is the stale pre-renewal id.
+  it('does not fall back to the anchored blob when the index has a row', async () => {
+    (lookupBlobsForCircle as jest.Mock).mockResolvedValue(['blob-renewed']);
+    openOnly('blob-1');
+
+    const { statusCode, data } = await adminGet();
+
+    expect(statusCode).toBe(200);
+    expect(data.isLinked).toBe(true);
+    expect(data.maskedRecipient).toBeUndefined();
+    expect(openedBlobIds()).toEqual(['blob-renewed']);
+  });
+
+  it('uses the anchored blob when the index has no row for the circle', async () => {
+    openOnly('blob-1');
+
+    const { data } = await adminGet();
+
+    expect(data.maskedRecipient).toBe(MASKED_PHONE);
+    expect(openedBlobIds()).toEqual(['blob-1']);
+  });
+
+  it('falls back to the anchored blob when the index lookup fails', async () => {
+    (lookupBlobsForCircle as jest.Mock).mockRejectedValue(new Error('connection refused'));
+    openOnly('blob-1');
+
+    const { statusCode, data } = await adminGet();
+
+    expect(statusCode).toBe(200);
+    expect(data.maskedRecipient).toBe(MASKED_PHONE);
+    expect(openedBlobIds()).toEqual(['blob-1']);
+  });
+
+  it('still reports the link, without a number, when no envelope opens', async () => {
+    (lookupBlobsForCircle as jest.Mock).mockResolvedValue(['blob-renewed']);
+    openOnly();
+
+    const { statusCode, data } = await adminGet();
+
+    expect(statusCode).toBe(200);
+    expect(data.isLinked).toBe(true);
+    expect(data.maskedRecipient).toBeUndefined();
+    expect(data.linkedAt).toBeUndefined();
+  });
+
+  it('masks nothing for a group link and never returns the group id', async () => {
+    const GROUP_ID = '120363043968066561@g.us';
+    (fetchAndDecryptPII as jest.Mock).mockResolvedValue({
+      schema_version: 1,
+      link_type: 'group',
+      group_id: GROUP_ID,
+      created_at: LINKED_AT,
+    });
+
+    const { data, raw } = await adminGet();
+
+    expect(data.isLinked).toBe(true);
+    expect(data.maskedRecipient).toBeUndefined();
+    expect(data.linkedAt).toBe(LINKED_AT);
+    expect(raw).not.toContain(GROUP_ID);
+  });
+
+  it.each([
+    [
+      'a failed index lookup',
+      () => (lookupBlobsForCircle as jest.Mock).mockRejectedValue(new Error('connection refused')),
+      'connection refused',
+    ],
+    [
+      'an indexed blob that does not open',
+      () =>
+        (lookupBlobsForCircle as jest.Mock).mockResolvedValue(['blob-renewed', 'blob-1']),
+      'blob-renewed',
+    ],
+  ])('never logs the number while it works past %s', async (_label, arrange, expectedInLog) => {
+    const spies = (['log', 'info', 'warn', 'error', 'debug'] as const).map((method) =>
+      jest.spyOn(console, method).mockImplementation(() => undefined),
+    );
+    arrange();
+    openOnly('blob-1');
+
+    const { data } = await adminGet();
+
+    const logged = spies
+      .flatMap((spy) => spy.mock.calls.flat())
+      .map((arg) => (arg instanceof Error ? `${arg.message} ${arg.stack}` : JSON.stringify(arg)))
+      .join('\n');
+    // The failure was logged, the number was resolved, and never logged.
+    expect(logged).toContain(expectedInLog);
+    expect(data.maskedRecipient).toBe(MASKED_PHONE);
+    expect(logged).not.toContain(PHONE);
+    expect(logged).not.toContain(PHONE_NATIONAL);
   });
 });
 
