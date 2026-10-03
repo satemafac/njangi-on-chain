@@ -14,6 +14,11 @@ import { toast } from 'react-hot-toast';
 import { AccountData } from '@/services/zkLoginService';
 import { ZkLoginClient } from '@/services/zkLoginClient';
 import { getCurrentNetwork } from '@/services/network-config';
+import {
+  fetchWhatsAppLinkStatus,
+  type WhatsAppLinkStatus,
+} from '@/lib/whatsapp-link-status';
+import WhatsAppLinkedRecipient from './WhatsAppLinkedRecipient';
 import ConfirmationModal from './ConfirmationModal';
 import BillingUpsellModal, {
   parseUpgradeRequired,
@@ -35,14 +40,10 @@ interface WhatsAppIntegrationProps {
   circleId: string;
   adminAddress: string;
   account: AccountData;  // Full zkLogin account data
+  // The manage page's own admin check. Only then does the card ask the
+  // server for the masked linked number; the server checks again.
+  isAdmin?: boolean;
   onLinked?: (status: boolean) => void;
-}
-
-interface LinkedStatus {
-  isLinked: boolean;
-  linkType?: 1 | 2; // 1 = phone number; 2 = group, unsupported (see PHONE_LINK_TYPE)
-  recipient?: string;
-  linkedAt?: string;
 }
 
 // Validation functions
@@ -66,9 +67,10 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
   circleId,
   adminAddress,
   account,
+  isAdmin = false,
   onLinked
 }) => {
-  const [linkedStatus, setLinkedStatus] = useState<LinkedStatus>({ isLinked: false });
+  const [linkedStatus, setLinkedStatus] = useState<WhatsAppLinkStatus>({ isLinked: false });
   const [loading, setLoading] = useState(false);
   const [linking, setLinking] = useState(false);
   const [showLinkForm, setShowLinkForm] = useState(false);
@@ -84,39 +86,23 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
   useEffect(() => {
     checkLinkStatus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [circleId]);
+  }, [circleId, isAdmin]);
 
   const checkLinkStatus = async () => {
     try {
       setLoading(true);
-      
-      // Get current network selection
-      const currentNetwork = getCurrentNetwork();
-      
-      // Query the API to check if circle is linked on blockchain
-      const response = await fetch(`/api/whatsapp/admin-link-circle?circleId=${circleId}&network=${currentNetwork}`, {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json'
-        }
-      });
 
-      if (response.ok) {
-        const data = await response.json();
-        if (data.data?.isLinked) {
-          setLinkedStatus({
-            isLinked: true,
-            linkType: data.data.linkType,
-            recipient: data.data.recipient,
-            linkedAt: data.data.linkedAt
-          });
-        } else {
-          setLinkedStatus({ isLinked: false });
-        }
-      } else {
-        // Assume not linked if query fails
-      setLinkedStatus({ isLinked: false });
-      }
+      // Query the API to check if circle is linked on blockchain. The admin
+      // view also asks for the masked number; a 401/403 falls back to the
+      // public probe (src/lib/whatsapp-link-status.ts). Don't log the result:
+      // it can carry that number.
+      setLinkedStatus(
+        await fetchWhatsAppLinkStatus({
+          circleId,
+          network: getCurrentNetwork(),
+          includeRecipient: isAdmin,
+        }),
+      );
     } catch (error) {
       console.error('Error checking link status:', error);
       // Default to not linked on error
@@ -389,15 +375,7 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
                   <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-green-700">Link Type</p>
                   <p className="mt-2 text-lg font-semibold text-gray-900">📱 Individual</p>
                 </div>
-                <div className="rounded-[18px] border border-stone-200 bg-white p-3">
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Recipient</p>
-                  <p className="mt-2 break-all text-lg font-semibold text-gray-900">{linkedStatus.recipient}</p>
-                  {linkedStatus.linkedAt && (
-                    <p className="mt-2 text-xs text-gray-500">
-                      Linked on: {new Date(linkedStatus.linkedAt).toLocaleDateString()}
-                    </p>
-                  )}
-                </div>
+                <WhatsAppLinkedRecipient status={linkedStatus} />
               </div>
 
               <div className="rounded-[18px] bg-gradient-to-r from-green-50 to-emerald-50 p-3">

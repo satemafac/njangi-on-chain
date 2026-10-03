@@ -18,10 +18,13 @@
 import type { SuiClient } from '@mysten/sui/client';
 import {
   ESCROW_HISTORY_FIELD_NAME,
+  OPEN_ROUND_FIELD_NAME,
   findCurrentCycleEscrow,
   isCycleEscrowForCircle,
   listContributors,
+  potBaseUnits,
   readCircleEscrowHistory,
+  readCircleOpenRound,
   readCircleRotationPointer,
   readCircleIsActive,
   readCycleEscrowState,
@@ -69,6 +72,8 @@ const escrowObject = (opts: {
   finalized?: boolean;
   claimed?: boolean;
   refunded?: boolean;
+  /** As JSON-RPC renders `Balance<T>`: a plain string of base units. */
+  balance?: unknown;
 }) => ({
   data: {
     objectId: opts.id,
@@ -77,6 +82,7 @@ const escrowObject = (opts: {
       dataType: 'moveObject',
       type: CYCLE_ESCROW_TYPE,
       fields: {
+        balance: opts.balance ?? '0',
         circle_id: opts.circleId ?? CIRCLE,
         claimed: opts.claimed ?? false,
         finalized: opts.finalized ?? false,
@@ -147,8 +153,16 @@ function makeClient(
   } as unknown as SuiClient;
 }
 
-const withHistory = (ids: string[]) => ({
-  getDynamicFieldObject: jest.fn(async () => historyField(ids)),
+const noMarkerField = { error: { code: 'dynamicFieldNotFound', parent_object_id: CIRCLE } };
+
+const isFieldName = (name: { value?: unknown } | undefined, bytes: number[]) =>
+  JSON.stringify(name?.value) === JSON.stringify(bytes);
+
+/** History as given; the open-round marker absent unless one is passed. */
+const withHistory = (ids: string[], marker: unknown = noMarkerField) => ({
+  getDynamicFieldObject: jest.fn(async ({ name }: { name?: { value?: unknown } }) =>
+    isFieldName(name, ESCROW_HISTORY_BYTES) ? historyField(ids) : marker,
+  ),
 });
 
 const openedEvent = (escrowId: string, circleId = CIRCLE, cycleNo = 1) => ({
@@ -322,6 +336,58 @@ describe('readCycleEscrowState', () => {
 
     expect((await readCycleEscrowState(ESCROW_2, 'testnet', client))?.refunded).toBe(true);
     expect((await readCycleEscrowState(ESCROW_3, 'testnet', client))?.refunded).toBe(false);
+  });
+
+  // Regression: the pot was read as `balance.fields.value`, but JSON-RPC
+  // renders `Balance<T>` as a plain string (testnet, 2026-10-02), so every
+  // pot read as '0' — the payout celebration fell back to one member's share
+  // and the dashboard said "Your payout of 0 USDC is ready".
+  it('reads the pot from a Balance<T> rendered as a plain string', async () => {
+    const client = makeClient({ [ESCROW_3]: escrowObject({ id: ESCROW_3, balance: '200000' }) });
+    expect((await readCycleEscrowState(ESCROW_3, 'testnet', client))?.totalContributed).toBe(
+      '200000',
+    );
+  });
+
+  it('still reads the nested { fields: { value } } form', async () => {
+    const client = makeClient({
+      [ESCROW_3]: escrowObject({ id: ESCROW_3, balance: { fields: { value: '200000' } } }),
+    });
+    expect((await readCycleEscrowState(ESCROW_3, 'testnet', client))?.totalContributed).toBe(
+      '200000',
+    );
+  });
+
+  it('reads an unrecognised balance shape as 0 rather than guessing', async () => {
+    const client = makeClient({
+      [ESCROW_3]: escrowObject({ id: ESCROW_3, balance: { amount: '200000' } }),
+    });
+    expect((await readCycleEscrowState(ESCROW_3, 'testnet', client))?.totalContributed).toBe('0');
+  });
+});
+
+describe('potBaseUnits', () => {
+  it('is the escrow balance when it reads', () => {
+    expect(
+      potBaseUnits({ totalContributed: '200000', contributionAmount: '100000', contributorsSoFar: 2 }),
+    ).toBe('200000');
+  });
+
+  it('falls back to share x contributors, never to one share', () => {
+    // Every contribution is exactly the snapshot amount, so the product is
+    // the pot of a round still waiting to be collected.
+    expect(
+      potBaseUnits({ totalContributed: '0', contributionAmount: '100000', contributorsSoFar: 2 }),
+    ).toBe('200000');
+  });
+
+  it('is 0 for a round nobody has paid into, or for values that do not parse', () => {
+    expect(
+      potBaseUnits({ totalContributed: '0', contributionAmount: '100000', contributorsSoFar: 0 }),
+    ).toBe('0');
+    expect(
+      potBaseUnits({ totalContributed: 'n/a', contributionAmount: '100000', contributorsSoFar: 2 }),
+    ).toBe('0');
   });
 });
 
@@ -790,5 +856,164 @@ describe('readCircleIsActive', () => {
     await expect(readCircleIsActive(CIRCLE, 'testnet', clientWith(null, true))).resolves.toBeNull();
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
+  });
+});
+
+/**
+ * Circle Record v1.2's open-round marker: the round the contract holds open.
+ * Newest-wins stays the rule, except that a DIFFERENT escrow for the marked
+ * round (same cycle, same recipient) is a duplicate however it reached the
+ * history, and the members' round is the marked one.
+ */
+describe('findCurrentCycleEscrow — open-round marker', () => {
+  // The marker exactly as testnet stored it for escrow 0xe30c91fe… (lap 5),
+  // read back from its creating transaction on 2026-10-03. `OpenRound` is
+  // anchored to the v8 package that introduced it.
+  const V8 = '0x401ed4202913c9a91a98b029bddb91c78532b24e3c5cf8700fd0b2544e7ec10b';
+  const OPEN_ROUND_BYTES = [111, 112, 101, 110, 95, 114, 111, 117, 110, 100];
+  const markerField = (escrowId: string, cycleNo = 1, recipient = ROTATION[2]) => ({
+    data: {
+      objectId: '0x1b9fee7fe5b377eac0374a243d6137550e69ffbb0e7a98861d2baef008adab51',
+      type: `0x2::dynamic_field::Field<vector<u8>, ${V8}::njangi_circles::OpenRound>`,
+      content: {
+        dataType: 'moveObject',
+        type: `0x2::dynamic_field::Field<vector<u8>, ${V8}::njangi_circles::OpenRound>`,
+        hasPublicTransfer: false,
+        fields: {
+          id: { id: '0x1b9fee7fe5b377eac0374a243d6137550e69ffbb0e7a98861d2baef008adab51' },
+          name: OPEN_ROUND_BYTES,
+          value: {
+            type: `${V8}::njangi_circles::OpenRound`,
+            fields: { cycle_no: String(cycleNo), escrow_id: escrowId, recipient },
+          },
+        },
+      },
+    },
+  });
+
+  // ESCROW_2 holds the round open; ESCROW_3 is a second escrow for the SAME
+  // round (cycle 1, same recipient) at the end of the history.
+  const duplicateRound = (marker: unknown, overrides: Record<string, unknown> = {}) =>
+    makeClient(
+      {
+        [ESCROW_2]: escrowObject({ id: ESCROW_2, cycleNo: 1 }),
+        [ESCROW_3]: escrowObject({ id: ESCROW_3, cycleNo: 1 }),
+      },
+      { ...withHistory([ESCROW_1, ESCROW_2, ESCROW_3], marker), ...overrides },
+    );
+
+  it('looks the marker up by its on-chain key: the raw bytes of "open_round"', () => {
+    expect(OPEN_ROUND_FIELD_NAME).toEqual({ type: 'vector<u8>', value: OPEN_ROUND_BYTES });
+  });
+
+  it('follows the marker past a second escrow for the open round', async () => {
+    const client = duplicateRound(markerField(ESCROW_2));
+    const summary = await findCurrentCycleEscrow('testnet', CIRCLE, { client });
+    expect(summary).toMatchObject({ escrowId: ESCROW_2, source: 'open_round' });
+    expect(failover).not.toHaveBeenCalled();
+  });
+
+  it('keeps the newest entry when the marker names it (no extra read)', async () => {
+    const client = duplicateRound(markerField(ESCROW_3));
+    const summary = await findCurrentCycleEscrow('testnet', CIRCLE, { client });
+    expect(summary).toMatchObject({ escrowId: ESCROW_3, source: 'escrow_history' });
+    expect(readOrderOf(client)).toEqual([ESCROW_3]);
+  });
+
+  it('keeps newest-wins when there is no marker (older circles, settled rounds)', async () => {
+    const client = duplicateRound(noMarkerField);
+    expect(await findCurrentCycleEscrow('testnet', CIRCLE, { client })).toMatchObject({
+      escrowId: ESCROW_3,
+      source: 'escrow_history',
+    });
+  });
+
+  it('ignores a marker for another round', async () => {
+    // The newest entry is a later round; the marker's round is not this one.
+    const client = makeClient(
+      {
+        [ESCROW_2]: escrowObject({ id: ESCROW_2, cycleNo: 1 }),
+        [ESCROW_3]: escrowObject({ id: ESCROW_3, cycleNo: 2 }),
+      },
+      withHistory([ESCROW_2, ESCROW_3], markerField(ESCROW_2, 1)),
+    );
+    expect(await findCurrentCycleEscrow('testnet', CIRCLE, { client })).toMatchObject({
+      escrowId: ESCROW_3,
+    });
+    expect(readOrderOf(client)).toEqual([ESCROW_3]);
+  });
+
+  it('never guesses the newest entry when the marker cannot be read', async () => {
+    const client = duplicateRound({ error: { code: 'unknown' } });
+    await expect(findCurrentCycleEscrow('testnet', CIRCLE, { client })).rejects.toThrow(
+      'open-round marker',
+    );
+  });
+
+  it('never guesses when the marked escrow cannot be verified', async () => {
+    const client = duplicateRound(markerField(ESCROW_2), {
+      getObject: jest.fn(async ({ id }: { id: string }) => {
+        if (id === ESCROW_2) throw new Error('socket hang up');
+        return escrowObject({ id, cycleNo: 1 });
+      }),
+    });
+    await expect(findCurrentCycleEscrow('testnet', CIRCLE, { client })).rejects.toThrow(
+      'Could not verify',
+    );
+  });
+
+  it("ignores a marker naming an escrow that is not this circle's", async () => {
+    const client = makeClient(
+      {
+        [IMPOSTER]: escrowObject({ id: IMPOSTER, circleId: OTHER_CIRCLE, cycleNo: 1 }),
+        [ESCROW_3]: escrowObject({ id: ESCROW_3, cycleNo: 1 }),
+      },
+      withHistory([ESCROW_3], markerField(IMPOSTER)),
+    );
+    expect(await findCurrentCycleEscrow('testnet', CIRCLE, { client })).toMatchObject({
+      escrowId: ESCROW_3,
+    });
+  });
+
+  it('does not consult the marker for a cycle-filtered lookup', async () => {
+    const client = duplicateRound(markerField(ESCROW_2));
+    expect(await findCurrentCycleEscrow('testnet', CIRCLE, { client, cycleNo: 1 })).toMatchObject({
+      escrowId: ESCROW_3,
+      source: 'escrow_history',
+    });
+  });
+});
+
+describe('readCircleOpenRound', () => {
+  const marker = (value: unknown) => ({
+    data: { objectId: '0x1b9f', content: { dataType: 'moveObject', fields: { name: [], value } } },
+  });
+  const clientWith = (result: unknown) =>
+    ({ getDynamicFieldObject: jest.fn(async () => result) }) as unknown as SuiClient;
+
+  it('reads cycle, recipient and escrow from the nested OpenRound', async () => {
+    await expect(
+      readCircleOpenRound(
+        clientWith(marker({ fields: { cycle_no: '5', escrow_id: ESCROW_3, recipient: ROTATION[2] } })),
+        CIRCLE,
+      ),
+    ).resolves.toEqual({ kind: 'found', cycleNo: 5, recipient: ROTATION[2], escrowId: ESCROW_3 });
+  });
+
+  it('is absent only for dynamicFieldNotFound', async () => {
+    await expect(readCircleOpenRound(clientWith(noMarkerField), CIRCLE)).resolves.toEqual({
+      kind: 'absent',
+    });
+  });
+
+  it('is unknown for any other failure or an unreadable value', async () => {
+    await expect(readCircleOpenRound(clientWith({ error: { code: 'unknown' } }), CIRCLE)).resolves.toEqual({
+      kind: 'unknown',
+    });
+    await expect(readCircleOpenRound(clientWith(marker({ fields: { cycle_no: '5' } })), CIRCLE)).resolves.toEqual({
+      kind: 'unknown',
+    });
+    const throwing = { getDynamicFieldObject: rejecting('fetch failed') } as unknown as SuiClient;
+    await expect(readCircleOpenRound(throwing, CIRCLE)).resolves.toEqual({ kind: 'unknown' });
   });
 });

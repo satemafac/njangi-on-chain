@@ -37,16 +37,40 @@
 //
 // Usage:
 //   node scripts/process-deletion-request.mjs --request-id 7 \
-//     [--phone +2376XXXXXXX] [--address 0x...] [--sub ... --aud ...] \
+//     [--phone +2376XXXXXXXX] [--address 0x...] [--sub ... --aud ...] \
 //     [--force-unverified-identity] [--dry-run]
 //
 // --phone is how WhatsApp rows are found (the form's free-text details
-// usually carries it). Requires WALRUS_LOOKUP_SALT (same HMAC as
-// src/lib/walrus-pii.ts computeLookupHash). Safe to re-run: every DELETE
-// is idempotent and the request row is only marked completed at the end.
+// usually carries it). Give it in international form: "+", country code,
+// number; spaces, dots and hyphens are fine. Anything else (a national
+// number, a "00" prefix, an empty value) is refused before anything is read
+// or written. The script hashes the number in the index's own form
+// (normalizePhone in scripts/lib/whatsapp-phone.ts, which
+// src/lib/whatsapp-link-index.ts uses too) with WALRUS_LOOKUP_SALT, which it
+// requires (same HMAC as src/lib/walrus-pii.ts computeLookupHash), and it
+// prints how many index rows the number matches, dry run included.
+//
+// Safe to re-run: every DELETE is idempotent, the request row is only marked
+// completed at the end, and a re-run never moves a completed request back to
+// processing.
+//
+// Runs before scripts/lib/whatsapp-phone.ts existed hashed --phone as typed.
+// The index never holds the documented form (with its "+") or a spaced one,
+// so such runs deleted no whatsapp_phone_index row, and the phone_hmac they
+// recorded excludes nothing from blob renewal. Every request that had a
+// phone_hmac recorded before the fix is a candidate:
+//   SELECT id, status, updated_at FROM deletion_requests
+//    WHERE phone_hmac IS NOT NULL ORDER BY id;
+// To repair one, re-run it with the same --request-id and --phone. The
+// script says when the recorded hash was the "+" form of that number, then
+// deletes the rows and replaces the hash.
+//
+// Needs Node >= 22.18 (it imports scripts/lib/*.ts through Node's type
+// stripping); package.json pins 24.x.
 
 import { createHmac } from 'node:crypto';
 import { Pool } from 'pg';
+import { phoneForErasure } from './lib/whatsapp-phone.ts';
 
 function arg(name) {
   const idx = process.argv.indexOf(`--${name}`);
@@ -87,6 +111,25 @@ async function main() {
     process.exit(1);
   }
 
+  // --phone is checked before anything is read or written. A --phone that is
+  // present but unusable stops the run: skipping it would leave the number's
+  // index rows in place and still complete the request.
+  const phoneGiven = process.argv.some((a) => a === '--phone' || a.startsWith('--phone='));
+  const phone = phoneGiven ? phoneForErasure(arg('phone') ?? '') : null;
+  if (phoneGiven && !phone) {
+    console.error(
+      '[deletion] --phone takes an international number as the next argument: "+", country code, ' +
+        'number, 7 to 15 digits in all (e.g. --phone +2376XXXXXXXX; spaces, dots and hyphens are fine). ' +
+        'Nothing was read or written.',
+    );
+    process.exit(1);
+  }
+  const salt = process.env.WALRUS_LOOKUP_SALT;
+  if (phone && !salt) {
+    console.error('[deletion] WALRUS_LOOKUP_SALT required to target WhatsApp rows');
+    process.exit(1);
+  }
+
   const requestLookup = requestId
     ? await pool.query(`SELECT * FROM deletion_requests WHERE id = $1`, [requestId])
     : await pool.query(
@@ -101,8 +144,6 @@ async function main() {
   console.log(
     `[deletion] request #${request.id} (${request.email}) status=${request.status} created=${request.created_at?.toISOString?.() ?? request.created_at}`,
   );
-
-  const phone = arg('phone')?.trim() || null;
 
   // ---------------------------------------------------------------------
   // Establish the TRUSTED identity for destructive work. This is the whole
@@ -155,12 +196,34 @@ async function main() {
   // 1. WhatsApp index rows (stops blob renewal; pointer gone immediately).
   let phoneHmac = null;
   if (phone) {
-    const salt = process.env.WALRUS_LOOKUP_SALT;
-    if (!salt) {
-      console.error('[deletion] WALRUS_LOOKUP_SALT required to target WhatsApp rows');
-      process.exit(1);
+    const hmac = (value) => createHmac('sha256', salt).update(value).digest('hex');
+    phoneHmac = hmac(phone);
+    // A run before the fix recorded the hash of "+2376…" and deleted
+    // nothing. Name that case when such a request is re-run to repair it.
+    if (request.phone_hmac && request.phone_hmac !== phoneHmac) {
+      console.warn(
+        request.phone_hmac === hmac(`+${phone}`)
+          ? '[deletion] this request records the hash of this number WITH its "+", from a run before ' +
+              'the fix, which deleted no index row. Replacing that hash.'
+          : '[deletion] this request records the hash of another value: a different number, or this one ' +
+              'formatted differently by a run before the fix. Replacing it (the renewal exclusion keeps ' +
+              'one number per request).',
+      );
     }
-    phoneHmac = createHmac('sha256', salt).update(phone).digest('hex');
+    // Read-only, so a dry run shows it too: a deletion that matches nothing
+    // looks like success afterwards.
+    const { rows } = await pool.query(
+      `SELECT COUNT(*)::int AS matches FROM whatsapp_phone_index WHERE phone_hmac = $1`,
+      [phoneHmac],
+    );
+    const matches = rows[0]?.matches ?? 0;
+    console.log(`[deletion] whatsapp_phone_index rows matching the phone: ${matches}`);
+    if (matches === 0) {
+      console.warn(
+        '[deletion] no index row matches this number. Either it never linked a circle, its links are ' +
+          'already gone (unlinked, or erased by an earlier run), or --phone is not the number that was linked.',
+      );
+    }
     await run(
       'whatsapp_phone_index rows for phone',
       `DELETE FROM whatsapp_phone_index WHERE phone_hmac = $1`,
@@ -222,11 +285,18 @@ async function main() {
   //    ('processing') instead of 'completed', so a request whose rows still
   //    exist is never silently closed as "erased". Email-only requests with
   //    no wallet reference have nothing further to erase and are completed.
+  //    A request that is already completed stays completed: the run that
+  //    completed it erased its identity-keyed rows, and a re-run for the
+  //    phone alone must not reopen it. Reopening would also drop its phone
+  //    from the renewal exclusion, which only honours completed requests.
   const identityDeletesRan = Boolean(sub && aud);
   const walletReferenced = Boolean(
     request.user_address || request.verified_sub || arg('address') || argSub,
   );
-  const finalStatus = !identityDeletesRan && walletReferenced ? 'processing' : 'completed';
+  const finalStatus =
+    request.status === 'completed' || identityDeletesRan || !walletReferenced
+      ? 'completed'
+      : 'processing';
   await run(
     `mark request ${finalStatus}`,
     `UPDATE deletion_requests SET status = $2, updated_at = NOW() WHERE id = $1`,
@@ -237,6 +307,10 @@ async function main() {
       '[deletion] request left in status=processing: it references a wallet but ownership was ' +
         'not proven, so rows keyed to its OAuth identity were retained. Complete the verified ' +
         're-run to finish.',
+    );
+  } else if (!identityDeletesRan && walletReferenced) {
+    console.log(
+      '[deletion] request was already completed and stays completed: a re-run never reopens it.',
     );
   }
 

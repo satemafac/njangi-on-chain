@@ -8,15 +8,22 @@
 //   1. Postgres whatsapp_phone_index (circle_id → walrus_blob_id), then
 //      decrypt the single matched blob. O(1), covers every link recorded
 //      since indexing was enabled. Unavailable for UNLINKED circles —
-//      deindexWhatsAppLinksForCircle deletes the rows.
+//      deindexWhatsAppLinksForCircle deletes the rows. The index also
+//      holds the only CURRENT blob id: /api/cron/walrus-renewal re-stores
+//      each blob before its Walrus lease ends and records the new id there
+//      alone.
 //   2. On-chain registry scan honoring the `enabled` flag (newest link
-//      wins), then decrypt. `includeDisabled` lets the unlink
-//      confirmation reach the phone of a link that was just disabled.
+//      wins), then decrypt the anchored blob — the ORIGINAL id, which
+//      stops resolving once its first lease lapses. `includeDisabled` lets
+//      the unlink confirmation reach the phone of a link that was just
+//      disabled.
 //
-// THROW contract: infra failures (registry object read threw) propagate
-// so the cron halts without advancing its cursor; "no link" returns null
-// (skip + advance). Per-blob decrypt failures are warned and skipped —
-// one corrupt envelope must not wedge the stream.
+// THROW contract: infra failures propagate so the cron halts without
+// advancing its cursor — a registry object read error always, an index
+// read error whenever the registry scan finds no phone without it (past
+// the anchored blob's lease, only the index could have answered). "No
+// link" returns null (skip + advance). Per-blob decrypt failures are
+// warned and skipped — one corrupt envelope must not wedge the stream.
 
 import type { SuiClient } from '@mysten/sui/client';
 import { fetchAndDecryptPII } from '../walrus-pii';
@@ -67,19 +74,45 @@ export async function resolveCirclePhone(
   options: ResolveCirclePhoneOptions = {},
 ): Promise<string | null> {
   // 1. Postgres index — newest blob first.
+  let indexedBlobs: string[] = [];
+  let indexError: unknown = null;
   try {
-    for (const blobId of await lookupBlobsForCircle(circleId)) {
-      const phone = await decryptPhone(blobId, circleId);
-      if (phone) return phone;
-    }
+    indexedBlobs = await lookupBlobsForCircle(circleId);
   } catch (err) {
+    indexError = err;
     appLogger.warn('[circle-phone] index lookup failed; falling back to registry scan', {
       circleId,
       error: err instanceof Error ? err.message : String(err),
     });
   }
+  for (const blobId of indexedBlobs) {
+    const phone = await decryptPhone(blobId, circleId);
+    if (phone) return phone;
+  }
 
-  // 2. On-chain registry scan (current schema: walrus_blob_id only).
+  // 2. On-chain registry scan — tried even when the index read failed,
+  // since the anchored blob resolves until its original lease ends.
+  const registryPhone = await resolveFromRegistry(client, circleId, network, options);
+  if (registryPhone) return registryPhone;
+
+  // A failed index read is not "no link": past the anchored blob's lease
+  // the index held the only route to the phone, and a null here would let
+  // the cron skip the event and advance past it for good.
+  if (indexError) throw indexError;
+  return null;
+}
+
+/**
+ * The registry half of resolveCirclePhone (current schema:
+ * walrus_blob_id only). Read errors throw; null means no registry, no
+ * matching link, or no blob that decrypts.
+ */
+async function resolveFromRegistry(
+  client: SuiClient,
+  circleId: string,
+  network: NetworkType,
+  options: ResolveCirclePhoneOptions,
+): Promise<string | null> {
   const registries = getActiveWhatsAppRegistries(network);
   const registryId = registries?.[0]?.registryObjectId;
   if (!registryId) return null;

@@ -42,12 +42,13 @@ export const CIRCLE_UPDATES: readonly CircleUpdate[] = [
 
 /**
  * The "your turn" nudge (src/lib/your-turn-notification.ts), which
- * /api/cron/cycle-finalized sends to the number the round's recipient linked.
- * The wording promises no advance notice: the app finalizes a round inside
- * the recipient's own collect transaction, so the nudge usually arrives after
- * the payout is collected.
+ * /api/cron/cycle-finalized sends to the number the round's recipient linked
+ * once the contribution that fills the round's pot is recorded. The cron runs
+ * every 15 minutes and drops the nudge if, by then, the recipient has
+ * collected the payout or the round was refunded. So the line ties it to a
+ * payout waiting to be collected instead of promising one for every round.
  */
-export const YOUR_TURN_UPDATE = '"It\'s your turn" for each round you collect';
+export const YOUR_TURN_UPDATE = '"It\'s your turn" when your payout is ready to collect';
 
 export const WHATSAPP_UPDATE_LINES: readonly string[] = [
   ...CIRCLE_UPDATES.map((update) => update.text),

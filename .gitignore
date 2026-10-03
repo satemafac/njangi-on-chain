@@ -168,6 +168,11 @@ salt-database.json
 src/services/*.log
 src/services/*.db
 .claude/scheduled_tasks.lock
+# Master-seed backup from a pre-Enoki local salt service (2025-02). No code
+# reads it; the committed value is public in history and must never be reused.
+data/salt-backup.json
+# Literal "~" directory: CLI configs written with an unexpanded tilde.
+/~/
 
 # switch-network.sh artifacts
 *.backup
