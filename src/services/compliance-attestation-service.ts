@@ -2,14 +2,16 @@
 // Phase 3 ComplianceAttestation anchors defined in `njangi_compliance.move`.
 //
 // Attestations pair with the regulated ramp partner flow: once Coinbase,
-// MoonPay, or Transak returns a successful KYC/sanctions decision for a
-// given user address, the operator's attestor service calls `issue(...)`
-// on the Move module with:
-//   * `policy_hash`       = SHA-256 of the signed off-chain policy document
-//                           (provider name, jurisdiction rules, rule version).
+// MoonPay, or Transak reports a KYC decision (or a completed purchase,
+// which implies one) for a given user address, the attestor calls
+// `issue(...)` on the Move module with:
+//   * `policy_hash`       = SHA-256 of the off-chain policy document: name,
+//                           version, issuer, provider and criteria, from
+//                           src/lib/kyc-attestation-policy.ts. It claims
+//                           only the provider's decision, no check of
+//                           Njangi's own.
 //   * `external_ref_hash` = HMAC-SHA256(secret, provider_case_id).
-//   * `ttl_ms`            = validity window; typically 90 days for KYC and
-//                           shorter for sanctions rescreens.
+//   * `ttl_ms`            = validity window; 90 days by default.
 //
 // Nothing about the underlying case (phone number, country, document
 // scans) ever leaves the compliance system. Downstream Move code — for
@@ -25,7 +27,7 @@ const REF_HASH_BYTES = 32;
 const DEFAULT_KYC_TTL_MS = 90 * 24 * 60 * 60 * 1000; // 90 days
 
 export interface PolicyDocument {
-  /** Human-readable policy name, e.g. "FATF travel rule v2". */
+  /** Human-readable policy name, e.g. "MoonPay KYC". */
   name: string;
   /** Semver-style version string. */
   version: string;

@@ -7,6 +7,14 @@ import { useZkLoginSigner } from '@/hooks/useZkLoginSigner';
 import { getCurrentNetwork } from '@/services/network-config';
 import type { NetworkType } from '@/services/whatsapp-registry-service';
 import { findOwnedAttestorCaps, type AttestorCapRef } from '@/lib/attestor-cap-discovery';
+import {
+  KYC_POLICY_VERSION,
+  manualKycPolicy,
+  type KycProvider,
+} from '@/lib/kyc-attestation-policy';
+
+/** Whose KYC decision the attestation records. */
+type ProviderChoice = KycProvider | 'internal';
 
 interface QueueEntry {
   id: string;
@@ -17,7 +25,7 @@ interface QueueEntry {
     name: string;
     version: string;
     issuer: string;
-    provider: 'coinbase' | 'moonpay' | 'transak' | 'internal';
+    provider: ProviderChoice;
     criteria: string;
   };
   ttlMs: number;
@@ -78,14 +86,14 @@ export default function AdminCompliancePage() {
   const [notificationLoading, setNotificationLoading] = useState(false);
   const [subject, setSubject] = useState('');
   const [providerCaseId, setProviderCaseId] = useState('');
-  const [policyName, setPolicyName] = useState('Partner KYC');
-  const [policyVersion, setPolicyVersion] = useState('1.0.0');
-  const [provider, setProvider] = useState<'coinbase' | 'moonpay' | 'transak' | 'internal'>(
-    'internal',
-  );
-  const [criteria, setCriteria] = useState(
-    'Identity verified, sanctions screened, jurisdiction allow-listed.',
-  );
+  // The policy is hashed and anchored on chain, so nothing is claimed until
+  // the attestor picks the provider whose decision they are recording; that
+  // fills in the shared KYC policy (src/lib/kyc-attestation-policy.ts), the
+  // same one the ramp webhooks queue.
+  const [policyName, setPolicyName] = useState('');
+  const [policyVersion, setPolicyVersion] = useState(KYC_POLICY_VERSION);
+  const [provider, setProvider] = useState<ProviderChoice | ''>('');
+  const [criteria, setCriteria] = useState('');
   const [ttlDays, setTtlDays] = useState<number>(DEFAULT_TTL_DAYS);
   const [internalSecret, setInternalSecret] = useState('');
   const [busy, setBusy] = useState(false);
@@ -172,6 +180,16 @@ export default function AdminCompliancePage() {
     },
     [internalSecret],
   );
+
+  const chooseProvider = useCallback((next: ProviderChoice | '') => {
+    setProvider(next);
+    // 'internal' has no provider decision to record: the attestor states
+    // in their own words what they relied on.
+    const policy = next === '' || next === 'internal' ? null : manualKycPolicy(next);
+    setPolicyName(policy?.name ?? '');
+    setPolicyVersion(KYC_POLICY_VERSION);
+    setCriteria(policy?.criteria ?? '');
+  }, []);
 
   const prefillFromQueueEntry = useCallback(
     (entry: QueueEntry) => {
@@ -304,6 +322,10 @@ export default function AdminCompliancePage() {
       toast.error('AttestorCap, subject, and provider case id are required.');
       return;
     }
+    if (!provider || !policyName.trim() || !criteria.trim()) {
+      toast.error('Choose the KYC provider and fill in the policy name and criteria.');
+      return;
+    }
     if (!packageId) {
       toast.error('Package id is not configured for this network.');
       return;
@@ -432,10 +454,11 @@ export default function AdminCompliancePage() {
           </p>
           <h1 className="mt-2 text-2xl font-semibold text-slate-900">Attestor console</h1>
           <p className="mt-2 text-sm text-slate-600">
-            Mint a compliance attestation for a member after a ramp partner
-            returns a successful KYC / sanctions decision. The member will
-            then be able to pay into gated circles and collect payouts
-            without any further friction.
+            Record a KYC provider&apos;s decision about a member as an on-chain
+            attestation. It states whose decision you relied on and what you
+            received from them, and nothing else: no sanctions or jurisdiction
+            check is part of it. With it, the member can pay into gated
+            circles and collect payouts from them.
           </p>
         </header>
 
@@ -447,8 +470,9 @@ export default function AdminCompliancePage() {
                   Pending KYC approvals
                 </p>
                 <p className="mt-1 text-sm text-emerald-900">
-                  Ramp partners queue members here after a successful KYC decision. Tap an entry to
-                  pre-fill the form below.
+                  Ramp partners queue members here when their webhook reports a KYC decision or a
+                  completed purchase; the criteria say which. Tap an entry to pre-fill the form
+                  below.
                 </p>
               </div>
               <button
@@ -571,6 +595,22 @@ export default function AdminCompliancePage() {
             />
           </Field>
 
+          <Field label="KYC provider" hint="Whose KYC decision this attestation records.">
+            <select
+              value={provider}
+              onChange={(e) => chooseProvider(e.target.value as ProviderChoice | '')}
+              className={inputClass}
+            >
+              <option value="" disabled>
+                Choose the provider…
+              </option>
+              <option value="coinbase">Coinbase</option>
+              <option value="moonpay">MoonPay</option>
+              <option value="transak">Transak</option>
+              <option value="internal">Internal (manual review)</option>
+            </select>
+          </Field>
+
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="Policy name">
               <input
@@ -588,22 +628,10 @@ export default function AdminCompliancePage() {
             </Field>
           </div>
 
-          <Field label="Ramp partner">
-            <select
-              value={provider}
-              onChange={(e) =>
-                setProvider(e.target.value as 'coinbase' | 'moonpay' | 'transak' | 'internal')
-              }
-              className={inputClass}
-            >
-              <option value="internal">Internal (manual review)</option>
-              <option value="coinbase">Coinbase</option>
-              <option value="moonpay">MoonPay</option>
-              <option value="transak">Transak</option>
-            </select>
-          </Field>
-
-          <Field label="Criteria summary" hint="Not stored on chain; retained for audit logs.">
+          <Field
+            label="Criteria summary"
+            hint="Part of the policy whose hash goes on chain: state only what the provider decided."
+          >
             <textarea
               value={criteria}
               onChange={(e) => setCriteria(e.target.value)}
