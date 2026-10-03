@@ -18,6 +18,7 @@ import { LoginButton } from '@/components/LoginButton';
 import { useTranslation } from '@/hooks/useTranslation';
 import { Seo } from '@/components/Seo';
 import { SITE_URL } from '@/lib/structured-data';
+import { JOIN_REQUEST_CHECK_FAILED, readJoinRequestCheck } from '@/lib/join-request-access-copy';
 import type { GetServerSideProps } from 'next';
 import {
   buildInviteShareCopy,
@@ -125,6 +126,10 @@ export default function JoinCircle({ invitePreview }: JoinCircleProps) {
   const [isMember, setIsMember] = useState(false);
   const [suiPrice, setSuiPrice] = useState(1.25); // Default price until we fetch real price
   const [hasPendingRequest, setHasPendingRequest] = useState(false);
+  // Set when the "already asked?" check couldn't be answered. That is not
+  // "no request": the page offers a retry, never "Send your request".
+  const [pendingCheckError, setPendingCheckError] = useState<string | null>(null);
+  const [checkingRequest, setCheckingRequest] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
@@ -155,6 +160,9 @@ export default function JoinCircle({ invitePreview }: JoinCircleProps) {
   }, [id, userAddress, router.isReady]);
 
   useEffect(() => {
+    // A previous circle's or account's answer says nothing about this one.
+    setHasPendingRequest(false);
+    setPendingCheckError(null);
     // Check if this user already has a pending request for this circle
     if (router.isReady && id && userAddress) {
       checkPendingRequest();
@@ -504,29 +512,30 @@ export default function JoinCircle({ invitePreview }: JoinCircleProps) {
 
   const checkPendingRequest = async () => {
     if (!id || !userAddress) return;
-    
+
+    setCheckingRequest(true);
     try {
       console.log(`[JoinPage] Checking if user ${userAddress} has pending request for circle ${id}`);
-      
+
       const response = await fetch(`/api/join-requests/check?circleId=${id}&userAddress=${userAddress}`);
-      
-      if (!response.ok) {
-        console.error('[JoinPage] Failed to check pending request:', response.status, response.statusText);
-        return;
-      }
-      
-      const data = await response.json();
-      console.log('[JoinPage] Pending request check response:', data);
-      
-      if (data.success && data.data && data.data.hasPendingRequest) {
-        console.log('[JoinPage] User has a pending request, updating UI');
-        setHasPendingRequest(true);
+      const data = await response.json().catch(() => null);
+      console.log('[JoinPage] Pending request check response:', response.status, data);
+
+      // Only a real answer changes what the page says. A failed check keeps
+      // a request this page just sent, and otherwise asks for a retry.
+      const check = readJoinRequestCheck(response.status, data);
+      if (check.ok) {
+        setHasPendingRequest(check.hasPendingRequest);
+        setPendingCheckError(null);
       } else {
-        console.log('[JoinPage] User does not have a pending request');
-        setHasPendingRequest(false);
+        console.error('[JoinPage] Failed to check pending request:', response.status, response.statusText);
+        setPendingCheckError(check.message);
       }
     } catch (error) {
       console.error('[JoinPage] Error checking pending request:', error);
+      setPendingCheckError(JOIN_REQUEST_CHECK_FAILED);
+    } finally {
+      setCheckingRequest(false);
     }
   };
 
@@ -1262,6 +1271,33 @@ export default function JoinCircle({ invitePreview }: JoinCircleProps) {
                           No further action is needed right now. You can safely leave
                           this page and return later to check the decision.
                         </div>
+                      </section>
+                    ) : pendingCheckError && !isMember ? (
+                      <section className={sectionCardClass}>
+                        <div className="flex items-start gap-4">
+                          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-[#ddd4c5] bg-white">
+                            <AlertCircle className="h-5 w-5 text-[#5f6b7f]" />
+                          </div>
+                          <div>
+                            <span className={eyebrowClass}>Request status</span>
+                            <h3 className="mt-3 text-2xl font-semibold tracking-[-0.04em] text-[#171923]">
+                              We couldn&apos;t check your request
+                            </h3>
+                            <p className="mt-4 text-sm leading-7 text-[#667085]" role="alert">
+                              {pendingCheckError}
+                            </p>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => checkPendingRequest()}
+                          disabled={checkingRequest}
+                          className={`${secondaryActionClass} mt-6 ${
+                            checkingRequest ? 'cursor-not-allowed opacity-60' : ''
+                          }`}
+                        >
+                          {checkingRequest ? 'Checking…' : 'Try again'}
+                        </button>
                       </section>
                     ) : (
                       <section className={sectionCardClass}>

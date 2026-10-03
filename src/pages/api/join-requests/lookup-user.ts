@@ -1,6 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-import joinRequestDatabase from '../../../services/join-request-database';
+import joinRequestDatabase, { type JoinRequest } from '../../../services/join-request-database';
 import { requireCircleParticipant, sendJoinRequestAuthFailure } from '../../../lib/join-request-auth';
+import { sendJoinRequestReadFailure } from '../../../lib/join-request-read-failure';
 
 type ResponseData = {
   success: boolean;
@@ -45,8 +46,14 @@ export default async function handler(
     console.log(`[LookupUser] Looking up user: ${userAddress} for circle: ${circleId}`);
 
     // Look up the user in the join requests database
-    // This will find any request (pending, approved, or rejected) for this user/circle combination
-    const userData = await joinRequestDatabase.getUserByAddress(circleId, userAddress);
+    // This will find any request (pending, approved, or rejected) for this user/circle combination.
+    // A read that fails answers 503, never "no name on file".
+    let userData: JoinRequest | null;
+    try {
+      userData = await joinRequestDatabase.getUserByAddress(circleId, userAddress);
+    } catch (dbError) {
+      return sendJoinRequestReadFailure(res, { route: 'lookup-user', circleId }, dbError);
+    }
 
     if (userData) {
       console.log(`[LookupUser] Found user: ${userData.user_name} for circle: ${userData.circle_name}`);

@@ -20,6 +20,10 @@ interface LocalJoinRequest {
 // Re-export the JoinRequest type
 export type { JoinRequest } from './join-request-database';
 
+// Reads THROW when the file can't be read, as the Postgres reads in
+// join-request-database.ts do: an empty list or `false` means there really is
+// no such request. Writes still return null/false on failure, and the routes
+// answer 500 for those.
 class DatabaseService {
   // Lazy: the SQLite file is only opened on first use. Opening it in the
   // constructor ran at module import, which crashes on serverless
@@ -134,7 +138,7 @@ class DatabaseService {
     }
   }
 
-  // Get all pending requests for a circle
+  // Get all pending requests for a circle. Throws when the read fails.
   getPendingRequestsByCircleId(circleId: string): JoinRequest[] {
     try {
       const stmt = this.db.prepare(`
@@ -166,11 +170,11 @@ class DatabaseService {
       }));
     } catch (error) {
       console.error('Error getting pending requests:', error);
-      return [];
+      throw error;
     }
   }
 
-  // Check if a user has a pending request for a circle
+  // Check if a user has a pending request for a circle. Throws when the read fails.
   userHasPendingRequest(circleId: string, userAddress: string): boolean {
     try {
       const stmt = this.db.prepare(`
@@ -182,7 +186,7 @@ class DatabaseService {
       return result.count > 0;
     } catch (error) {
       console.error('Error checking pending request:', error);
-      return false;
+      throw error;
     }
   }
 
@@ -200,42 +204,6 @@ class DatabaseService {
     } catch (error) {
       console.error('Error updating join request status:', error);
       return false;
-    }
-  }
-
-  // Get all requests for a user
-  getRequestsByUserAddress(userAddress: string): JoinRequest[] {
-    try {
-      const stmt = this.db.prepare(`
-        SELECT * FROM join_requests
-        WHERE userAddress = ?
-        ORDER BY requestDate DESC
-      `);
-      
-      const rawResults = stmt.all(userAddress) as {
-        id: number;
-        circleId: string;
-        circleName: string;
-        userAddress: string;
-        userName: string;
-        requestDate: number;
-        status: 'pending' | 'approved' | 'rejected';
-      }[];
-      
-      // Convert SQLite results to JoinRequest format
-      return rawResults.map(row => ({
-        id: row.id,
-        circle_id: row.circleId,
-        circle_name: row.circleName,
-        user_address: row.userAddress,
-        user_name: row.userName,
-        status: row.status,
-        created_at: new Date(row.requestDate),
-        updated_at: new Date(row.requestDate)
-      }));
-    } catch (error) {
-      console.error('Error getting user requests:', error);
-      return [];
     }
   }
 }

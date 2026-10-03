@@ -7,6 +7,7 @@ import { Bell, Crown, User, Menu, X } from 'lucide-react';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { useRouter } from 'next/router';
 import type { JoinRequest } from '@/services/database-service';
+import { classifyJoinRequestQueueFailure, joinRequestBellNotice } from '@/lib/join-request-access-copy';
 import LocaleSwitcher from '@/components/ui/LocaleSwitcher';
 
 const wordmarkFont = Instrument_Serif({
@@ -40,12 +41,13 @@ export const Navbar: React.FC = () => {
   const retryCount = useRef(0);
 
   // Fetch pending requests with debounce and error handling
-  const fetchPendingRequests = useCallback(async () => {
+  const fetchPendingRequests = useCallback(async (options: { force?: boolean } = {}) => {
     if (!account) return;
 
-    // Debounce: prevent too frequent calls
+    // Debounce: prevent too frequent calls. A manual Retry is never
+    // debounced: it would leave the panel unchanged, as if nothing happened.
     const now = Date.now();
-    if (now - lastFetchTime < FETCH_DEBOUNCE_MS) {
+    if (!options.force && now - lastFetchTime < FETCH_DEBOUNCE_MS) {
       console.log('[Navbar] Fetch debounced, too recent');
       return;
     }
@@ -59,7 +61,8 @@ export const Navbar: React.FC = () => {
     
     try {
       setLoading(true);
-      setFetchError(null);
+      // fetchError keeps the last poll's outcome until this one settles, so
+      // the bell's "couldn't load" mark doesn't flicker off on every poll.
       setLastFetchTime(now);
       
       console.log('[Navbar] Fetching join requests...');
@@ -88,8 +91,12 @@ export const Navbar: React.FC = () => {
       const allRequests: JoinRequest[] = [];
       // The pending route answers only a live admin session. A 401 means
       // that session lapsed: say so instead of showing an empty bell. A 403
-      // (no longer this circle's admin) is skipped quietly.
+      // (no longer this circle's admin) or 404 (circle gone) is skipped
+      // quietly. Any other failure (a 5xx such as the 503 for an unreadable
+      // join-request store, a network error, a malformed answer) is a queue
+      // we couldn't read: it is counted, never shown as "no requests".
       let signInExpired = false;
+      let unreadableCircles = 0;
 
       // If we have admin circles to check, use them
       if (adminCircleIds.length > 0) {
@@ -109,7 +116,9 @@ export const Navbar: React.FC = () => {
             
             if (!response.ok) {
               console.error(`[Navbar] Error response from API for circle ${circleId}:`, response.status, response.statusText);
-              if (response.status === 401) signInExpired = true;
+              const failure = classifyJoinRequestQueueFailure(response.status);
+              if (failure === 'signed-out') signInExpired = true;
+              if (failure === 'unreadable') unreadableCircles++;
               continue;
             }
             
@@ -121,10 +130,12 @@ export const Navbar: React.FC = () => {
               allRequests.push(...data.data);
             } else {
               console.error(`[Navbar] Invalid response format for circle ${circleId}:`, data);
+              unreadableCircles++;
             }
           } catch (error) {
             console.error(`[Navbar] Failed to fetch requests for circle ${circleId}:`, error);
             retryCount.current++;
+            unreadableCircles++;
             
             // Don't try service fallback anymore to prevent loops
             if (isLocalhost) {
@@ -148,7 +159,9 @@ export const Navbar: React.FC = () => {
           
           if (!response.ok) {
             console.error(`[Navbar] Error response from API for circle ${circleId}:`, response.status, response.statusText);
-            if (response.status === 401) signInExpired = true;
+            const failure = classifyJoinRequestQueueFailure(response.status);
+            if (failure === 'signed-out') signInExpired = true;
+            if (failure === 'unreadable') unreadableCircles++;
           } else {
             const data = await response.json();
             console.log(`[Navbar] API response for circle ${circleId}:`, data);
@@ -158,11 +171,13 @@ export const Navbar: React.FC = () => {
               allRequests.push(...data.data);
             } else {
               console.error(`[Navbar] Invalid response format for circle ${circleId}:`, data);
+              unreadableCircles++;
             }
           }
         } catch (error) {
           console.error(`[Navbar] Failed to fetch requests for circle ${circleId}:`, error);
           retryCount.current++;
+          unreadableCircles++;
         }
       }
       
@@ -175,9 +190,13 @@ export const Navbar: React.FC = () => {
       
       console.log('[Navbar] Final pending requests:', allRequests);
       setPendingRequests(allRequests);
-      if (signInExpired && allRequests.length === 0) {
-        setFetchError('Your sign-in has expired. Sign in again to see join requests.');
-      }
+      setFetchError(
+        joinRequestBellNotice({
+          requestsFound: allRequests.length,
+          unreadableCircles,
+          signInExpired,
+        }),
+      );
 
       // Reset retry count on successful fetch
       retryCount.current = 0;
@@ -391,11 +410,21 @@ export const Navbar: React.FC = () => {
                   className="relative inline-flex h-10 w-10 items-center justify-center rounded-full border border-stone-200 bg-white text-slate-600 transition hover:border-stone-300 hover:bg-stone-50"
                 >
                   <Bell className={`h-5 w-5 ${loading ? 'animate-pulse' : ''}`} />
-                  {pendingRequests.length > 0 && (
+                  {pendingRequests.length > 0 ? (
                     <span className="absolute right-0 top-0 inline-flex h-5 min-w-[1.25rem] -translate-y-1/3 translate-x-1/4 items-center justify-center rounded-full bg-red-600 px-1 text-[11px] font-bold leading-none text-white">
                       {pendingRequests.length}
                     </span>
-                  )}
+                  ) : fetchError ? (
+                    // No count to show because the queues couldn't be read: a
+                    // bare bell would read as "nobody has asked to join".
+                    <span
+                      className="absolute right-0 top-0 inline-flex h-5 min-w-[1.25rem] -translate-y-1/3 translate-x-1/4 items-center justify-center rounded-full bg-amber-500 px-1 text-[11px] font-bold leading-none text-white"
+                      title={fetchError}
+                    >
+                      <span aria-hidden="true">!</span>
+                      <span className="sr-only">{fetchError}</span>
+                    </span>
+                  ) : null}
                 </button>
 
                 {showNotifications && (
@@ -436,14 +465,13 @@ export const Navbar: React.FC = () => {
                           </svg>
                           <span className="text-sm">Loading notifications...</span>
                         </div>
-                      ) : fetchError ? (
+                      ) : fetchError && pendingRequests.length === 0 ? (
                         <div className="p-5 text-center text-red-500">
                           <div className="text-sm">{fetchError}</div>
                           <button
                             onClick={() => {
                               retryCount.current = 0;
-                              setFetchError(null);
-                              fetchPendingRequests();
+                              fetchPendingRequests({ force: true });
                             }}
                             className="mt-3 inline-flex items-center justify-center rounded-full border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 transition hover:bg-red-100"
                           >
@@ -452,6 +480,22 @@ export const Navbar: React.FC = () => {
                         </div>
                       ) : pendingRequests.length > 0 ? (
                         <div className="divide-y divide-stone-200">
+                          {fetchError && (
+                            // Some circles answered and some couldn't be read:
+                            // list what we have and say the list is partial.
+                            <div className="flex items-center justify-between gap-3 bg-amber-50 px-4 py-3 text-xs text-amber-800 sm:text-sm">
+                              <span>{fetchError}</span>
+                              <button
+                                onClick={() => {
+                                  retryCount.current = 0;
+                                  fetchPendingRequests({ force: true });
+                                }}
+                                className="shrink-0 rounded-full border border-amber-200 bg-white px-3 py-1 text-xs font-medium text-amber-800 transition hover:bg-amber-100"
+                              >
+                                Retry
+                              </button>
+                            </div>
+                          )}
                           {pendingRequests.map((request) => (
                             <div
                               key={`${request.circle_id}-${request.user_address}`}
@@ -588,6 +632,9 @@ export const Navbar: React.FC = () => {
                   if (pendingRequests.length > 0) {
                     router.push(`/circle/${pendingRequests[0].circle_id}/manage`);
                     setMobileMenuOpen(false);
+                  } else if (fetchError) {
+                    retryCount.current = 0;
+                    fetchPendingRequests({ force: true });
                   }
                 }}
               >
@@ -602,8 +649,12 @@ export const Navbar: React.FC = () => {
                   </div>
                   <span className="text-sm font-medium text-slate-950">Notifications</span>
                 </div>
-                <span className="text-xs font-medium text-slate-500">
-                  {pendingRequests.length ? `${pendingRequests.length} new` : 'None'}
+                <span className={`text-xs font-medium ${!pendingRequests.length && fetchError ? 'text-amber-700' : 'text-slate-500'}`}>
+                  {pendingRequests.length
+                    ? `${pendingRequests.length} new`
+                    : fetchError
+                      ? "Couldn't load. Tap to retry"
+                      : 'None'}
                 </span>
               </button>
 

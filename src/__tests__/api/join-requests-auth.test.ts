@@ -7,7 +7,8 @@
  * - [circleId]/update and pending/[circleId]: the circle's on-chain admin;
  * - check and create: the signed-in account must be `userAddress`;
  * - lookup-user: the circle's admin or one of its members.
- * A failed chain read is an error response, never an empty answer.
+ * A failed chain read is an error response, never an empty answer, and so is
+ * a failed read of the join-request store itself (503).
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
@@ -96,6 +97,7 @@ import databaseService from '@/services/database-service';
 import { screenAddress } from '@/lib/sanctions';
 import { hasAcceptedAllLegalDocs } from '@/lib/legal-acceptance-server';
 import { getDriftStatusForIdentity } from '@/lib/zklogin-address-bindings';
+import { JOIN_REQUESTS_UNREADABLE } from '@/lib/join-request-read-failure';
 
 const ADMIN = '0x' + 'a1'.repeat(32);
 const MEMBER = '0x' + 'b2'.repeat(32);
@@ -544,5 +546,181 @@ describe('POST /api/join-requests/create', () => {
     expect(sqlite.createJoinRequest).toHaveBeenCalledWith(
       expect.objectContaining({ circleId: CIRCLE_ID, userAddress: MEMBER }),
     );
+  });
+});
+
+describe('when the join-request store cannot be read', () => {
+  const ORIGINAL_DATABASE_URL = process.env.DATABASE_URL;
+  const outage = () => new Error('Connection terminated unexpectedly');
+  const unreadable = { success: false, message: JOIN_REQUESTS_UNREADABLE };
+
+  afterEach(() => {
+    if (ORIGINAL_DATABASE_URL === undefined) {
+      delete process.env.DATABASE_URL;
+    } else {
+      process.env.DATABASE_URL = ORIGINAL_DATABASE_URL;
+    }
+  });
+
+  describe('locally (SQLite)', () => {
+    beforeEach(() => {
+      delete process.env.DATABASE_URL;
+    });
+
+    it("answers the admin's queue with 503, not an empty list", async () => {
+      sqlite.getPendingRequestsByCircleId.mockImplementation(() => {
+        throw outage();
+      });
+      const res = createRes();
+      await pendingHandler(
+        createReq({ method: 'GET', query: { circleId: CIRCLE_ID }, cookies: signInAs(ADMIN) }),
+        res,
+      );
+
+      expect(sqlite.getPendingRequestsByCircleId).toHaveBeenCalledWith(CIRCLE_ID);
+      expect(res.statusCode).toBe(503);
+      expect(res.jsonBody).toEqual(unreadable);
+    });
+
+    it("answers a member's own check with 503, not hasPendingRequest: false", async () => {
+      sqlite.userHasPendingRequest.mockImplementation(() => {
+        throw outage();
+      });
+      const res = createRes();
+      await checkHandler(
+        createReq({
+          method: 'GET',
+          query: { circleId: CIRCLE_ID, userAddress: MEMBER },
+          cookies: signInAs(MEMBER),
+        }),
+        res,
+      );
+
+      expect(sqlite.userHasPendingRequest).toHaveBeenCalledWith(CIRCLE_ID, MEMBER);
+      expect(res.statusCode).toBe(503);
+      expect(res.jsonBody).toEqual(unreadable);
+    });
+  });
+
+  describe('in production (Postgres)', () => {
+    beforeEach(() => {
+      process.env.DATABASE_URL = 'postgres://join-requests.test/njangi';
+      // With DATABASE_URL set the session registry would read Postgres too.
+      // Serve the sessions signInAs() writes, so the join-request read is the
+      // one that fails.
+      jest
+        .spyOn(sessionRegistry, 'getZkLoginSessionAccount')
+        .mockImplementation(
+          async (sessionId) => (sessionId ? getZkLoginSessionStore().get(sessionId)?.account : null) ?? null,
+        );
+    });
+
+    it("answers the admin's queue with 503, not an empty list", async () => {
+      postgres.getPendingRequestsByCircleId.mockRejectedValue(outage());
+      const res = createRes();
+      await pendingHandler(
+        createReq({ method: 'GET', query: { circleId: CIRCLE_ID }, cookies: signInAs(ADMIN) }),
+        res,
+      );
+
+      expect(postgres.getPendingRequestsByCircleId).toHaveBeenCalledWith(CIRCLE_ID);
+      expect(sqlite.getPendingRequestsByCircleId).not.toHaveBeenCalled();
+      expect(res.statusCode).toBe(503);
+      expect(res.jsonBody).toEqual(unreadable);
+    });
+
+    it("answers a member's own check with 503, not hasPendingRequest: false", async () => {
+      postgres.checkPendingRequest.mockRejectedValue(outage());
+      const res = createRes();
+      await checkHandler(
+        createReq({
+          method: 'GET',
+          query: { circleId: CIRCLE_ID, userAddress: MEMBER },
+          cookies: signInAs(MEMBER),
+        }),
+        res,
+      );
+
+      expect(postgres.checkPendingRequest).toHaveBeenCalledWith(CIRCLE_ID, MEMBER);
+      expect(res.statusCode).toBe(503);
+      expect(res.jsonBody).toEqual(unreadable);
+    });
+
+    it('still answers hasPendingRequest: false when there really is no request', async () => {
+      postgres.checkPendingRequest.mockResolvedValue(false);
+      const res = createRes();
+      await checkHandler(
+        createReq({
+          method: 'GET',
+          query: { circleId: CIRCLE_ID, userAddress: MEMBER },
+          cookies: signInAs(MEMBER),
+        }),
+        res,
+      );
+
+      expect(res.statusCode).toBe(200);
+      expect(res.jsonBody.data).toEqual({ hasPendingRequest: false });
+    });
+
+    it('answers a name lookup with 503, not userName: null', async () => {
+      (isCircleMember as jest.Mock).mockResolvedValue(true);
+      postgres.getUserByAddress.mockRejectedValue(outage());
+      const res = createRes();
+      await lookupUserHandler(
+        createReq({
+          method: 'GET',
+          query: { circleId: CIRCLE_ID, userAddress: ADMIN },
+          cookies: signInAs(MEMBER),
+        }),
+        res,
+      );
+
+      expect(postgres.getUserByAddress).toHaveBeenCalledWith(CIRCLE_ID, ADMIN);
+      expect(res.statusCode).toBe(503);
+      expect(res.jsonBody).toEqual(unreadable);
+    });
+
+    it('still answers userName: null for an address that never applied', async () => {
+      (isCircleMember as jest.Mock).mockResolvedValue(true);
+      postgres.getUserByAddress.mockResolvedValue(null);
+      const res = createRes();
+      await lookupUserHandler(
+        createReq({
+          method: 'GET',
+          query: { circleId: CIRCLE_ID, userAddress: ADMIN },
+          cookies: signInAs(MEMBER),
+        }),
+        res,
+      );
+
+      expect(res.statusCode).toBe(200);
+      expect(res.jsonBody.data).toEqual({ userName: null, circleName: null });
+    });
+
+    it('answers a failed save with an error, never success with { id: 0 }', async () => {
+      (screenAddress as jest.Mock).mockResolvedValue({ blocked: false });
+      (hasAcceptedAllLegalDocs as jest.Mock).mockResolvedValue({ accepted: true, missing: [] });
+      (getDriftStatusForIdentity as jest.Mock).mockResolvedValue({ drifted: false, previousAddresses: [] });
+      (getPooledSuiClient as jest.Mock).mockReturnValue({
+        getObject: jest.fn().mockResolvedValue({
+          data: { content: { dataType: 'moveObject', fields: {} } },
+        }),
+      });
+      postgres.createJoinRequest.mockRejectedValue(outage());
+      const res = createRes();
+      await createHandler(
+        createReq({
+          method: 'POST',
+          body: { circleId: CIRCLE_ID, circleName: 'Susu', userAddress: MEMBER, userName: 'Aminata' },
+          cookies: signInAs(MEMBER),
+        }),
+        res,
+      );
+
+      expect(postgres.createJoinRequest).toHaveBeenCalled();
+      expect(res.statusCode).toBe(500);
+      expect(res.jsonBody.success).toBe(false);
+      expect(res.jsonBody.data).toBeUndefined();
+    });
   });
 });
