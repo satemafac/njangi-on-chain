@@ -15,6 +15,7 @@ import type { Pool } from 'pg';
 import { getSharedPgPool, isPostgresConfigured } from './pg-pool';
 import { WHATSAPP_GRAPH_API_VERSION } from './whatsapp-graph-api';
 import { computeLookupHash, fetchAndDecryptPII } from './walrus-pii';
+import { isRefusedWalrusReadError, isTransientWalrusReadError } from './walrus-read-error';
 import { lookupBlobsForCircle, lookupCirclesForPhone } from './whatsapp-link-index';
 import { getActiveWhatsAppRegistries } from '../services/whatsapp-registry-service';
 import type { NetworkType } from '../services/whatsapp-registry-service';
@@ -290,15 +291,43 @@ function decodeBlobId(raw: unknown): string {
   return '';
 }
 
-async function decryptPhone(blobId: string, memberAddress: string): Promise<string | null> {
+/**
+ * The first infra error a lookup held back so its remaining sources could
+ * still answer. resolveMemberPhone rethrows it when none of them does.
+ */
+interface HeldError {
+  error: unknown;
+}
+
+/**
+ * The phone in one blob, or null when this blob cannot give one. Every
+ * failure is logged — a refusal as an error, anything else as a warning; a
+ * transient Walrus read failure is also held in `held`, since the blob may
+ * well resolve on a retry.
+ */
+async function decryptPhone(
+  blobId: string,
+  memberAddress: string,
+  held: HeldError,
+): Promise<string | null> {
   try {
     const payload = await fetchAndDecryptPII(blobId);
     return payload.phone_e164 ?? null;
   } catch (err) {
-    appLogger.warn('[whatsapp-notifier] failed to decrypt PII envelope', {
+    const transient = isTransientWalrusReadError(err);
+    if (transient) held.error ??= err;
+    const details = {
       memberAddress,
+      transient,
       error: err instanceof Error ? err.message : String(err),
-    });
+    };
+    if (isRefusedWalrusReadError(err)) {
+      // 401/403: the aggregator refused this server, not this blob, and
+      // every read fails the same way until the configuration is fixed.
+      appLogger.error('[whatsapp-notifier] Walrus aggregator refused the read', details);
+    } else {
+      appLogger.warn('[whatsapp-notifier] failed to decrypt PII envelope', details);
+    }
     return null;
   }
 }
@@ -313,13 +342,19 @@ async function decryptPhone(blobId: string, memberAddress: string): Promise<stri
  * blob before its lease ends and records the new id ONLY in the index, so
  * the blob id anchored on chain stops resolving once its original lease
  * lapses. The anchored blob is used only when the index has no row for the
- * circle (a link it never recorded, or no Postgres in dev).
+ * circle (a link it never recorded, or no Postgres in dev), or when the
+ * index's blob could not be read (see below).
  *
  * THROW contract: infra failures propagate so the caller halts or retries
- * instead of recording a false `no_link` — a registry read error always,
- * an index read error whenever no phone was found without it (the anchored
- * blob is still tried, since it resolves until its lease ends). Per-blob
- * decrypt failures are warned and skipped.
+ * instead of recording a false `no_link`. A registry read error always
+ * throws. An index read error, or a TRANSIENT Walrus read failure
+ * (aggregator unreachable, 5xx, 429, or a 401/403 refusal, logged as an
+ * error — see walrus-read-error.ts), is held while the member's remaining
+ * blobs and links are tried — including the link's anchored blob, which
+ * resolves until its original lease ends — and rethrown when none of them
+ * resolves a phone. Permanent per-blob failures — a 404 or 410 (lease
+ * lapsed), a malformed envelope, an AES-GCM failure — are warned and
+ * skipped; the anchored blob is not retried after one.
  */
 async function resolveMemberPhone(
   memberAddress: string,
@@ -344,7 +379,7 @@ async function resolveMemberPhone(
   const fields = (obj.data.content as { fields: { links?: unknown[] } }).fields;
   const links = Array.isArray(fields.links) ? fields.links : [];
   const target = normalizeAddress(memberAddress);
-  let indexError: unknown = null;
+  const held: HeldError = { error: null };
   for (const link of links) {
     const raw =
       (link as { fields?: Record<string, unknown> }).fields ??
@@ -361,7 +396,7 @@ async function resolveMemberPhone(
         const indexed = await lookupBlobsForCircle(circleId);
         if (indexed.length > 0) blobIds = indexed;
       } catch (err) {
-        indexError ??= err;
+        held.error ??= err;
         appLogger.warn('[whatsapp-notifier] link index lookup failed; trying the anchored blob', {
           memberAddress: target,
           circleId,
@@ -370,12 +405,21 @@ async function resolveMemberPhone(
       }
     }
 
+    const linkHeld: HeldError = { error: null };
     for (const blobId of blobIds) {
-      const phone = await decryptPhone(blobId, target);
+      const phone = await decryptPhone(blobId, target, linkHeld);
       if (phone) return phone;
     }
+    // Walrus could not serve the index's blob just now. Like an unreadable
+    // index, that leaves the anchored blob, which resolves until its
+    // original lease ends.
+    if (linkHeld.error && anchoredBlobId && !blobIds.includes(anchoredBlobId)) {
+      const phone = await decryptPhone(anchoredBlobId, target, linkHeld);
+      if (phone) return phone;
+    }
+    held.error ??= linkHeld.error;
   }
-  if (indexError) throw indexError;
+  if (held.error) throw held.error;
   return null;
 }
 
@@ -438,12 +482,14 @@ async function sendWhatsAppMessage(
  *
  * THROW contract: this function throws only on infra failures during the
  * phone lookup (e.g. the RPC failover transport exhausted its candidates,
- * or the link index could not be read). The claim row is settled
- * (`lookup_failed: …`) BEFORE the rethrow, so the tuple is immediately
- * reclaimable — callers treat the throw as "infra problem, retry me" (the
- * cycle-finalized cron halts without advancing its cursor; webhook callers
- * answer non-2xx so the provider retries) and the retry actually re-sends
- * instead of losing the claim race against a phantom in-flight row.
+ * the link index could not be read, or the Walrus aggregator failed
+ * transiently or refused the read, and no other blob resolved). The claim
+ * row is settled (`lookup_failed: …`) BEFORE the rethrow, so the tuple is
+ * immediately reclaimable — callers treat the throw as "infra problem,
+ * retry me" (the cycle-finalized cron halts without advancing its cursor;
+ * webhook callers answer non-2xx so the provider retries) and the retry
+ * actually re-sends instead of losing the claim race against a phantom
+ * in-flight row.
  */
 export async function sendMemberNotification(
   input: SendMemberNotificationInput,
@@ -470,11 +516,11 @@ export async function sendMemberNotification(
       phone = await resolveMemberPhone(target, input.network);
     } catch (err) {
       // Infra failure reading the on-chain link registry (RPC degradation
-      // can throw here while queryEvents still works) or the Postgres link
-      // index. Settle the claim FIRST so the tuple is reclaimable the
-      // moment the caller retries, then rethrow — a lookup failure affects
-      // every recipient, so the caller must halt/retry rather than advance
-      // past the event.
+      // can throw here while queryEvents still works), the Postgres link
+      // index, or a Walrus blob (aggregator unreachable, 5xx, 429). Settle
+      // the claim FIRST so the tuple is reclaimable the moment the caller
+      // retries, then rethrow — a lookup failure affects every recipient,
+      // so the caller must halt/retry rather than advance past the event.
       const message = err instanceof Error ? err.message : String(err);
       await recordNotification(
         input.kind,

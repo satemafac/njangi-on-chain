@@ -371,8 +371,9 @@ async function notifyCircleEvent(
   }
 
   // Resolve the circle's linked phone. THROWS on registry-read infra
-  // failures, and on an index read failure the registry scan could not
-  // make up for; the drain maps either to 'halt' (cursor not advanced).
+  // failures, and on an index read or transient Walrus read failure no
+  // other source made up for; the drain maps a throw to 'halt' (cursor not
+  // advanced).
   // A throw is never cached, so the circle's next event in this run (on
   // another stream) looks the phone up again instead of reading a null.
   // Unlink confirmations bypass the cache — they need the disabled link.

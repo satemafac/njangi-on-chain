@@ -19,14 +19,22 @@
 //      disabled.
 //
 // THROW contract: infra failures propagate so the cron halts without
-// advancing its cursor — a registry object read error always, an index
-// read error whenever the registry scan finds no phone without it (past
-// the anchored blob's lease, only the index could have answered). "No
-// link" returns null (skip + advance). Per-blob decrypt failures are
-// warned and skipped — one corrupt envelope must not wedge the stream.
+// advancing its cursor. A registry object read error always throws. An
+// index read error, or a TRANSIENT Walrus read failure (aggregator
+// unreachable, 5xx, 429, or a 401/403 refusal — see walrus-read-error.ts),
+// is held while the remaining sources are tried (the registry's anchored
+// blob resolves until its original lease ends) and rethrown when none of
+// them resolves a phone: past the anchor's lease only the index's blob
+// could answer, and Walrus may serve it on the next run. A refusal is
+// logged as an error: it fails every read until WALRUS_AGGREGATOR_URL is
+// fixed. "No link" returns null (skip + advance). Permanent per-blob
+// failures — a 404 or 410 (lease lapsed), a malformed envelope, an AES-GCM
+// failure (corrupt envelope or wrong key) — are warned and skipped: one bad
+// envelope must not wedge the stream.
 
 import type { SuiClient } from '@mysten/sui/client';
 import { fetchAndDecryptPII } from '../walrus-pii';
+import { isRefusedWalrusReadError, isTransientWalrusReadError } from '../walrus-read-error';
 import { lookupBlobsForCircle } from '../whatsapp-link-index';
 import { getActiveWhatsAppRegistries } from '../../services/whatsapp-registry-service';
 import type { NetworkType } from '../../services/whatsapp-registry-service';
@@ -44,15 +52,43 @@ function decodeBytesField(raw: unknown): string {
   return '';
 }
 
-async function decryptPhone(blobId: string, circleId: string): Promise<string | null> {
+/**
+ * The first infra error a lookup held back so its remaining sources could
+ * still answer. resolveCirclePhone rethrows it when none of them does.
+ */
+interface HeldError {
+  error: unknown;
+}
+
+/**
+ * The phone in one blob, or null when this blob cannot give one. Every
+ * failure is logged — a refusal as an error, anything else as a warning; a
+ * transient Walrus read failure is also held in `held`, since the blob may
+ * well resolve on a retry.
+ */
+async function decryptPhone(
+  blobId: string,
+  circleId: string,
+  held: HeldError,
+): Promise<string | null> {
   try {
     const payload = await fetchAndDecryptPII(blobId);
     return payload.phone_e164 ?? null;
   } catch (err) {
-    appLogger.warn('[circle-phone] failed to decrypt PII envelope', {
+    const transient = isTransientWalrusReadError(err);
+    if (transient) held.error ??= err;
+    const details = {
       circleId,
+      transient,
       error: err instanceof Error ? err.message : String(err),
-    });
+    };
+    if (isRefusedWalrusReadError(err)) {
+      // 401/403: the aggregator refused this server, not this blob, and
+      // every read fails the same way until the configuration is fixed.
+      appLogger.error('[circle-phone] Walrus aggregator refused the read', details);
+    } else {
+      appLogger.warn('[circle-phone] failed to decrypt PII envelope', details);
+    }
     return null;
   }
 }
@@ -75,43 +111,47 @@ export async function resolveCirclePhone(
 ): Promise<string | null> {
   // 1. Postgres index — newest blob first.
   let indexedBlobs: string[] = [];
-  let indexError: unknown = null;
+  const held: HeldError = { error: null };
   try {
     indexedBlobs = await lookupBlobsForCircle(circleId);
   } catch (err) {
-    indexError = err;
+    held.error = err;
     appLogger.warn('[circle-phone] index lookup failed; falling back to registry scan', {
       circleId,
       error: err instanceof Error ? err.message : String(err),
     });
   }
   for (const blobId of indexedBlobs) {
-    const phone = await decryptPhone(blobId, circleId);
+    const phone = await decryptPhone(blobId, circleId, held);
     if (phone) return phone;
   }
 
-  // 2. On-chain registry scan — tried even when the index read failed,
-  // since the anchored blob resolves until its original lease ends.
-  const registryPhone = await resolveFromRegistry(client, circleId, network, options);
+  // 2. On-chain registry scan — tried even when the index read or a Walrus
+  // read failed, since the anchored blob resolves until its original lease
+  // ends.
+  const registryPhone = await resolveFromRegistry(client, circleId, network, options, held);
   if (registryPhone) return registryPhone;
 
-  // A failed index read is not "no link": past the anchored blob's lease
-  // the index held the only route to the phone, and a null here would let
-  // the cron skip the event and advance past it for good.
-  if (indexError) throw indexError;
+  // A failed read is not "no link": past the anchored blob's lease the
+  // index held the only route to the phone, Walrus may serve a blob it
+  // could not serve just now, and a null here would let the cron skip the
+  // event and advance past it for good.
+  if (held.error) throw held.error;
   return null;
 }
 
 /**
  * The registry half of resolveCirclePhone (current schema:
  * walrus_blob_id only). Read errors throw; null means no registry, no
- * matching link, or no blob that decrypts.
+ * matching link, or no blob that decrypts (a transient Walrus failure
+ * among them is held in `held`).
  */
 async function resolveFromRegistry(
   client: SuiClient,
   circleId: string,
   network: NetworkType,
   options: ResolveCirclePhoneOptions,
+  held: HeldError,
 ): Promise<string | null> {
   const registries = getActiveWhatsAppRegistries(network);
   const registryId = registries?.[0]?.registryObjectId;
@@ -148,7 +188,7 @@ async function resolveFromRegistry(
     if (!blobId) continue;
 
     if (raw.enabled === true) {
-      const phone = await decryptPhone(blobId, circleId);
+      const phone = await decryptPhone(blobId, circleId, held);
       if (phone) return phone;
       continue;
     }
@@ -159,7 +199,7 @@ async function resolveFromRegistry(
   }
 
   if (options.includeDisabled && newestDisabledBlob) {
-    return decryptPhone(newestDisabledBlob, circleId);
+    return decryptPhone(newestDisabledBlob, circleId, held);
   }
 
   return null;
