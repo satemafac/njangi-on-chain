@@ -495,7 +495,7 @@ describe('buildTemplate (Meta-approved business-initiated sends)', () => {
   it('circle_linked → circle_link with the circle name + deep-link button', () => {
     const t = template('circle_linked', { circle_id: CIRCLE })!;
     expect(t.name).toBe('circle_link');
-    expect(t.language).toBe('en');
+    expect(t.language).toBe('en_US');
     expect(bodyParams(t)).toEqual(['Bamenda Savers']);
     expect(buttonParam(t)).toBe(CIRCLE);
   });
@@ -577,7 +577,7 @@ describe('buildTemplate (Meta-approved business-initiated sends)', () => {
       USDC_ESCROW,
     )!;
     expect(t.name).toBe('payout_processed');
-    expect(t.language).toBe('en');
+    expect(t.language).toBe('en_US');
     const params = bodyParams(t);
     expect(params).toHaveLength(5);
     expect(params[0]).toBe('Bamenda Savers');
