@@ -127,3 +127,53 @@ describe('validate-env WhatsApp PII keys', () => {
     ]);
   });
 });
+
+// Only the WhatsApp values the app reads are required. The webhook callback
+// URL is set in Meta's App Dashboard, the business account id matters only in
+// WhatsApp Manager, and the Graph API version is a constant in
+// src/lib/whatsapp-graph-api.ts, never an env var.
+describe('validate-env WhatsApp variables', () => {
+  const REQUIRED = ['WHATSAPP_PHONE_NUMBER_ID', 'WHATSAPP_ACCESS_TOKEN', 'WHATSAPP_VERIFY_TOKEN', 'WHATSAPP_APP_SECRET'];
+  // A word boundary, so NEXT_PUBLIC_TESTNET_WHATSAPP_PACKAGE_ID doesn't count.
+  const whatsappLines = (stderr: string) => stderr.split('\n').filter((line) => /\bWHATSAPP_/.test(line));
+
+  it('requires the four values the app reads', () => {
+    let env = template;
+    for (const key of REQUIRED) env = setVar(env, key, '');
+
+    expect(whatsappLines(validate(env))).toEqual(
+      REQUIRED.map((key) => expect.stringContaining(`Missing required variable: ${key}`)),
+    );
+  });
+
+  it('requires neither the webhook URL nor the business account id', () => {
+    const env = `${setVar(template, 'WHATSAPP_BUSINESS_ACCOUNT_ID', '')}\nWHATSAPP_WEBHOOK_URL=\n`;
+
+    expect(whatsappLines(validate(env))).toEqual([]);
+  });
+
+  it('warns while a retired variable is still set', () => {
+    const env = `${template}\nWHATSAPP_API_VERSION=v21.0\nWHATSAPP_WEBHOOK_URL=https://njangionchain.com/api/whatsapp/webhook\n`;
+
+    expect(whatsappLines(validate(env))).toEqual([
+      expect.stringContaining('WHATSAPP_API_VERSION is set but unused'),
+      expect.stringContaining('WHATSAPP_WEBHOOK_URL is set but unused'),
+    ]);
+  });
+});
+
+describe('validate-env Walrus System object overrides', () => {
+  const overrideErrors = (stderr: string) =>
+    stderr.split('\n').filter((line) => line.includes('WALRUS_SYSTEM_OBJECT_ID_'));
+
+  it('accepts the empty template values and a real object id', () => {
+    expect(overrideErrors(validate(template))).toEqual([]);
+    expect(overrideErrors(validate(setVar(template, 'WALRUS_SYSTEM_OBJECT_ID_MAINNET', REAL_ID)))).toEqual([]);
+  });
+
+  it.each(['system', '0x0', `0x${'z'.repeat(64)}`])('rejects a malformed override (%s)', (value) => {
+    expect(overrideErrors(validate(setVar(template, 'WALRUS_SYSTEM_OBJECT_ID_TESTNET', value)))).toEqual([
+      expect.stringContaining(`WALRUS_SYSTEM_OBJECT_ID_TESTNET is "${value}", not a Sui object id`),
+    ]);
+  });
+});

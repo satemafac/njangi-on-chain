@@ -366,7 +366,10 @@ publish runbook below is separate (it ships contracts, not the web app).
    - `/api/cron/whatsapp-circle-events` (every 15 minutes, Sui-first probe
      gated) — circle lifecycle relays.
    - `/api/cron/walrus-renewal` (daily, `0 3 * * *`) — renews Walrus PII blobs
-     before expiry (tracked via `walrus_end_epoch` in Postgres).
+     before expiry (tracked via `walrus_end_epoch` in Postgres). End epochs are
+     WALRUS epochs (a day on testnet, two weeks on mainnet), read from the
+     Walrus System object by `src/lib/walrus-epoch.ts`; never compare them with
+     the Sui epoch (`docs/environment.md`, "Walrus blob renewal").
 4. Vercel runs `next build`; the active Sui network is `NEXT_PUBLIC_SUI_NETWORK`.
 
 Heroku is retired: Vercel is the only deploy target. The `Procfile`,

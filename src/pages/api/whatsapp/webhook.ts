@@ -12,8 +12,10 @@ import { getActiveWhatsAppRegistries } from '../../../services/whatsapp-registry
 import { getCircleStatus, formatCircleStatusForWhatsAppWithNames } from '../../../services/circle-status.service';
 import { getPooledSuiClient } from '../../../services/sui-rpc-failover';
 import { fetchAndDecryptPII } from '../../../lib/walrus-pii';
+import { WHATSAPP_GRAPH_API_VERSION } from '../../../lib/whatsapp-graph-api';
 import { lookupCirclesForPhone } from '../../../lib/whatsapp-link-index';
 import { timingSafeEqualStrings } from '../../../lib/timing-safe';
+import { WHATSAPP_HELP_REPLY } from '../../../content/whatsapp-updates';
 
 // Meta signs the exact bytes it POSTs: X-Hub-Signature-256 is an HMAC-SHA256
 // of the raw body. Next.js' default bodyParser would hand the handler a
@@ -372,13 +374,13 @@ async function handler(
                   const lowerText = messageText.toLowerCase();
 
                   if (lowerText.includes('help') || lowerText === '?') {
-                    // Send help message
-                    const helpMessage = `✅ *Njangi WhatsApp Channel*\n\nThis is a notification-only channel. You will receive:\n\n• 🔄 Cycle started notifications\n• 💰 Contribution confirmations\n• ⏰ Deadline reminders\n• 💵 Payout notifications\n• 👥 Member joined alerts\n• 📊 Circle insights\n\n*Available Commands:*\n/status <circle-id> - Get live circle status from blockchain\n/help - Show this message\n\n*Example:*\n/status 0x1639fcff0c0f7a48ba0a1aa9f727985f1c9360d399bd8210dc99f26c07237d8e`;
-
+                    // Lists only the updates something actually sends — see
+                    // src/content/whatsapp-updates.ts.
+                    const helpMessage = WHATSAPP_HELP_REPLY;
 
                     try {
                       const whatsappResponse = await fetch(
-                        `https://graph.facebook.com/v23.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
+                        `https://graph.facebook.com/${WHATSAPP_GRAPH_API_VERSION}/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
                         {
                           method: 'POST',
                           headers: {
@@ -432,7 +434,7 @@ async function handler(
                         }
 
                         const whatsappResponse = await fetch(
-                          `https://graph.facebook.com/v23.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
+                          `https://graph.facebook.com/${WHATSAPP_GRAPH_API_VERSION}/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
                           {
                             method: 'POST',
                             headers: {
@@ -475,7 +477,7 @@ async function handler(
 
                         try {
                           await fetch(
-                            `https://graph.facebook.com/v23.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
+                            `https://graph.facebook.com/${WHATSAPP_GRAPH_API_VERSION}/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
                             {
                               method: 'POST',
                               headers: {
@@ -515,7 +517,7 @@ async function handler(
                             }
 
                             await fetch(
-                              `https://graph.facebook.com/v23.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
+                              `https://graph.facebook.com/${WHATSAPP_GRAPH_API_VERSION}/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
                               {
                                 method: 'POST',
                                 headers: {
@@ -553,7 +555,7 @@ async function handler(
 
                     try {
                       const whatsappResponse = await fetch(
-                        `https://graph.facebook.com/v23.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
+                        `https://graph.facebook.com/${WHATSAPP_GRAPH_API_VERSION}/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
                         {
                           method: 'POST',
                           headers: {

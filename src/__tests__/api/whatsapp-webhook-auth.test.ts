@@ -14,6 +14,10 @@
  * handler used to verify, and it hides exactly the deliveries that failed.
  *
  * Log hygiene: no phone number or message text may reach the logs.
+ *
+ * Help reply (October 2026): it lists only what the channel sends, from
+ * src/content/whatsapp-updates.ts. It used to promise deadline reminders and
+ * circle insights, which nothing sends.
  */
 
 import crypto from 'crypto';
@@ -21,6 +25,7 @@ import { Readable } from 'stream';
 import { inspect } from 'util';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import handler, { config } from '@/pages/api/whatsapp/webhook';
+import { WHATSAPP_GRAPH_API_VERSION } from '@/lib/whatsapp-graph-api';
 import {
   formatCircleStatusForWhatsAppWithNames,
   getCircleStatus,
@@ -29,6 +34,7 @@ import { lookupCirclesForPhone } from '@/lib/whatsapp-link-index';
 import { getActiveWhatsAppRegistries } from '@/services/whatsapp-registry-service';
 import { getPooledSuiClient } from '@/services/sui-rpc-failover';
 import { fetchAndDecryptPII } from '@/lib/walrus-pii';
+import { WHATSAPP_HELP_REPLY } from '@/content/whatsapp-updates';
 
 jest.mock('@/services/circle-status.service', () => ({
   getCircleStatus: jest.fn(),
@@ -360,6 +366,17 @@ describe('WhatsApp webhook', () => {
     });
   });
 
+  describe('help reply', () => {
+    it('answers "help" with the shared list of what the channel sends', async () => {
+      const res = await deliver(inboundMessage('help'));
+
+      expect(res.statusCode).toBe(200);
+      expect(sentReplies()).toEqual([
+        expect.objectContaining({ to: SENDER, text: { body: WHATSAPP_HELP_REPLY } }),
+      ]);
+    });
+  });
+
   describe('log hygiene', () => {
     it('logs the id and type of an inbound message, not its number or text', async () => {
       await deliver(
@@ -457,6 +474,38 @@ describe('WhatsApp webhook', () => {
       expect(logs).not.toContain('find my circle');
       expect(logs).not.toContain('next meeting');
       expect(logs).not.toContain('/status');
+    });
+  });
+
+  describe('Graph API version', () => {
+    it('sends every reply to the pinned version, whatever WHATSAPP_API_VERSION says', async () => {
+      // The retired variable, at the value the old docs gave. Nothing may read it.
+      process.env.WHATSAPP_API_VERSION = 'v21.0';
+      process.env.WHATSAPP_PHONE_NUMBER_ID = '100000000000002';
+      // The multi-circle reply waits 1s between sends; skip only that wait.
+      const realSetTimeout = global.setTimeout;
+      jest.spyOn(global, 'setTimeout').mockImplementation(((callback: () => void, ms?: number) => {
+        if (ms === 1000) {
+          callback();
+          return 0;
+        }
+        return realSetTimeout(callback, ms);
+      }) as unknown as typeof setTimeout);
+
+      // One message per reply: help, /status <circle-id>, /status with no
+      // linked circle, /status with one, and the acknowledgment.
+      await deliver(inboundMessage('help'));
+      await deliver(inboundMessage(`\\/status ${CIRCLE_ID}`));
+      await deliver(inboundMessage('\\/status'));
+      mockedLookupCircles.mockResolvedValueOnce([
+        { circleId: CIRCLE_ID, walrusBlobId: 'blob-1', linkType: 1 },
+      ]);
+      await deliver(inboundMessage('\\/status'));
+      await deliver(inboundMessage('what time is the next meeting'));
+
+      expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual(
+        Array(5).fill(`https://graph.facebook.com/${WHATSAPP_GRAPH_API_VERSION}/100000000000002/messages`),
+      );
     });
   });
 });

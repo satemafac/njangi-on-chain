@@ -76,7 +76,8 @@ any other message that contains `status` counts as `/status`.
   but the on-chain anchor never expires. Before a blob's storage runs out,
   the daily `/api/cron/walrus-renewal` stores the number again as a new blob
   and records the new blob id in `whatsapp_phone_index`. The on-chain anchor
-  keeps the original blob id.
+  keeps the original blob id, so every lookup reads the index first and
+  uses the anchored blob id only when the index has no row for the link.
 
 ## Known gaps
 
@@ -88,12 +89,6 @@ any other message that contains `status` counts as `/status`.
 - **Group links receive nothing.** The link form also accepts a WhatsApp
   group id (`…@g.us`), and the link is stored, but every sender reads only a
   phone number.
-- **Member messages stop when the first blob expires.** Messages addressed to
-  a member rather than a circle, such as the "your turn" nudge and the
-  stale-attestation reminders, find the member's number through the blob id
-  anchored on chain, not through `whatsapp_phone_index`. Renewal doesn't
-  change that anchor, so these lookups fail once the original blob's storage
-  ends. Circle updates and `/status` read the index, so they keep working.
 - **The help reply promises more than is sent.** It lists deadline reminders
   and circle insights, which nothing sends, along with the contribution and
   payout updates above.
