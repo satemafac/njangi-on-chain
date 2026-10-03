@@ -492,12 +492,11 @@ describe('buildTemplate (Meta-approved business-initiated sends)', () => {
     return parsed.buildTemplate(ctx(overrides));
   }
 
-  it('circle_linked → circle_link with the circle name + deep-link button', () => {
-    const t = template('circle_linked', { circle_id: CIRCLE })!;
-    expect(t.name).toBe('circle_link');
-    expect(t.language).toBe('en_US');
-    expect(bodyParams(t)).toEqual(['Bamenda Savers']);
-    expect(buttonParam(t)).toBe(CIRCLE);
+  it('circle_linked sends no template, because the approved circle_link body over-promises', () => {
+    // WHATSAPP_TEMPLATES.md: that body promises cycle deadlines and
+    // "important alerts", which nothing sends. The confirmation goes as text
+    // built from src/content/whatsapp-updates.ts instead.
+    expect(template('circle_linked', { circle_id: CIRCLE })).toBeNull();
   });
 
   it('circle_unlinked → circle_unlink whose button deep-links to /manage', () => {

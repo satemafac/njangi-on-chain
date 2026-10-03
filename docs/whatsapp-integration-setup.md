@@ -20,11 +20,13 @@ long outage doesn't replay stale messages.
 
 - **Circle updates**, from `/api/cron/whatsapp-circle-events`, go to the
   number linked to the circle: link and unlink confirmations, members joining
-  and being removed, security deposits paid and returned, payout-order
-  changes and circle activation. The event streams are defined in
+  and being removed, security deposits paid (and returned when an admin
+  removes a member), each contribution to a round, each payout when its
+  recipient collects it, payout-order changes and circle activation. The
+  event streams are defined in
   [`src/lib/whatsapp-bot/circle-events.ts`](../src/lib/whatsapp-bot/circle-events.ts).
-  The cron also has contribution and payout streams, but they never fire
-  today; see [Known gaps](#known-gaps).
+  The link confirmation, the help reply and the manage card all list these
+  from [`src/content/whatsapp-updates.ts`](../src/content/whatsapp-updates.ts).
 - **"It's your turn"**, from `/api/cron/cycle-finalized`, tells a round's
   recipient that the payout is ready to collect. It is triggered by the
   contribution that fills the round's pot (the escrow's `ContributionRecorded`
@@ -95,11 +97,6 @@ says no circle is linked only when every lookup answered.
 
 ## Known gaps
 
-- **Contribution and payout updates never go out.** Their streams listen for
-  `ContributionMade`, `StablecoinContributionMade` and `PayoutProcessed`.
-  Those events come from the retired payment rail, and no circle on the
-  per-round escrow emits them. PR #43 repoints the streams to the escrow's
-  own events.
 - **Group links are refused.** A business number can message only groups it
   created through Meta's Groups API. That API is open only to Official
   Business Accounts, members join by invite link (8 at most), and a send
@@ -111,20 +108,20 @@ says no circle is linked only when every lookup answered.
   PR #64 stays linked until the admin unlinks it. It receives nothing,
   because every sender reads only a phone number, and the manage card marks
   it "⚠️ Not supported".
-- **The link confirmation promises more than is sent.** The help reply and
-  the manage card list only the updates in
-  [`src/content/whatsapp-updates.ts`](../src/content/whatsapp-updates.ts),
-  but the confirmation is not built from that file. Its text, from the
-  `circle_linked` stream, says contribution and payout updates will follow,
-  and the `circle_link` template in
-  [`WHATSAPP_TEMPLATES.md`](../WHATSAPP_TEMPLATES.md) adds cycle deadlines.
-  None of those go out today.
-- **A deposit refunded by a stop-and-refund gets no message.** The help reply
-  and the manage card promise "Security deposits paid or returned". A return
-  is sent only when an admin removes a member, which emits
+- **The link confirmation goes out as text only.** The approved
+  `circle_link` template promises cycle deadlines and "important alerts",
+  which nothing sends, so the app no longer sends it. With
+  `WHATSAPP_TEMPLATES_ENABLED=true`, the text confirmation still reaches a
+  number only inside the 24-hour window. That lasts until Meta approves the
+  edit proposed in [`WHATSAPP_TEMPLATES.md`](../WHATSAPP_TEMPLATES.md) and
+  the `circle_linked` stream gets its template back.
+- **A deposit refunded by a stop-and-refund gets no message.** A return is
+  sent only when an admin removes a member, which emits
   `SecurityDepositReturned`. A stop-and-refund (`execute_recovery` or
   `trigger_auto_release`) emits `RecoveryMemberRefunded` instead, and no
-  stream reads it.
+  stream reads it. So the copy promises a return only on removal, and
+  `src/content/__tests__/whatsapp-updates.test.ts` fails if any WhatsApp
+  copy promises more while no stream reads that event.
 
 ## Setting it up
 
@@ -164,9 +161,11 @@ the window. To switch to templates (the header comment of
 `src/lib/whatsapp-notifier.ts` has the same steps):
 
 1. Create each template in WhatsApp Manager, category Utility. The code sends
-   `circle_link`, `circle_unlink`, `member_joins`, `deposit_returned`,
-   `member_removed`, `order_changed` and `payout_processed`. Their bodies are
-   in [`WHATSAPP_TEMPLATES.md`](../WHATSAPP_TEMPLATES.md).
+   `circle_unlink`, `member_joins`, `deposit_returned`, `member_removed`,
+   `order_changed` and `payout_processed`. Their bodies are in
+   [`WHATSAPP_TEMPLATES.md`](../WHATSAPP_TEMPLATES.md). It no longer sends
+   `circle_link`, whose approved body promises updates nothing sends; that
+   file proposes a replacement.
 2. Create them in English (US), `en_US`: the crons send every template as
    `en_US`, the language they were approved under in WhatsApp Manager. Meta
    treats `en` and `en_US` as different languages and fails a send whose
@@ -177,12 +176,12 @@ the window. To switch to templates (the header comment of
 4. Once every template is approved, set `WHATSAPP_TEMPLATES_ENABLED=true` in
    Vercel and redeploy.
 
-Security deposits, contributions, circle activation and the "your turn" nudge
-have no template wired yet. They stay free-form text even with the flag on,
-so they reach only people inside the window. The nudge used to borrow
-`payout_processed`, but that template's approved copy says the payout was
-already sent, which is false while the pot waits to be collected, so it needs
-an approved template of its own.
+The link confirmation, security deposits, contributions, circle activation and
+the "your turn" nudge have no template wired yet. They stay free-form text
+even with the flag on, so they reach only people inside the window. The nudge
+used to borrow `payout_processed`, but that template's approved copy says the
+payout was already sent, which is false while the pot waits to be collected,
+so it needs an approved template of its own.
 
 ## Checking it works
 

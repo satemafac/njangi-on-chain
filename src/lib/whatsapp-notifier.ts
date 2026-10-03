@@ -49,7 +49,7 @@ export type NotificationKind =
 //   1. Create each template under the business's WhatsApp account
 //      (WHATSAPP_BUSINESS_ACCOUNT_ID), category "Utility". The legacy bot's
 //      template names are reused so already-approved templates keep working:
-//      payout_processed, circle_link, circle_unlink, member_joins,
+//      payout_processed, circle_unlink, member_joins,
 //      member_removed, deposit_returned, order_changed (see
 //      src/lib/whatsapp-bot/circle-events.ts, and WHATSAPP_TEMPLATES.md for
 //      the full inventory and template bodies).
@@ -67,7 +67,9 @@ export type NotificationKind =
 // each stream's buildTemplate must match the approved body placeholder
 // count ({{1}}, {{2}}, …) exactly or Meta rejects the send with error
 // 132000. The "your turn" nudge sends no template (see
-// your-turn-notification.ts).
+// your-turn-notification.ts), and neither does the link confirmation: the
+// approved circle_link body promises updates nothing sends
+// (WHATSAPP_TEMPLATES.md).
 // ---------------------------------------------------------------------------
 
 export interface WhatsAppTemplateParameter {

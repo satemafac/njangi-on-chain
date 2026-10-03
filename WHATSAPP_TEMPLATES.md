@@ -40,7 +40,18 @@ Note: The button `{{1}}` variable is separate from body variables. Body uses `{{
 ## Template 1: `circle_link`
 **Trigger**: When admin links WhatsApp to a circle
 
-**Body:**
+**Status (October 2026): not sent.** The body below promises cycle deadlines
+and "important alerts", which nothing sends. The app sends the link
+confirmation as text instead: `buildLinkConfirmation` in
+`src/content/whatsapp-updates.ts`, which lists exactly what the number gets.
+Text reaches the number only inside the 24-hour window, so with
+`WHATSAPP_TEMPLATES_ENABLED=true` most link confirmations won't arrive until
+this template is fixed. To send it again, edit it in WhatsApp Manager to the
+proposed body below (same name, same `{{1}}`, same button). Once Meta approves
+the edit, restore `buildTemplate` on the `circle_linked` stream in
+`src/lib/whatsapp-bot/circle-events.ts`.
+
+**Body (approved for the legacy bot; promises updates nothing sends):**
 ```
 ✅ *Circle Connected!*
 
@@ -53,6 +64,19 @@ Your WhatsApp is now linked to *{{1}}*. You'll automatically receive updates for
 
 Powered by Njangi On-Chain.
 ```
+
+**Proposed body (not submitted; needs the owner's approval and Meta review):**
+```
+✅ *Circle Connected!*
+
+Your WhatsApp is now linked to *{{1}}*. This circle's updates will come to this number. Reply *help* to see which ones.
+
+Powered by Njangi On-Chain.
+```
+
+It names no update itself, so it stays true when updates are added or removed.
+The *help* reply lists them from `src/content/whatsapp-updates.ts`. A reply also
+opens the 24-hour window in which the text updates can be delivered.
 
 **Body Variables:**
 1. `{{1}}` = Circle name (sample: `Family Savings`)
@@ -142,7 +166,10 @@ The funds are safely held in the circle's smart vault.
 ---
 
 ## Template 5: `deposit_returned`
-**Trigger**: When security deposit is returned (member removed or circle ended)
+**Trigger**: When the admin removes a member and returns their security deposit
+(`admin_remove_member` emits `SecurityDepositReturned`). A stop-and-refund
+(`execute_recovery` / `trigger_auto_release`) also returns deposits, but it
+emits `RecoveryMemberRefunded`, which nothing relays, so it sends nothing.
 
 **Body:**
 ```
@@ -463,11 +490,11 @@ Ensure all contributions are in before the payout date.
 
 | # | Template Name | Trigger | Button Text | Button URL |
 |---|---|---|---|---|
-| 1 | `circle_link` | Admin links WhatsApp | View Circle | `/circle/{{1}}` |
+| 1 | `circle_link` | Admin links WhatsApp (not sent; see Template 1) | View Circle | `/circle/{{1}}` |
 | 2 | `circle_unlink` | Admin unlinks WhatsApp | Reconnect Circle | `/circle/{{1}}/manage` |
 | 3 | `member_joins` | Admin approves member | View Circle | `/circle/{{1}}` |
 | 4 | `deposit_received` | Member pays deposit | View Deposits | `/circle/{{1}}/contribute` |
-| 5 | `deposit_returned` | Deposit returned | View Circle | `/circle/{{1}}` |
+| 5 | `deposit_returned` | Admin removes a member and returns their deposit | View Circle | `/circle/{{1}}` |
 | 6 | `recieve_contribution` | Member contributes | Contribute Now | `/circle/{{1}}/contribute` |
 | 7 | `member_removed` | Admin removes member | View Circle | `/circle/{{1}}` |
 | 8 | `order_changed` | Admin reorders rotation | View Circle | `/circle/{{1}}` |
