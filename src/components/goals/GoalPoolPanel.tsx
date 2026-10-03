@@ -3,6 +3,7 @@ import { toast } from 'react-hot-toast';
 import { Transaction } from '@mysten/sui/transactions';
 import { SuiClient } from '@mysten/sui/client';
 import GoalPotProgress from '@/components/goals/GoalPotProgress';
+import { copyToClipboard, manualCopyMessage } from '@/lib/copy-to-clipboard';
 import { goalDisplayFont } from '@/lib/fonts';
 import { useZkLoginSigner } from '@/hooks/useZkLoginSigner';
 import { getPooledSuiClient } from '@/services/sui-rpc-failover';
@@ -264,9 +265,16 @@ export default function GoalPoolPanel({ poolId, network, userAddress }: Props) {
   const released = state.released;
   const cancelled = state.cancelled;
 
-  const copyShare = () => {
+  const copyShare = async () => {
     if (typeof window === 'undefined') return;
-    void navigator.clipboard?.writeText(window.location.href);
+    const link = window.location.href;
+    // Only report a copy that happened: the old fire-and-forget write toasted
+    // "copied" even when the browser refused it.
+    const outcome = await copyToClipboard(link);
+    if (outcome === 'failed') {
+      toast.error(manualCopyMessage('link', link), { duration: 12000 });
+      return;
+    }
     toast.success('Link copied — share it with friends!');
   };
 

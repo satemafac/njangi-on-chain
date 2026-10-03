@@ -19,6 +19,8 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
+import { toast } from 'react-hot-toast';
+import { copyToClipboard, manualCopyMessage } from '@/lib/copy-to-clipboard';
 
 const STRINGS = {
   title: 'Add funds',
@@ -28,6 +30,8 @@ const STRINGS = {
   yourAddress: 'Your Sui wallet address',
   copy: 'Copy address',
   copied: 'Address copied',
+  /** Names the address in the "copy it by hand" message. */
+  addressLabel: 'wallet address',
   chooseExchange: 'Where are your funds?',
   steps: 'Steps',
   testFirst:
@@ -148,7 +152,9 @@ export function ReceiveFundsModal({
   pollBalance,
   onArrived,
 }: ReceiveFundsModalProps) {
-  const [copied, setCopied] = useState(false);
+  // 'failed' keeps the full address on screen until the modal closes, so it
+  // can still be copied by hand after the toast is gone.
+  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
   const [exchange, setExchange] = useState<ExchangeId>('binance');
   const [arrivedAmount, setArrivedAmount] = useState<number | null>(null);
   const baselineRef = useRef<number | null>(null);
@@ -192,24 +198,32 @@ export function ReceiveFundsModal({
     };
   }, [isOpen, pollBalance, onArrived]);
 
-  // Reset arrival state each time the modal is reopened.
+  // Reset arrival and copy state each time the modal is reopened.
   useEffect(() => {
     if (isOpen) {
       setArrivedAmount(null);
       baselineRef.current = null;
+      setCopyState('idle');
     }
   }, [isOpen]);
 
   if (!isOpen) return null;
 
   const handleCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(walletAddress);
-      setCopied(true);
-      setTimeout(() => mountedRef.current && setCopied(false), 2200);
-    } catch {
-      /* clipboard denied — user can select the address manually */
+    // The helper runs first, inside the click, while the browser still counts
+    // it as a user gesture. It falls back to execCommand when the Clipboard
+    // API refuses (unfocused document, in-app browsers) and never throws.
+    const outcome = await copyToClipboard(walletAddress);
+    if (!mountedRef.current) return;
+    if (outcome === 'failed') {
+      setCopyState('failed');
+      toast.error(manualCopyMessage(STRINGS.addressLabel, walletAddress), { duration: 12000 });
+      return;
     }
+    setCopyState('copied');
+    setTimeout(() => {
+      if (mountedRef.current) setCopyState((s) => (s === 'copied' ? 'idle' : s));
+    }, 2200);
   };
 
   const active = EXCHANGES.find((e) => e.id === exchange) ?? EXCHANGES[0];
@@ -276,10 +290,14 @@ export function ReceiveFundsModal({
             onClick={handleCopy}
             className="mt-3 w-full rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
           >
-            {copied ? STRINGS.copied : STRINGS.copy}
+            {copyState === 'copied' ? STRINGS.copied : STRINGS.copy}
           </button>
-          {copied && (
-            <p className="mt-2 break-all text-center font-mono text-[11px] text-slate-500">
+          {copyState !== 'idle' && (
+            <p
+              className={`mt-2 break-all text-center font-mono text-[11px] text-slate-500 ${
+                copyState === 'failed' ? 'select-all' : ''
+              }`}
+            >
               {walletAddress}
             </p>
           )}
