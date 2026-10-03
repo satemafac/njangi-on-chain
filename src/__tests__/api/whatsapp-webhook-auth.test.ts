@@ -23,7 +23,8 @@
  * registry read or a Walrus read failed, the reply used to tell a member
  * with a linked circle "No circles linked to your number". It now says the
  * check could not run, and keeps "No circles linked" for an answer every
- * lookup gave.
+ * lookup gave. A Walrus read the aggregator refuses (401/403, a
+ * misconfigured WALRUS_AGGREGATOR_URL) counts as a failed lookup too.
  */
 
 import crypto from 'crypto';
@@ -40,6 +41,7 @@ import { lookupCirclesForPhone } from '@/lib/whatsapp-link-index';
 import { getActiveWhatsAppRegistries } from '@/services/whatsapp-registry-service';
 import { getPooledSuiClient } from '@/services/sui-rpc-failover';
 import { fetchAndDecryptPII } from '@/lib/walrus-pii';
+import type * as WalrusPii from '@/lib/walrus-pii';
 import { WalrusReadError } from '@/lib/walrus-read-error';
 import { WHATSAPP_HELP_REPLY } from '@/content/whatsapp-updates';
 import {
@@ -556,6 +558,26 @@ describe('WhatsApp webhook', () => {
     const indexDown = () =>
       mockedLookupCircles.mockRejectedValue(new Error('Connection terminated unexpectedly'));
 
+    /**
+     * The error the REAL fetchEnvelopeFromWalrus throws when the aggregator
+     * refuses the read, as it does behind a misconfigured
+     * WALRUS_AGGREGATOR_URL.
+     */
+    async function refusal(status: 401 | 403): Promise<WalrusReadError> {
+      const { fetchEnvelopeFromWalrus } = jest.requireActual<typeof WalrusPii>('@/lib/walrus-pii');
+      const graphFetch = global.fetch;
+      global.fetch = (async () => new Response('forbidden', { status })) as typeof fetch;
+      try {
+        await fetchEnvelopeFromWalrus('blob-1');
+      } catch (err) {
+        if (err instanceof WalrusReadError) return err;
+        throw err;
+      } finally {
+        global.fetch = graphFetch;
+      }
+      throw new Error('expected the aggregator to refuse the read');
+    }
+
     /** Sends a bare "/status" and returns the reply bodies. */
     async function askForStatus(): Promise<string[]> {
       const res = await deliver(inboundMessage('\\/status'));
@@ -618,6 +640,21 @@ describe('WhatsApp webhook', () => {
       await expect(askForStatus()).resolves.toEqual([LINKED_CIRCLES_UNCHECKED_REPLY]);
       expect(loggedText()).toContain('Could not check which circles are linked');
     });
+
+    it.each([401, 403] as const)(
+      'says it could not check, logged as an error, when the aggregator refuses the read (%i)',
+      async (status) => {
+        // The aggregator turned this server away: the blob may well hold
+        // this number.
+        registryLinks({ circleId: CIRCLE_ID, blobId: 'blob-1' });
+        walrusHolds({ 'blob-1': await refusal(status) });
+
+        await expect(askForStatus()).resolves.toEqual([LINKED_CIRCLES_UNCHECKED_REPLY]);
+        const logs = loggedText();
+        expect(logs).toContain('[ERROR] Walrus aggregator refused a read during webhook lookup');
+        expect(logs).toContain('check WALRUS_AGGREGATOR_URL');
+      },
+    );
 
     it("says no circle is linked while the index is down if every link's blob was read", async () => {
       indexDown();

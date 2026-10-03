@@ -12,7 +12,7 @@ import { getActiveWhatsAppRegistries } from '../../../services/whatsapp-registry
 import { getCircleStatus, formatCircleStatusForWhatsAppWithNames } from '../../../services/circle-status.service';
 import { getPooledSuiClient } from '../../../services/sui-rpc-failover';
 import { fetchAndDecryptPII } from '../../../lib/walrus-pii';
-import { isTransientWalrusReadError } from '../../../lib/walrus-read-error';
+import { isRefusedWalrusReadError, isTransientWalrusReadError } from '../../../lib/walrus-read-error';
 import { WHATSAPP_GRAPH_API_VERSION } from '../../../lib/whatsapp-graph-api';
 import { lookupCirclesForPhone } from '../../../lib/whatsapp-link-index';
 import { timingSafeEqualStrings } from '../../../lib/timing-safe';
@@ -129,7 +129,8 @@ async function getAllLinkedCirclesFromRegistry(phoneNumber: string): Promise<Lin
  * The on-chain half of getAllLinkedCirclesFromRegistry: decrypts every
  * enabled link's blob and keeps the circles whose phone matches. The answer
  * is incomplete when the registry read fails, when Walrus cannot serve a
- * blob right now (it may hold this number), and, while the index is down,
+ * blob right now or refuses the read (it may hold this number; see
+ * walrus-read-error.ts), and, while the index is down,
  * when any blob cannot be read: the renewal cron records a renewed blob's id
  * only in the index, so an expired anchored blob may still be this number's
  * live link. With the index answering, an expired blob is a dead link.
@@ -195,11 +196,17 @@ async function scanRegistryAndDecryptForPhone(
       } catch (err) {
         const transient = isTransientWalrusReadError(err);
         if (transient || !indexAnswered) complete = false;
-        appLogger.warn('Failed to decrypt WhatsApp PII envelope during webhook lookup', {
+        const details = {
           error: err instanceof Error ? err.message : String(err),
           circleId,
           transient,
-        });
+        };
+        if (isRefusedWalrusReadError(err)) {
+          // 401/403: a misconfigured aggregator, failing every read until fixed.
+          appLogger.error('Walrus aggregator refused a read during webhook lookup', details);
+        } else {
+          appLogger.warn('Failed to decrypt WhatsApp PII envelope during webhook lookup', details);
+        }
       }
     }
 
