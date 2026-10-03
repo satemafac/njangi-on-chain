@@ -2,6 +2,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import joinRequestDatabase, { JoinRequest } from '../../../../services/join-request-database';
 import databaseService from '../../../../services/database-service';
 import { requireCircleAdmin, sendJoinRequestAuthFailure } from '../../../../lib/join-request-auth';
+import { sendJoinRequestReadFailure } from '../../../../lib/join-request-read-failure';
 
 type ResponseData = {
   success: boolean;
@@ -42,7 +43,9 @@ export default async function handler(
       console.log(`[DEBUG] Fetching pending requests for circle ID: ${circleId}`);
       console.log(`[DEBUG] Is localhost: ${isLocalhost()}`);
       
-      let requests: JoinRequest[] = [];
+      // A read that fails answers 503, never an empty list: `[]` would tell
+      // the admin that nobody has asked to join.
+      let requests: JoinRequest[];
 
       if (isLocalhost()) {
         // Use local SQLite database service for localhost
@@ -52,8 +55,7 @@ export default async function handler(
           requests = databaseService.getPendingRequestsByCircleId(circleId);
           console.log(`[DEBUG] SQLite found ${requests.length} pending requests for circle ${circleId}`);
         } catch (sqliteError) {
-          console.error('[DEBUG] SQLite database error:', sqliteError);
-          requests = [];
+          return sendJoinRequestReadFailure(res, { route: 'pending', circleId }, sqliteError);
         }
       } else {
         // Use PostgreSQL database for production
@@ -61,9 +63,7 @@ export default async function handler(
         try {
           requests = await joinRequestDatabase.getPendingRequestsByCircleId(circleId);
         } catch (dbError) {
-          console.error('[DEBUG] PostgreSQL database error:', dbError);
-          // Even in production, if DB fails, return empty array instead of crashing
-          requests = [];
+          return sendJoinRequestReadFailure(res, { route: 'pending', circleId }, dbError);
         }
       }
       

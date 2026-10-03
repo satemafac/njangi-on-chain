@@ -2,6 +2,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import joinRequestDatabase from '../../../services/join-request-database';
 import databaseService from '../../../services/database-service';
 import { requireSessionAddress, sendJoinRequestAuthFailure } from '../../../lib/join-request-auth';
+import { sendJoinRequestReadFailure } from '../../../lib/join-request-read-failure';
 
 type ResponseData = {
   success: boolean;
@@ -46,7 +47,9 @@ export default async function handler(
     console.log(`[DEBUG] Checking pending request for circle: ${circleId}, user: ${userAddress}`);
     console.log(`[DEBUG] Is localhost: ${isLocalhost()}`);
 
-    let hasPendingRequest = false;
+    // A read that fails answers 503, never `false`: "no request" would invite
+    // a member whose request is already with the admin to send another.
+    let hasPendingRequest: boolean;
 
     if (isLocalhost()) {
       // Use local SQLite database service for localhost
@@ -55,8 +58,7 @@ export default async function handler(
         hasPendingRequest = databaseService.userHasPendingRequest(circleId, userAddress);
         console.log(`[DEBUG] SQLite pending request check result: ${hasPendingRequest}`);
       } catch (sqliteError) {
-        console.error('[DEBUG] SQLite database error:', sqliteError);
-        hasPendingRequest = false;
+        return sendJoinRequestReadFailure(res, { route: 'check', circleId }, sqliteError);
       }
     } else {
       // Use PostgreSQL database for production
@@ -64,8 +66,7 @@ export default async function handler(
       try {
         hasPendingRequest = await joinRequestDatabase.checkPendingRequest(circleId, userAddress);
       } catch (dbError) {
-        console.error('[DEBUG] PostgreSQL database error:', dbError);
-        hasPendingRequest = false;
+        return sendJoinRequestReadFailure(res, { route: 'check', circleId }, dbError);
       }
     }
     

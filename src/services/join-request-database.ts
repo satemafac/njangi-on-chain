@@ -18,15 +18,19 @@ export interface JoinRequest {
   updated_at: Date;
 }
 
+// Reads THROW when the table can't be read. `[]`, `false` and `null` mean the
+// table really holds no such row, so a caller can't mistake a Postgres outage
+// for an empty queue or for "no request yet" (it used to read as both).
 export class JoinRequestDatabase {
-  // Create a new join request
+  // Create (or refresh) a join request. Throws when the write fails, so the
+  // route answers an error instead of reporting an unsaved request as sent.
   async createJoinRequest(
     circleId: string,
     circleName: string,
     userAddress: string,
     userName: string,
     status: 'pending' | 'approved' | 'rejected' = 'pending'
-  ): Promise<JoinRequest | null> {
+  ): Promise<JoinRequest> {
     try {
       console.log(`[DB] Creating join request: circle=${circleId}, user=${userAddress}, status=${status}`);
       
@@ -44,20 +48,19 @@ export class JoinRequestDatabase {
         [circleId, circleName, userAddress, userName, status]
       );
 
-      if (result.rows[0]) {
-        console.log(`[DB] Successfully created/updated join request with ID: ${result.rows[0].id}`);
-      } else {
-        console.log(`[DB] No rows returned after join request creation/update`);
+      const row = result.rows[0] as JoinRequest | undefined;
+      if (!row) {
+        throw new Error('Saving the join request returned no row');
       }
-
-      return result.rows[0] as JoinRequest;
+      console.log(`[DB] Successfully created/updated join request with ID: ${row.id}`);
+      return row;
     } catch (error) {
       console.error('[DB] Error creating join request:', error);
-      return null;
+      throw error;
     }
   }
 
-  // Get all pending requests for a circle
+  // Get all pending requests for a circle. Throws when the read fails.
   async getPendingRequestsByCircleId(circleId: string): Promise<JoinRequest[]> {
     try {
       console.log(`[DB] Fetching pending requests for circle: ${circleId}`);
@@ -74,11 +77,11 @@ export class JoinRequestDatabase {
       return result.rows as JoinRequest[];
     } catch (error) {
       console.error('[DB] Error getting pending requests:', error);
-      return [];
+      throw error;
     }
   }
 
-  // Check if a user has a pending request for a circle
+  // Check if a user has a pending request for a circle. Throws when the read fails.
   async checkPendingRequest(circleId: string, userAddress: string): Promise<boolean> {
     try {
       console.log(`[DB] Checking pending request for circle: ${circleId}, user: ${userAddress}`);
@@ -95,11 +98,12 @@ export class JoinRequestDatabase {
       return hasPending;
     } catch (error) {
       console.error('[DB] Error checking pending request:', error);
-      return false;
+      throw error;
     }
   }
 
-  // Update join request status (approve/reject)
+  // Update join request status (approve/reject). False when the write fails or
+  // matches no row; the route answers 500 for both.
   async updateJoinRequestStatus(
     circleId: string,
     userAddress: string,
@@ -120,25 +124,9 @@ export class JoinRequestDatabase {
     }
   }
 
-  // Get all requests for a user
-  async getRequestsByUserAddress(userAddress: string): Promise<JoinRequest[]> {
-    try {
-      const result = await pool().query(
-        `SELECT * FROM join_requests 
-         WHERE user_address = $1
-         ORDER BY updated_at DESC`,
-        [userAddress]
-      );
-
-      return result.rows as JoinRequest[];
-    } catch (error) {
-      console.error('Error getting user requests:', error);
-      return [];
-    }
-  }
-
   // Get user info by address for a specific circle
-  // Returns the most recent request (any status) for this user/circle combination
+  // Returns the most recent request (any status) for this user/circle combination,
+  // or null when there is none. Throws when the read fails.
   async getUserByAddress(circleId: string, userAddress: string): Promise<JoinRequest | null> {
     try {
       console.log(`[DB] Looking up user: ${userAddress} for circle: ${circleId}`);
@@ -160,7 +148,7 @@ export class JoinRequestDatabase {
       return null;
     } catch (error) {
       console.error('[DB] Error looking up user by address:', error);
-      return null;
+      throw error;
     }
   }
 }
