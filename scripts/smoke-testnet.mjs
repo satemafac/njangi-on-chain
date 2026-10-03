@@ -181,10 +181,13 @@ async function step6() {
     },
   );
   const ok = status === 200 && Array.isArray(body?.stale);
+  // `unchecked` counts circles whose reads failed: stale=0 with unchecked>0
+  // means the dummy circle was not actually checked.
   logResult(
     'GET /api/admin/compliance/stale',
     ok,
-    `status=${status} stale=${Array.isArray(body?.stale) ? body.stale.length : 'n/a'}`,
+    `status=${status} stale=${Array.isArray(body?.stale) ? body.stale.length : 'n/a'}` +
+      ` unchecked=${Array.isArray(body?.unchecked) ? body.unchecked.length : 'n/a'}`,
   );
 }
 

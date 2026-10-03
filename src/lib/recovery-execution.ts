@@ -1,3 +1,13 @@
+// recovery-execution.ts — what an executed emergency stop / auto-release did,
+// read from the events execute_recovery itself emits.
+//
+// The stablecoin type a recovery unwinds is deliberately not derived here any
+// more: read it from the custody wallet with resolveCustodyStablecoinType
+// (custody-wallet-discovery.ts). The event-derived version scanned
+// StablecoinContributionMade (legacy rail only), StablecoinDepositWithPrice
+// (carries the literal "stablecoin", not a type) and StablecoinHoldingUpdated
+// (an unprefixed type name).
+
 import type { SuiClient, SuiEvent } from '@mysten/sui/client';
 
 export interface RecoveryMemberRefundSummary {
@@ -136,41 +146,4 @@ export async function loadRecoveryExecutionStatus(args: {
     triggerRole: parseRecoveryTriggerRole(startedFields.trigger_role),
     memberRefunds,
   };
-}
-
-export async function loadRecoveryStablecoinCoinType(args: {
-  client: RecoveryExecutionClient;
-  packageId: string;
-  circleId: string;
-}): Promise<string | null> {
-  const { client, packageId, circleId } = args;
-  const [contributionEvents, depositEvents, walletEvents] = await Promise.all([
-    client.queryEvents({
-      query: { MoveEventType: `${packageId}::njangi_circles::StablecoinContributionMade` },
-      limit: 50,
-    }),
-    client.queryEvents({
-      query: { MoveEventType: `${packageId}::njangi_custody::StablecoinDepositWithPrice` },
-      limit: 50,
-    }),
-    client.queryEvents({
-      query: { MoveEventType: `${packageId}::njangi_custody::StablecoinHoldingUpdated` },
-      limit: 50,
-    }),
-  ]);
-
-  const latestStablecoinEvent = [
-    ...contributionEvents.data,
-    ...depositEvents.data,
-    ...walletEvents.data,
-  ]
-    .filter((event) => matchesCircle(circleId, event))
-    .sort((left, right) => Number(right.timestampMs || 0) - Number(left.timestampMs || 0))[0];
-
-  if (!latestStablecoinEvent) {
-    return null;
-  }
-
-  const fields = asRecord(latestStablecoinEvent.parsedJson);
-  return typeof fields?.coin_type === 'string' && fields.coin_type.length > 0 ? fields.coin_type : null;
 }

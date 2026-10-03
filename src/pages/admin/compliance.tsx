@@ -77,6 +77,9 @@ export default function AdminCompliancePage() {
   const [staleEntries, setStaleEntries] = useState<
     Array<{ circleId: string; cycleNo: number; memberAddress: string; reason: string }>
   >([]);
+  // Circles the last sweep could not read. Their members are unknown, so the
+  // list below must not read as "nobody is blocked" while this is non-empty.
+  const [staleUnchecked, setStaleUnchecked] = useState<string[]>([]);
   const [staleLoading, setStaleLoading] = useState(false);
   const [staleNudging, setStaleNudging] = useState(false);
   const [notificationAddress, setNotificationAddress] = useState('');
@@ -265,9 +268,11 @@ export default function AdminCompliancePage() {
         }
         const body = (await resp.json()) as {
           stale: typeof staleEntries;
+          unchecked?: string[];
           nudged?: number;
         };
         setStaleEntries(body.stale ?? []);
+        setStaleUnchecked(Array.isArray(body.unchecked) ? body.unchecked : []);
         if (nudge) {
           toast.success(`Nudged ${body.nudged ?? 0} member(s).`);
         }
@@ -718,9 +723,34 @@ export default function AdminCompliancePage() {
               {staleNudging ? 'Nudging…' : `Nudge all (${staleEntries.length})`}
             </button>
           </div>
+          {staleUnchecked.length > 0 && !staleLoading ? (
+            <div
+              role="alert"
+              className="rounded-xl border border-red-200 bg-white px-3 py-2 text-sm text-red-900"
+            >
+              <p className="font-semibold">
+                {`Couldn't check ${staleUnchecked.length} circle${staleUnchecked.length === 1 ? '' : 's'}`}
+              </p>
+              <p className="mt-1 text-[13px]">
+                A network read failed, so members of these circles may still be blocked. Refresh to
+                try again.
+              </p>
+              <ul className="mt-1 space-y-0.5 text-[11px] text-red-800">
+                {staleUnchecked.map((circleId) => (
+                  <li key={circleId} className="break-all font-mono">
+                    {circleId}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
           {staleEntries.length === 0 ? (
             <p className="text-sm text-amber-900/70">
-              {staleLoading ? 'Looking up members…' : 'No stale members for the supplied circles.'}
+              {staleLoading
+                ? 'Looking up members…'
+                : staleUnchecked.length > 0
+                  ? 'No stale members in the circles that could be checked.'
+                  : 'No stale members for the supplied circles.'}
             </p>
           ) : (
             <ul className="space-y-2">

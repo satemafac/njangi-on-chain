@@ -10,6 +10,7 @@ import { getPooledSuiClient } from './sui-rpc-failover';
 import joinRequestDatabase from './join-request-database';
 import { readObject, queryEventsCached } from '@/lib/sui-read';
 import { resolveCircleLifecycleState } from '@/lib/circle-chain';
+import { resolveCustodyWalletId } from '@/lib/custody-wallet-discovery';
 
 export interface CircleStatusData {
   name: string;
@@ -40,6 +41,12 @@ export interface CircleStatusData {
   securityDepositBalance?: number; // Security deposits held in SUI
   contributionBalance?: number; // Cycle contributions held in SUI
   custodyWalletId?: string;
+  /**
+   * The custody wallet could not be found, or its balance could not be read.
+   * The reply says so instead of dropping the balance lines, which reads as
+   * nothing being held.
+   */
+  custodyBalanceUnavailable?: boolean;
 }
 
 /**
@@ -150,26 +157,26 @@ export async function getCircleStatus(circleId: string, network?: 'testnet' | 'm
       }
     }
     
-    // Get custody wallet ID from CustodyWalletCreated event
+    // Find the custody wallet the way every page does (custody-wallet-
+    // discovery.ts): the wallet_id field and the circle's creation
+    // transaction first, the CustodyWalletCreated scan only as a fallback.
+    // The scan alone (the newest 100 events, from the one endpoint that
+    // serves them) missed every circle outside its window, and the balance
+    // lines silently dropped out of the reply.
+    let custodyBalanceUnavailable = false;
     try {
-      const custodyEvents = await queryEventsCached({
-        query: { MoveEventType: `${packageId}::njangi_custody::CustodyWalletCreated` },
-        limit: 100
-      }, { network: targetNetwork });
-      
-      const custodyEvent = custodyEvents.data.find(event => 
-        (event.parsedJson as { circle_id?: string })?.circle_id === circleId
-      );
-      
-      if (custodyEvent?.parsedJson) {
-        const walletId = (custodyEvent.parsedJson as { wallet_id?: string })?.wallet_id;
-        if (walletId) {
-          custodyWalletId = walletId;
-          console.log('[CircleStatus] Found custody wallet ID:', custodyWalletId?.slice(0, 15));
-        }
+      const custodyResolution = await resolveCustodyWalletId({
+        client,
+        circleId,
+        packageId,
+        queryEvents: (params) => queryEventsCached(params, { network: targetNetwork }),
+      });
+      custodyWalletId = custodyResolution?.walletId;
+      if (custodyWalletId) {
+        console.log('[CircleStatus] Found custody wallet ID:', custodyWalletId.slice(0, 15), 'via', custodyResolution?.source);
       }
     } catch (error) {
-      console.error('[CircleStatus] Error finding custody wallet event:', error);
+      console.error('[CircleStatus] Error resolving custody wallet:', error);
     }
     
     // Fetch custody wallet balance if we have the wallet ID
@@ -197,6 +204,10 @@ export async function getCircleStatus(circleId: string, network?: 'testnet' | 'm
             mainSuiBalance = Number(wf.balance) / 1e9;
           }
           console.log('[CircleStatus] Main balance (contributions):', mainSuiBalance, 'SUI');
+        } else {
+          // The resolver just validated this wallet, so a reply without its
+          // content is a failed read, not an empty wallet.
+          throw new Error('custody wallet object came back without content');
         }
         
         // 2. Fetch dynamic fields to find the SUI Coin object (security deposits)
@@ -227,9 +238,13 @@ export async function getCircleStatus(circleId: string, network?: 'testnet' | 'm
         console.log('[CircleStatus] Custody balances - Total:', custodyBalance, 'SUI, Contributions:', contributionBalance, 'SUI, Security Deposits:', securityDepositBalance, 'SUI');
       } catch (error) {
         console.error('[CircleStatus] Error fetching custody wallet:', error);
+        custodyBalanceUnavailable = true;
       }
     } else {
-      console.log('[CircleStatus] No custody wallet ID found for circle:', circleId?.slice(0, 15));
+      // Every circle is created with a custody wallet, so "not found" means
+      // every discovery tier failed, not that there is nothing to report.
+      console.warn('[CircleStatus] Custody wallet unresolved for circle:', circleId?.slice(0, 15));
+      custodyBalanceUnavailable = true;
     }
     
     // Fallback to direct fields
@@ -382,7 +397,8 @@ export async function getCircleStatus(circleId: string, network?: 'testnet' | 'm
       custodyBalance: custodyBalance > 0 ? custodyBalance : undefined,
       securityDepositBalance: securityDepositBalance > 0 ? securityDepositBalance : undefined,
       contributionBalance: contributionBalance > 0 ? contributionBalance : undefined,
-      custodyWalletId
+      custodyWalletId,
+      custodyBalanceUnavailable
     };
   } catch (error) {
     console.error('[CircleStatus] Error fetching circle status:', {
@@ -534,7 +550,8 @@ ${status.custodyBalance !== undefined ? `
 📦 *Custody Wallet:*
 • Security Deposits: ${status.securityDepositBalance !== undefined ? status.securityDepositBalance.toFixed(4) : '0'} SUI
 • Contributions: ${status.contributionBalance !== undefined ? status.contributionBalance.toFixed(4) : '0'} SUI
-• Total: ${status.custodyBalance.toFixed(4)} SUI` : ''}
+• Total: ${status.custodyBalance.toFixed(4)} SUI` : status.custodyBalanceUnavailable ? `
+📦 *Custody Wallet:* couldn't check the balance right now` : ''}
 ${status.totalCollected && status.totalCollected > 0 ? `• Est. Total Collected: ~${formatCurrency(status.totalCollected, status.currencyType)}` : ''}
 
 ━━━━━━━━━━━━━━━━━━
@@ -656,7 +673,8 @@ ${status.custodyBalance !== undefined ? `
 📦 *Custody Wallet:*
 • Security Deposits: ${status.securityDepositBalance !== undefined ? status.securityDepositBalance.toFixed(4) : '0'} SUI
 • Contributions: ${status.contributionBalance !== undefined ? status.contributionBalance.toFixed(4) : '0'} SUI
-• Total: ${status.custodyBalance.toFixed(4)} SUI` : ''}
+• Total: ${status.custodyBalance.toFixed(4)} SUI` : status.custodyBalanceUnavailable ? `
+📦 *Custody Wallet:* couldn't check the balance right now` : ''}
 ${status.totalCollected && status.totalCollected > 0 ? `• Est. Total Collected: ~${formatCurrency(status.totalCollected, status.currencyType)}` : ''}
 
 ━━━━━━━━━━━━━━━━━━

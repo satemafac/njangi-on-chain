@@ -7,6 +7,10 @@
  * every stale member with a linked WhatsApp number, send a localized
  * reminder via the central dispatcher.
  *
+ * Returns `{ stale, unchecked, nudged? }`. `unchecked` lists the circles
+ * whose reads failed: their members are unknown, so an empty `stale` with
+ * a non-empty `unchecked` is not "nobody is blocked".
+ *
  * Auth: shared `COMPLIANCE_ISSUANCE_SECRET`
  * via `guardComplianceRequest`.
  */
@@ -58,16 +62,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    const stale = await buildStaleReport(network, circleIds);
+    const { stale, unchecked } = await buildStaleReport(network, circleIds);
     if (req.method === 'GET') {
-      return res.status(200).json({ stale });
+      return res.status(200).json({ stale, unchecked });
     }
     if (req.method !== 'POST' || !(req.body as RequestBody).nudge) {
-      return res.status(200).json({ stale });
+      return res.status(200).json({ stale, unchecked });
     }
 
     const nudged = await nudgeStaleMembers(network, stale);
-    return res.status(200).json({ stale, nudged });
+    return res.status(200).json({ stale, unchecked, nudged });
   } catch (err) {
     console.error('[compliance/stale] failed', err);
     return res.status(500).json({

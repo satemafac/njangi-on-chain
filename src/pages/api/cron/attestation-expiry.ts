@@ -21,6 +21,12 @@
  * The lease is released in `finally`; a hard-killed lambda self-expires
  * (90s TTL). If Postgres is not configured the lease is skipped and the sweep
  * still runs (nudge dedupe then relies on the in-memory notifier store).
+ *
+ * 200 means every gated circle was found and checked. When the discovery
+ * scan fails, or a circle's reads fail, the members that could be checked
+ * are still nudged, and the run answers 500 with the counts — the same rule
+ * as walrus-renewal: a 200 here used to report "0 gated circles, 0 stale"
+ * for a sweep that never ran.
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
@@ -68,23 +74,48 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    const gatedCircles = await discoverGatedCircleIds(network);
+    const discovery = await discoverGatedCircleIds(network);
+    const gatedCircles = discovery.circleIds;
     if (gatedCircles.length === 0) {
+      if (!discovery.complete) {
+        const error =
+          "Couldn't list attestation-gated circles (the CycleEscrowOpened scan failed), so no circle was checked.";
+        appLogger.error(`[cron/attestation-expiry] ${error}`, { network });
+        return res
+          .status(500)
+          .json({ error, network, gatedCircles: 0, discoveryComplete: false });
+      }
       return res
         .status(200)
         .json({ ok: true, network, gatedCircles: 0, staleCount: 0, nudged: 0 });
     }
 
-    const stale = await buildStaleReport(network, gatedCircles);
+    const { stale, unchecked } = await buildStaleReport(network, gatedCircles);
     const nudged = await nudgeStaleMembers(network, stale);
 
-    return res.status(200).json({
-      ok: true,
+    const summary = {
       network,
       gatedCircles: gatedCircles.length,
+      discoveryComplete: discovery.complete,
       staleCount: stale.length,
+      uncheckedCount: unchecked.length,
+      unchecked,
       nudged,
-    });
+    };
+    if (!discovery.complete || unchecked.length > 0) {
+      const problems: string[] = [];
+      if (unchecked.length > 0) {
+        problems.push(`couldn't check ${unchecked.length} of ${gatedCircles.length} gated circle(s)`);
+      }
+      if (!discovery.complete) {
+        problems.push('the gated-circle scan stopped early, so some gated circles may be missing');
+      }
+      const error = `Incomplete sweep: ${problems.join('; ')}. Stale members that were found have been nudged.`;
+      appLogger.error(`[cron/attestation-expiry] ${error}`, summary);
+      return res.status(500).json({ error, ...summary });
+    }
+
+    return res.status(200).json({ ok: true, ...summary });
   } catch (err) {
     appLogger.error('[cron/attestation-expiry] sweep failed', err);
     return res.status(500).json({
