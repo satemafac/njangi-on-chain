@@ -1,7 +1,6 @@
-import {
-  loadRecoveryExecutionStatus,
-  loadRecoveryStablecoinCoinType,
-} from '@/lib/recovery-execution';
+import { readFileSync } from 'fs';
+import { join } from 'path';
+import { loadRecoveryExecutionStatus } from '@/lib/recovery-execution';
 
 describe('recovery-execution helpers', () => {
   it('builds recovery execution state from matching events only', async () => {
@@ -111,52 +110,34 @@ describe('recovery-execution helpers', () => {
       }),
     ).resolves.toBeNull();
   });
+});
 
-  it('resolves the most recent stablecoin coin type for a circle', async () => {
-    const client = {
-      queryEvents: jest
-        .fn()
-        .mockResolvedValueOnce({
-          data: [
-            {
-              timestampMs: '1200',
-              parsedJson: {
-                circle_id: '0xCircle',
-                coin_type: '0x1::usdc::USDC',
-              },
-            },
-          ],
-        })
-        .mockResolvedValueOnce({
-          data: [
-            {
-              timestampMs: '1250',
-              parsedJson: {
-                circle_id: '0xOther',
-                coin_type: '0x1::usdt::USDT',
-              },
-            },
-          ],
-        })
-        .mockResolvedValueOnce({
-          data: [
-            {
-              timestampMs: '1300',
-              parsedJson: {
-                circle_id: '0xCircle',
-                coin_type: '0x2::sui_usde::SUI_USDE',
-              },
-            },
-          ],
-        }),
-    };
+describe('the recovery coin type comes from the custody wallet, not from events', () => {
+  // execute_recovery<CoinType> / trigger_auto_release<CoinType> and the refund
+  // decimals used to take their coin type from event scans that describe no
+  // escrow-era wallet: StablecoinContributionMade is emitted only by the
+  // retired legacy rail, StablecoinDepositWithPrice carries the literal
+  // "stablecoin" instead of a type, and StablecoinHoldingUpdated an unprefixed
+  // type name. resolveCustodyStablecoinType reads the wallet itself.
+  const LEGACY_STABLECOIN_EVENTS = [
+    'StablecoinContributionMade',
+    'StablecoinDepositWithPrice',
+    'StablecoinHoldingUpdated',
+  ];
 
-    await expect(
-      loadRecoveryStablecoinCoinType({
-        client: client as never,
-        packageId: '0xpackage',
-        circleId: '0xCircle',
-      }),
-    ).resolves.toBe('0x2::sui_usde::SUI_USDE');
+  it.each(['src/lib/recovery-execution.ts', 'src/pages/circle/[id]/index.tsx'])(
+    '%s queries none of the legacy stablecoin events',
+    (rel) => {
+      const source = readFileSync(join(process.cwd(), rel), 'utf8');
+      for (const eventName of LEGACY_STABLECOIN_EVENTS) {
+        expect(source).not.toMatch(new RegExp(`::${eventName}\\b`));
+      }
+    },
+  );
+
+  it('the circle page resolves the recovery coin type from the wallet', () => {
+    const source = readFileSync(join(process.cwd(), 'src/pages/circle/[id]/index.tsx'), 'utf8');
+    expect(source).toContain('resolveCustodyStablecoinType');
+    expect(source).not.toContain('loadRecoveryStablecoinCoinType');
   });
 });

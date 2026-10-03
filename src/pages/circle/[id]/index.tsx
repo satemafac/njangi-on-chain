@@ -29,7 +29,6 @@ import {
 } from '@/lib/recovery-liveness';
 import {
   loadRecoveryExecutionStatus,
-  loadRecoveryStablecoinCoinType,
   type RecoveryExecutionStatus,
 } from '@/lib/recovery-execution';
 import { getRecoveryProposalUiState } from '@/lib/recovery-ui';
@@ -658,7 +657,6 @@ export default function CircleDetails() {
   const fetchRecoveryExecutionState = useCallback(async (packageIdOverride?: string) => {
     if (!id) {
       setRecoveryExecution(null);
-      setRecoveryStablecoinType(null);
       return;
     }
 
@@ -671,7 +669,6 @@ export default function CircleDetails() {
 
       if (!resolvedPackageId) {
         setRecoveryExecution(null);
-        setRecoveryStablecoinType(null);
         return;
       }
 
@@ -680,27 +677,44 @@ export default function CircleDetails() {
       }
 
       const client = getSuiClientFromPool(getCurrentRpcUrl());
-      const [executionStatus, stablecoinCoinType] = await Promise.all([
-        loadRecoveryExecutionStatus({
-          client,
-          packageId: resolvedPackageId,
-          circleId: id as string,
-        }),
-        loadRecoveryStablecoinCoinType({
-          client,
-          packageId: resolvedPackageId,
-          circleId: id as string,
-        }),
-      ]);
+      const executionStatus = await loadRecoveryExecutionStatus({
+        client,
+        packageId: resolvedPackageId,
+        circleId: id as string,
+      });
 
       setRecoveryExecution(executionStatus);
-      setRecoveryStablecoinType(stablecoinCoinType);
     } catch (error) {
       logSuiReadError('Details - Error refreshing recovery execution state:', error);
     } finally {
       setLoadingRecoveryExecution(false);
     }
   }, [circlePackageId, id, userAddress]);
+
+  // The stablecoin a recovery unwinds — the type argument execute_recovery /
+  // trigger_auto_release take, and the decimals the refund totals below are
+  // formatted with — read from the custody wallet itself (object reads, once
+  // per wallet). It used to come from three event scans every poll, and none
+  // of them describes an escrow-era wallet: StablecoinContributionMade is the
+  // retired legacy rail, StablecoinDepositWithPrice carries the literal
+  // "stablecoin" rather than a type, and StablecoinHoldingUpdated an
+  // unprefixed name that resolveStablecoinMetadata misreads as SUI_USDE
+  // (9 decimals) wherever SUI_USDE is unconfigured, as on testnet. A failed
+  // read keeps the last known type; the handlers re-read the wallet before
+  // signing when none is known.
+  const custodyWalletIdForRecovery = circle?.custody?.walletId ?? null;
+  useEffect(() => {
+    if (!custodyWalletIdForRecovery) return;
+    let cancelled = false;
+    void resolveCustodyStablecoinType(getPooledSuiClient(), custodyWalletIdForRecovery).then(
+      (coinType) => {
+        if (!cancelled && coinType) setRecoveryStablecoinType(coinType);
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [custodyWalletIdForRecovery]);
 
   const fetchRecoveryLivenessState = useCallback(async (nextInCommandOverride?: string | null) => {
     if (!membersTableId || !userAddress) {
@@ -1336,10 +1350,10 @@ export default function CircleDetails() {
       return;
     }
 
-    // The event-derived sources (loadRecoveryStablecoinCoinType and the
-    // wallet's stablecoin_config) can both be empty — the former ages out
-    // with RPC retention, the latter was simply never set on some wallets.
-    // The wallet's own balance fields cannot forget what it holds.
+    // The wallet read behind recoveryStablecoinType may not have answered
+    // yet (or failed), and stablecoin_config was never set on some wallets.
+    // Re-read the wallet's own balance fields, which cannot forget what it
+    // holds.
     let stablecoinType: string | null =
       recoveryStablecoinType || circle.custody.stablecoinCoinType || null;
     if (!stablecoinType) {
