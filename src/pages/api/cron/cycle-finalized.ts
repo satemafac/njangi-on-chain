@@ -1,14 +1,28 @@
 /**
  * GET /api/cron/cycle-finalized
  *
- * Vercel cron (vercel.json: every minute) replacing the long-running
- * Heroku `notifier` worker (scripts/cycle-finalized-notifier.mjs, now
- * deprecated). One invocation = one full drain: query CycleFinalized
- * events after the persisted cursor (ascending, paged via nextCursor),
- * send the "your turn" WhatsApp nudge to each payout recipient
- * in-process via sendYourTurnNotification, and persist the NEWEST
- * processed cursor to the `cycle_finalized_cursor` Postgres table after
- * every page.
+ * Vercel cron (vercel.json: every 15 minutes, Sui-first probe gated)
+ * replacing the long-running Heroku `notifier` worker
+ * (scripts/cycle-finalized-notifier.mjs, now deprecated). Sends a round's
+ * recipient the "it's your turn" WhatsApp nudge once the round's pot is
+ * full. The route keeps its old name, and its sends keep the
+ * `cycle_finalized` notification kind, so the cron path and the dedupe
+ * rows carry over unchanged.
+ *
+ * Trigger: `njangi_cycle_escrow::ContributionRecorded`. The nudge goes out
+ * for the contribution that brings the escrow up to its snapshot's
+ * `required_contributors`, and only while the escrow is neither claimed
+ * nor refunded when this cron reads it. It used to fire on CycleFinalized,
+ * which the app's Collect button emits in the same transaction that pays
+ * the recipient, so "your payout is ready to collect" always arrived after
+ * the payout had been collected (TRIGGER note in
+ * src/lib/cycle-finalized-cron.ts).
+ *
+ * One invocation = one full drain: query ContributionRecorded events after
+ * the persisted cursor (ascending, paged via nextCursor), read the escrow
+ * each one names (once per escrow per run), nudge the recipient in-process
+ * via sendYourTurnNotification, and persist the NEWEST processed cursor to
+ * the `cycle_finalized_cursor` Postgres table after every page.
  *
  * Auth: `Authorization: Bearer ${CRON_SECRET}`. Vercel attaches this
  * header to cron invocations automatically when the CRON_SECRET env var
@@ -16,7 +30,7 @@
  * plain `===`.
  *
  * Overlap: Vercel does NOT prevent concurrent cron executions — a backlog
- * drain running near the 60s maxDuration overlaps the next minute's tick.
+ * drain running near the 60s maxDuration can overlap another invocation.
  * Each run must first win the Postgres lease on the cursor row
  * (acquireCycleFinalizedLease); the loser returns 200
  * `{ skipped: 'already_running' }` immediately. Cursor writes are fenced
@@ -24,15 +38,15 @@
  * regress the cursor. The lease is released in `finally`; if the lambda is
  * hard-killed it simply expires (90s TTL > 60s maxDuration).
  *
- * Failure contract: infra/config problems (RPC down, Postgres down,
- * WhatsApp credentials missing) halt the drain WITHOUT advancing the
- * cursor past the failing event and return 500, so the next minute's run
- * retries. The dispatcher settles its dedupe claim BEFORE such an error
- * propagates (see sendMemberNotification), so the retry re-claims the
- * tuple and actually sends — it is never deduped against a stale
- * 'in_flight' marker left by the halted run. Per-recipient send failures
- * advance the cursor — they are recorded with success=false in the
- * whatsapp_notifications audit table and must not wedge the pipeline
+ * Failure contract: infra/config problems (RPC down, an escrow that could
+ * not be read, Postgres down, WhatsApp credentials missing) halt the drain
+ * WITHOUT advancing the cursor past the failing event and return 500, so
+ * the next run retries. The dispatcher settles its dedupe claim BEFORE
+ * such an error propagates (see sendMemberNotification), so the retry
+ * re-claims the tuple and actually sends — it is never deduped against a
+ * stale 'in_flight' marker left by the halted run. Per-recipient send
+ * failures advance the cursor — they are recorded with success=false in
+ * the whatsapp_notifications audit table and must not wedge the pipeline
  * (same best-effort contract as the ramp KYC WhatsApp confirmations).
  */
 
@@ -41,15 +55,19 @@ import { timingSafeEqualStrings } from '../../../lib/timing-safe';
 import { isPostgresConfigured } from '../../../lib/pg-pool';
 import {
   acquireCycleFinalizedLease,
-  cycleFinalizedCursorKey,
   drainCycleFinalizedEvents,
-  formatCoinAmount,
+  formatEscrowPayout,
   loadCycleFinalizedCursor,
-  parseCycleFinalizedEvent,
+  parseContributionRecordedEvent,
+  parseYourTurnEscrow,
   releaseCycleFinalizedLease,
   saveCycleFinalizedCursor,
+  yourTurnCursorKey,
+  yourTurnMaxEventAgeMs,
+  yourTurnSkipReason,
   type EventCursor,
   type NotifyOutcome,
+  type YourTurnEscrow,
 } from '../../../lib/cycle-finalized-cron';
 import { sendYourTurnNotification } from '../../../lib/your-turn-notification';
 import {
@@ -115,45 +133,39 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: `No defining package id known for ${network}` });
   }
 
-  const eventType = `${packageId}::njangi_cycle_escrow::CycleFinalized`;
-  const coinDecimals = Number(process.env.COIN_DECIMALS ?? 9);
-  const coinSymbol = process.env.COIN_SYMBOL ?? 'SUI';
+  const eventType = `${packageId}::njangi_cycle_escrow::ContributionRecorded`;
   // Events older than this advance the cursor without a nudge (default 24h).
-  const maxEventAgeMs = Number(
-    process.env.CYCLE_FINALIZED_MAX_EVENT_AGE_MS ?? 24 * 60 * 60 * 1000,
-  );
+  const maxEventAgeMs = yourTurnMaxEventAgeMs(process.env.CYCLE_FINALIZED_MAX_EVENT_AGE_MS);
   const client = getPooledSuiClient({
     network,
     rpcUrl: getNetworkConfig(network).rpcUrl,
   });
 
-  // The event carries escrow_id (no circle_id); resolve the parent circle
-  // from the escrow object for a recognizable message + stable dedupe key,
-  // falling back to the escrow id when the read fails.
-  const circleByEscrow = new Map<string, string | null>();
-  const resolveCircleId = async (escrowId: string): Promise<string | null> => {
-    if (circleByEscrow.has(escrowId)) return circleByEscrow.get(escrowId) ?? null;
-    let circleId: string | null = null;
-    try {
-      const obj = await client.getObject({ id: escrowId, options: { showContent: true } });
-      const content = obj.data?.content;
-      if (content && content.dataType === 'moveObject') {
-        const fields = (content as { fields?: Record<string, unknown> }).fields;
-        if (typeof fields?.circle_id === 'string') {
-          circleId = fields.circle_id;
-        }
-      }
-    } catch (err) {
-      appLogger.warn('[cron/cycle-finalized] failed to resolve circle for escrow', {
+  // The event names its escrow and nothing else the nudge needs: the
+  // circle, the coin, the recipient, the required count, and whether the
+  // pot is still there to collect all come from one read of the escrow per
+  // run (a round's contributions usually share a drain).
+  const escrowCache = new Map<string, YourTurnEscrow | null>();
+  const readEscrow = async (escrowId: string): Promise<YourTurnEscrow | null> => {
+    if (escrowCache.has(escrowId)) return escrowCache.get(escrowId) ?? null;
+    // Throws on a transport failure or on a response that is not an answer
+    // (see parseYourTurnEscrow); the drain maps that to 'halt', so the
+    // event is retried next run instead of being skipped on a failed read.
+    const response = await client.getObject({
+      id: escrowId,
+      options: { showType: true, showContent: true },
+    });
+    const escrow = parseYourTurnEscrow(response);
+    if (!escrow) {
+      appLogger.warn('[cron/cycle-finalized] event names no readable escrow; skipping', {
         escrowId,
-        error: err instanceof Error ? err.message : String(err),
       });
     }
-    circleByEscrow.set(escrowId, circleId);
-    return circleId;
+    escrowCache.set(escrowId, escrow);
+    return escrow;
   };
 
-  const cursorKey = cycleFinalizedCursorKey(packageId, network);
+  const cursorKey = yourTurnCursorKey(packageId, network);
 
   // Sui-first probe (no Postgres): skip the lease + cursor machinery when
   // nothing recent exists on-chain, so Neon can autosuspend between quiet
@@ -175,8 +187,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     // Single-flight: atomically claim the run lease before reading the
-    // cursor. Without this, a long backlog drain (~60s) overlaps the next
-    // minute's tick — both runs load the same cursor and double-send.
+    // cursor. Without this, a long backlog drain (~60s) overlapping another
+    // invocation would load the same cursor and double-send.
     const leaseToken = await acquireCycleFinalizedLease(cursorKey);
     if (!leaseToken) {
       appLogger.info(
@@ -193,10 +205,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         leaseToken,
         network,
         eventType,
-        coinDecimals,
-        coinSymbol,
         maxEventAgeMs,
-        resolveCircleId,
+        readEscrow,
       });
     } finally {
       await releaseCycleFinalizedLease(cursorKey, leaseToken).catch((err) => {
@@ -222,10 +232,8 @@ interface RunDrainContext {
   leaseToken: string;
   network: ReturnType<typeof getCurrentNetwork>;
   eventType: string;
-  coinDecimals: number;
-  coinSymbol: string;
   maxEventAgeMs: number;
-  resolveCircleId: (escrowId: string) => Promise<string | null>;
+  readEscrow: (escrowId: string) => Promise<YourTurnEscrow | null>;
 }
 
 /**
@@ -233,17 +241,7 @@ interface RunDrainContext {
  * the caller's catch maps them to a 500 and its finally releases the lease.
  */
 async function runDrain(res: NextApiResponse, ctx: RunDrainContext) {
-  const {
-    client,
-    cursorKey,
-    leaseToken,
-    network,
-    eventType,
-    coinDecimals,
-    coinSymbol,
-    maxEventAgeMs,
-    resolveCircleId,
-  } = ctx;
+  const { client, cursorKey, leaseToken, network, eventType, maxEventAgeMs, readEscrow } = ctx;
 
   const initialCursor = await loadCycleFinalizedCursor(cursorKey);
 
@@ -271,7 +269,7 @@ async function runDrain(res: NextApiResponse, ctx: RunDrainContext) {
       };
     },
     notify: async (event): Promise<NotifyOutcome> => {
-      const parsed = parseCycleFinalizedEvent(event.parsedJson);
+      const parsed = parseContributionRecordedEvent(event.parsedJson);
       if (!parsed) {
         appLogger.warn('[cron/cycle-finalized] skipping malformed event', {
           txDigest: event.id.txDigest,
@@ -280,11 +278,13 @@ async function runDrain(res: NextApiResponse, ctx: RunDrainContext) {
         return 'skipped';
       }
 
-      // A fresh cursor (new DB, cutover) drains the event stream from
-      // genesis; a long outage drains weeks at once. "Your payout is
-      // ready" is wrong and confusing for cycles collected long ago, so
-      // anything older than the age cap advances the cursor without a
-      // send. Events without a chain timestamp are treated as fresh.
+      // A fresh cursor (new DB, cutover, a change of event type) drains the
+      // stream from genesis; a long outage drains weeks at once. "Your
+      // payout is ready" is wrong and confusing for rounds whose pots
+      // filled long ago, so anything older than the age cap advances the
+      // cursor without a send. Checked before any read, so replaying that
+      // history costs nothing. Events without a chain timestamp are treated
+      // as fresh.
       const eventAgeMs = event.timestampMs ? Date.now() - Number(event.timestampMs) : 0;
       if (eventAgeMs > maxEventAgeMs) {
         appLogger.info('[cron/cycle-finalized] skipping stale event', {
@@ -294,17 +294,36 @@ async function runDrain(res: NextApiResponse, ctx: RunDrainContext) {
         return 'skipped';
       }
 
-      const circleId = (await resolveCircleId(parsed.escrowId)) ?? parsed.escrowId;
+      const escrow = await readEscrow(parsed.escrowId);
+      if (!escrow) return 'skipped';
+
+      const skipReason = yourTurnSkipReason(parsed, escrow);
+      if (skipReason) {
+        // Most contributions do not fill the pot. A pot that filled but was
+        // already collected or refunded by the time this run read it is
+        // worth a line: it is exactly the nudge the old trigger sent late.
+        if (skipReason !== 'not_pot_filling') {
+          appLogger.info('[cron/cycle-finalized] pot filled, nothing left to collect; no nudge', {
+            escrowId: parsed.escrowId,
+            cycleNo: parsed.cycleNo,
+            reason: skipReason,
+          });
+        }
+        return 'skipped';
+      }
+
+      const circleId = escrow.circleId;
       const sendResult = await sendYourTurnNotification({
         circleId,
         cycleNo: parsed.cycleNo,
-        amount: formatCoinAmount(parsed.amount, coinDecimals, coinSymbol),
-        recipient: parsed.recipient,
+        // The escrow's own coin; null (no figure in the message) when its
+        // decimals are unknown rather than a figure off by powers of ten.
+        amount: formatEscrowPayout(parsed.totalContributed, escrow.coinType),
+        recipient: escrow.recipient,
         network,
-        // Keyed by escrow id, NOT the resolved circle id: resolveCircleId
-        // falls back to the escrow id on a failed read, and a key that
-        // flaps between identities across retries can dedupe-miss and
-        // double-send. The escrow id is stable and always available.
+        // The same key the CycleFinalized trigger used, so a round nudged
+        // under it is not nudged again. Keyed by escrow id, which every
+        // event carries, rather than by circle id, which takes a read.
         dedupeKey: `${parsed.escrowId}:${parsed.cycleNo}`,
       });
 

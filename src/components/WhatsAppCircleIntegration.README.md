@@ -52,6 +52,7 @@ export default function YourPage() {
 | `circleId` | string | Yes | The ID of the circle to link/unlink |
 | `adminAddress` | string | Yes | The admin's Sui address |
 | `adminToken` | string | Yes | The admin's authentication token (from zkLogin session) |
+| `isAdmin` | boolean | No (default `false`) | Set by the manage page from `circle.admin === userAddress`. Only then does the card ask for the masked linked number (see [Link Status Endpoint](#link-status-endpoint)) |
 | `onLinked` | (status: boolean) => void | No | Callback when link status changes |
 
 ## Features
@@ -79,7 +80,7 @@ export default function YourPage() {
    [Loading spinner] Checking WhatsApp status...
    ```
 
-2. **Not Linked** (Default)
+2. **Not Linked** (the status route answered that the circle has no link)
    ```
    [Link to WhatsApp] button
    ```
@@ -94,7 +95,8 @@ export default function YourPage() {
    ```
    ✅ Linked badge
    Link Type: ...
-   Recipient: ...
+   Recipient: +237 ••• ••• 1234 (masked by the server; admin view only),
+              or one line on why it can't be shown
    Linked on: ...
    [What the linked number gets — WHATSAPP_UPDATE_LINES in src/content/whatsapp-updates.ts]
    [Unlink from WhatsApp] button
@@ -106,6 +108,17 @@ export default function YourPage() {
    Why the group gets no updates, and to link a phone number instead
    [Unlink from WhatsApp] button
    ```
+
+6. **Couldn't Check Status** (the status read in state 1 failed)
+   ```
+   Couldn't check WhatsApp status
+   This circle may already be linked, so we're not offering to link or unlink it until a check succeeds.
+   [Retry] button
+   ```
+   An error from `GET /api/whatsapp/admin-link-circle`, a network error or a
+   reply without an `isLinked` flag lands here, never in state 2: the circle
+   may already be linked on chain. The card offers no link form, Link button
+   or Unlink until a check succeeds. Retry runs the check again.
 
 ## API Integration
 
@@ -153,6 +166,33 @@ Response:
 }
 ```
 
+### Link Status Endpoint
+
+```
+GET /api/whatsapp/admin-link-circle?circleId=0x123...&network=testnet[&includeRecipient=true]
+
+Response:
+{
+  "success": true,
+  "data": {
+    "isLinked": true,
+    "linkType": 1,
+    "walrusBlobId": "...",
+    "linkNonceHex": "...",
+    "maskedRecipient": "+237 ••• ••• 1234",  // includeRecipient=true, circle admin only
+    "linkedAt": "2026-09-30T10:15:00.000Z"    // includeRecipient=true, circle admin only
+  }
+}
+```
+
+The card adds `includeRecipient=true` only when `isAdmin` is set. The route
+then decrypts the number only for a `session-id` cookie that resolves to the
+on-chain circle admin, and returns it masked (`src/lib/whatsapp-recipient-mask.ts`):
+the full number never leaves the server. The Recipient box renders that mask
+and the "Linked on" date. On a 401 or 403 the card falls back to the plain
+probe and shows "Sign in again to see which number is linked."
+(`src/lib/whatsapp-link-status.ts`).
+
 ## Styling
 
 The component uses Tailwind CSS and includes:
@@ -172,7 +212,8 @@ The component handles:
 - ✅ API errors
 - ✅ User cancellation
 
-All errors display user-friendly toast messages.
+Link and unlink errors display toast messages. A failed status check shows in
+the card instead, with Retry (UI state 6).
 
 ## Security
 

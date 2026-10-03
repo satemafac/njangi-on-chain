@@ -9,7 +9,7 @@ import { getCurrentRpcUrl } from '../../../services/network-config';
 import { getPooledSuiClient } from '../../../services/sui-rpc-failover';
 import { screenAddress, sanctionsErrorBody } from '../../../lib/sanctions';
 import { isEmbargoedHeaders, embargoErrorBody } from '../../../lib/embargo';
-import { getZkLoginSessionAccount } from '../../../lib/zklogin-session-registry';
+import { requireSessionAddress, sendJoinRequestAuthFailure } from '../../../lib/join-request-auth';
 import {
   getDriftStatusForIdentity,
   addressDriftErrorBody,
@@ -24,9 +24,9 @@ type ResponseData = {
   data?: Record<string, unknown>;
 };
 
-// Abuse guards: this endpoint is unauthenticated (the on-chain join is the
-// source of truth), so validate shapes/lengths and throttle per IP+address.
-// Cryptographic proof that the caller owns userAddress is follow-up scope.
+// Abuse guards: validate shapes/lengths and throttle per IP+address before
+// any RPC or database work. The caller must also be signed in as
+// userAddress (see the session check in the handler).
 const REQUESTS_PER_MINUTE = 5;
 const MINUTE_WINDOW_MS = 60_000;
 
@@ -129,52 +129,56 @@ export default async function handler(
       return res.status(403).json({ success: false, message: body.message, code: body.code, error: body.error });
     }
 
-    // Legal acceptance, enforced server-side for the first time. The gate
-    // existed only as a React modal (`LegalAcceptanceGate`), which a caller
-    // hitting this endpoint directly never sees — and `hasAcceptedAllLegalDocs`
-    // had zero callers, so the acceptance records were written but never
-    // checked. Joining a circle is exactly the commitment the terms cover.
-    // Identity comes from the session cookie, never the request body — a
-    // body-supplied sub/aud would let a caller assert someone else's
-    // acceptance. A caller with no session is left to the existing
-    // address-based checks rather than being hard-failed, since this
-    // endpoint has never required a session and doing so here would be a
-    // separate behavioural change.
-    const identity = await getZkLoginSessionAccount(req.cookies['session-id']);
-    if (identity) {
-      const legal = await hasAcceptedAllLegalDocs(identity.sub, identity.aud);
-      if (!legal.accepted) {
-        return res.status(403).json({
-          success: false,
-          code: 'LEGAL_ACCEPTANCE_REQUIRED',
-          error: 'LEGAL_ACCEPTANCE_REQUIRED',
-          message: 'Please accept the current terms before joining a circle.',
-          data: { missing: legal.missing },
-        });
-      }
+    // The caller must be signed in as userAddress, so a request is never
+    // filed under (or renames) an account the caller does not hold. This
+    // runs after the sanctions screen: a listed address is refused as
+    // listed whether or not it is signed in.
+    const sessionAuth = await requireSessionAddress(req, userAddress);
+    if (!sessionAuth.ok) {
+      return sendJoinRequestAuthFailure(res, sessionAuth);
+    }
+    const identity = sessionAuth.account;
 
-      // Address-drift gate. Joining is a new commitment, so it fails closed
-      // for the same reason the sanctions screen above does: a member whose
-      // identity now resolves to a different address would be committing
-      // deposits at an account they may not realise is new, while their
-      // existing funds sit at the old one. Fund-access paths (claim, refund,
-      // recovery, withdrawal) are deliberately never gated this way.
-      const drift = await getDriftStatusForIdentity({
-        iss: identity.iss ?? null,
-        sub: identity.sub,
-        provider: identity.provider,
-        userAddress: identity.userAddr,
+    // Legal acceptance, enforced server-side. The gate existed only as a
+    // React modal (`LegalAcceptanceGate`), which a caller hitting this
+    // endpoint directly never sees — and `hasAcceptedAllLegalDocs` had zero
+    // callers, so the acceptance records were written but never checked.
+    // Joining a circle is exactly the commitment the terms cover. Identity
+    // comes from the session cookie, never the request body — a
+    // body-supplied sub/aud would let a caller assert someone else's
+    // acceptance. Now that a session is required, no caller skips this.
+    const legal = await hasAcceptedAllLegalDocs(identity.sub, identity.aud);
+    if (!legal.accepted) {
+      return res.status(403).json({
+        success: false,
+        code: 'LEGAL_ACCEPTANCE_REQUIRED',
+        error: 'LEGAL_ACCEPTANCE_REQUIRED',
+        message: 'Please accept the current terms before joining a circle.',
+        data: { missing: legal.missing },
       });
-      if (drift.drifted) {
-        const body = addressDriftErrorBody(drift.previousAddresses);
-        return res.status(409).json({
-          success: false,
-          code: body.error,
-          error: body.error,
-          message: body.message,
-          data: { previousAddresses: body.previousAddresses },
-        });
-      }
+    }
+
+    // Address-drift gate. Joining is a new commitment, so it fails closed
+    // for the same reason the sanctions screen above does: a member whose
+    // identity now resolves to a different address would be committing
+    // deposits at an account they may not realise is new, while their
+    // existing funds sit at the old one. Fund-access paths (claim, refund,
+    // recovery, withdrawal) are deliberately never gated this way.
+    const drift = await getDriftStatusForIdentity({
+      iss: identity.iss ?? null,
+      sub: identity.sub,
+      provider: identity.provider,
+      userAddress: identity.userAddr,
+    });
+    if (drift.drifted) {
+      const body = addressDriftErrorBody(drift.previousAddresses);
+      return res.status(409).json({
+        success: false,
+        code: body.error,
+        error: body.error,
+        message: body.message,
+        data: { previousAddresses: body.previousAddresses },
+      });
     }
 
     const circleJoinWindow = await getCircleJoinWindow(circleId);

@@ -2147,6 +2147,70 @@ module njangi::njangi_cycle_escrow {
         abort 0
     }
 
+    // --- collect after a third-party finalize --------------------------
+    //
+    // `finalize_to_recipient` is permissionless, so the recipient can find
+    // their round already finalized. The app's Collect then redeems the Claim
+    // in their wallet and advances the rotation in ONE transaction
+    // (buildRedeemClaimTx in src/services/cycle-escrow-service.ts).
+
+    #[test]
+    fun test_redeem_after_third_party_finalize_then_advance() {
+        let mut scenario = ts::begin(TEST_ADMIN);
+        let clock = setup_circle_and_escrow(&mut scenario);
+        contribute_as(&mut scenario, TEST_BOB);
+        contribute_as(&mut scenario, TEST_CAROL);
+
+        // Carol (not the recipient) settles the round.
+        ts::next_tx(&mut scenario, TEST_CAROL);
+        let mut escrow = ts::take_shared<CycleEscrow<SUI>>(&scenario);
+        finalize_to_recipient(&mut escrow, &clock, ts::ctx(&mut scenario));
+        ts::return_shared(escrow);
+
+        // The recipient's Collect: redeem, pay the escrow's recipient, advance.
+        ts::next_tx(&mut scenario, TEST_ADMIN);
+        let claim = ts::take_from_sender<Claim<SUI>>(&scenario);
+        let mut escrow = ts::take_shared<CycleEscrow<SUI>>(&scenario);
+        let mut circle = ts::take_shared<Circle>(&scenario);
+        let payout = redeem_claim(&mut escrow, claim, &clock, ts::ctx(&mut scenario));
+        transfer::public_transfer(payout, recipient(&escrow));
+        advance_circle_after_claim(&mut circle, &escrow, &clock, ts::ctx(&mut scenario));
+        assert!(is_claimed(&escrow), 9234);
+        assert!(circles::get_current_position(&circle) == 1, 9235);
+        let next_recipient = circles::get_next_payout_recipient(&circle);
+        assert!(option::is_some(&next_recipient), 9236);
+        assert!(*option::borrow(&next_recipient) == TEST_BOB, 9237);
+        ts::return_shared(circle);
+        ts::return_shared(escrow);
+
+        // The whole pot (two contributions) reached the recipient.
+        assert_received_refund(&mut scenario, TEST_ADMIN, 2 * TEST_CONTRIBUTION);
+
+        clock::destroy_for_testing(clock);
+        ts::end(scenario);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = E_ALREADY_FINALIZED)]
+    fun test_finalize_and_redeem_after_third_party_finalize_aborts() {
+        // Why Collect cannot always use the one-step path: it mints the claim
+        // itself, so once anyone has finalized the round it can only abort.
+        let mut scenario = ts::begin(TEST_ADMIN);
+        let clock = setup_circle_and_escrow(&mut scenario);
+        contribute_as(&mut scenario, TEST_BOB);
+        contribute_as(&mut scenario, TEST_CAROL);
+
+        ts::next_tx(&mut scenario, TEST_CAROL);
+        let mut escrow = ts::take_shared<CycleEscrow<SUI>>(&scenario);
+        finalize_to_recipient(&mut escrow, &clock, ts::ctx(&mut scenario));
+        ts::return_shared(escrow);
+
+        ts::next_tx(&mut scenario, TEST_ADMIN);
+        let mut escrow = ts::take_shared<CycleEscrow<SUI>>(&scenario);
+        finalize_and_redeem(&mut escrow, &clock, ts::ctx(&mut scenario));
+        abort 0
+    }
+
     // --- compliance gate ----------------------------------------------
 
     #[test_only]

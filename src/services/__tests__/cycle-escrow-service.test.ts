@@ -3,6 +3,7 @@ import {
   buildContributeWithAttestationTx,
   buildFinalizeAndRedeemWithAttestationTx,
   buildOpenCycleTx,
+  buildRedeemClaimTx,
   buildReleaseOpenRoundTx,
 } from '@/services/cycle-escrow-service';
 
@@ -267,6 +268,99 @@ describe('buildReleaseOpenRoundTx', () => {
   it('fails at build time with a named error when the escrow id is missing', () => {
     expect(() => buildReleaseOpenRoundTx({ ...BASE, escrowId: '' })).toThrow(
       'Missing required argument: escrowId',
+    );
+  });
+});
+
+describe('buildRedeemClaimTx', () => {
+  // The collect path for an escrow someone else already finalized
+  // (`finalize_to_recipient` is permissionless): finalize_and_redeem would
+  // abort 205 there, so the recipient redeems the Claim in their wallet.
+  type Command =
+    | { kind: 'moveCall'; target: string; typeArguments: string[]; arguments: unknown[] }
+    | { kind: 'transferObjects'; objects: unknown[]; address: unknown };
+
+  function makeRecordingTxb(): { txb: Transaction; commands: Command[] } {
+    const commands: Command[] = [];
+    const txb = {
+      moveCall: (call: { target: string; typeArguments: string[]; arguments: unknown[] }) => {
+        commands.push({ kind: 'moveCall', ...call });
+        return { kind: 'result', index: commands.length - 1 };
+      },
+      transferObjects: (objects: unknown[], address: unknown) => {
+        commands.push({ kind: 'transferObjects', objects, address });
+      },
+      object: (id: string) => ({ kind: 'object', id }),
+    } as unknown as Transaction;
+    return { txb, commands };
+  }
+
+  it('redeems, pays the escrow recipient, then advances the rotation in the same PTB', () => {
+    const { txb, commands } = makeRecordingTxb();
+    buildRedeemClaimTx({
+      ...BASE,
+      escrowId: '0xescrow',
+      claimId: '0xclaim',
+    })(txb);
+
+    expect(commands).toEqual([
+      {
+        kind: 'moveCall',
+        target: '0xpkg::njangi_cycle_escrow::recipient',
+        typeArguments: [BASE.coinType],
+        arguments: [{ kind: 'object', id: '0xescrow' }],
+      },
+      {
+        kind: 'moveCall',
+        target: '0xpkg::njangi_cycle_escrow::redeem_claim',
+        typeArguments: [BASE.coinType],
+        arguments: [
+          { kind: 'object', id: '0xescrow' },
+          { kind: 'object', id: '0xclaim' },
+          { kind: 'object', id: '0x6' },
+        ],
+      },
+      // The coin goes to the escrow's frozen recipient (command 0's result),
+      // never to an address the client supplies.
+      {
+        kind: 'transferObjects',
+        objects: [{ kind: 'result', index: 1 }],
+        address: { kind: 'result', index: 0 },
+      },
+      // advance_circle_after_claim asserts `claimed`, which redeem_claim
+      // just set — the same chaining as the one-step collect.
+      {
+        kind: 'moveCall',
+        target: '0xpkg::njangi_cycle_escrow::advance_circle_after_claim',
+        typeArguments: [BASE.coinType],
+        arguments: [
+          { kind: 'object', id: '0xcircle' },
+          { kind: 'object', id: '0xescrow' },
+          { kind: 'object', id: '0x6' },
+        ],
+      },
+    ]);
+  });
+
+  it('leaves the advance out without a circleId', () => {
+    const { txb, commands } = makeRecordingTxb();
+    buildRedeemClaimTx({
+      ...BASE,
+      circleId: undefined,
+      escrowId: '0xescrow',
+      claimId: '0xclaim',
+    })(txb);
+
+    expect(commands.map((c) => (c.kind === 'moveCall' ? c.target : c.kind))).toEqual([
+      '0xpkg::njangi_cycle_escrow::recipient',
+      '0xpkg::njangi_cycle_escrow::redeem_claim',
+      'transferObjects',
+    ]);
+  });
+
+  it('fails at build time with a named error when the claim id is missing', () => {
+    expect(() => buildRedeemClaimTx({ ...BASE, escrowId: '0xescrow', claimId: '' })).toThrow(
+      'Missing required argument: claimId',
     );
   });
 });

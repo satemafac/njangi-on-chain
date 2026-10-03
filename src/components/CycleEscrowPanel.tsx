@@ -6,7 +6,14 @@ import {
   buildFinalizeAndRedeemTx,
   buildFinalizeAndRedeemWithAttestationTx,
   buildOpenCycleTx,
+  buildRedeemClaimTx,
 } from '@/services/cycle-escrow-service';
+import {
+  findRecipientClaim,
+  resolveCollectRoute,
+  resolveEscrowStage,
+  type EscrowStage,
+} from '@/lib/cycle-escrow-collect';
 import { preparePaymentCoin } from '@/lib/payment-coin-builder';
 import { useZkLoginSigner } from '@/hooks/useZkLoginSigner';
 import type { TransactionBuilder } from '@/lib/zklogin-client-signer';
@@ -14,12 +21,14 @@ import { useTranslation } from '@/hooks/useTranslation';
 import {
   findCurrentCycleEscrow,
   listContributors,
+  potBaseUnits,
   readCircleRotationPointer,
   readCycleEscrowState,
   type CycleEscrowLiveState,
   type CycleEscrowSummary,
 } from '@/lib/cycle-escrow-discovery';
 import {
+  completedRoundCopyKey,
   resolveNextRoundAction,
   type CircleRotationPointer,
 } from '@/lib/cycle-round-progression';
@@ -121,15 +130,6 @@ function explain(error: unknown): string {
   return String(error);
 }
 
-type Stage =
-  | 'loading'
-  | 'no-round-open'
-  | 'in-progress'
-  | 'full-waiting-for-claim'
-  | 'completed'
-  /** Refunds began on chain; only a re-open (by the admin) moves the round on. */
-  | 'refunded';
-
 export function CycleEscrowPanel({
   circleId,
   network,
@@ -155,6 +155,13 @@ export function CycleEscrowPanel({
   // that the admin has not opened the round.
   const [loadError, setLoadError] = useState(false);
   const [busy, setBusy] = useState<null | 'pay' | 'claim' | 'advance'>(null);
+  // Why the last Collect on a finalized round did not sign, keyed to its
+  // escrow so a later round never inherits it. `unreadable` is a failed
+  // lookup (retry); `missing` means the claim is not in this wallet.
+  const [collectIssue, setCollectIssue] = useState<{
+    escrowId: string;
+    kind: 'unreadable' | 'missing';
+  } | null>(null);
   // The one in-flight flag for every control that opens a round. Held past
   // the transaction's resolution until discovery shows the new escrow (or
   // a bounded timeout) — see cycle-open-round-lock.ts for the incident
@@ -279,17 +286,16 @@ export function CycleEscrowPanel({
   const isUserRecipient =
     !!userAddress && !!recipient && userAddress.toLowerCase() === recipient.toLowerCase();
 
-  const stage: Stage = useMemo(() => {
-    if (loading) return 'loading';
-    if (!summary || !liveState) return 'no-round-open';
-    // Checked first: a refunded escrow is unfinalized/unclaimed on chain and
-    // would otherwise render as an in-progress round whose "pay" aborts.
-    if (liveState.refunded) return 'refunded';
-    if (liveState.claimed) return 'completed';
-    if (liveState.finalized) return 'full-waiting-for-claim';
-    if (paidSoFar >= totalRequired && totalRequired > 0) return 'full-waiting-for-claim';
-    return 'in-progress';
-  }, [loading, summary, liveState, paidSoFar, totalRequired]);
+  const stage: EscrowStage = useMemo(
+    () =>
+      resolveEscrowStage({
+        loading,
+        state: summary ? liveState : null,
+        paidSoFar,
+        totalRequired,
+      }),
+    [loading, summary, liveState, paidSoFar, totalRequired],
+  );
 
   // What a settled round can do next. Only meaningful in the `completed`
   // stage; everywhere else the escrow itself already says what happens.
@@ -363,6 +369,9 @@ export function CycleEscrowPanel({
   }, [liveState?.members, contributors, recipient, memberNames]);
 
   const friendlyAmount = formatAmount(contributionAmountBase, coinDecimals, coinSymbol);
+  // The whole pot, which is what a collect pays out. Taken from the state
+  // read before the claim, which drains the balance.
+  const potBase = useMemo(() => (liveState ? potBaseUnits(liveState) : '0'), [liveState]);
 
   const runWithSigner = useCallback(
     async (action: 'pay' | 'claim' | 'advance', build: TransactionBuilder, gasBudget: number) => {
@@ -383,16 +392,12 @@ export function CycleEscrowPanel({
         );
         if (action === 'claim') {
           // The member just collected their own turn: open the payout
-          // moment. friendlyAmount is the per-member contribution; the pot
-          // itself is contributionAmount × contributors, which the summary
-          // carries when it is known.
-          const potBase = liveState?.totalContributed;
+          // moment with the pot they received. friendlyAmount (one member's
+          // share) is only the fallback for a pot that could not be read.
           setCelebration({
             digest: result.digest,
             amount:
-              potBase && potBase !== '0'
-                ? formatAmount(potBase, coinDecimals, coinSymbol)
-                : friendlyAmount,
+              potBase !== '0' ? formatAmount(potBase, coinDecimals, coinSymbol) : friendlyAmount,
             cycleNo: liveState?.cycleNo ?? summary?.cycleNo ?? '—',
           });
         }
@@ -430,7 +435,7 @@ export function CycleEscrowPanel({
       t,
       friendlyAmount,
       summary?.cycleNo,
-      liveState?.totalContributed,
+      potBase,
       liveState?.cycleNo,
       coinDecimals,
       coinSymbol,
@@ -697,9 +702,64 @@ export function CycleEscrowPanel({
   }, [summary, userAddress, network, coinType, contributionAmountBase, runWithSigner, resolveAttestationIdOrAbort]);
 
   const onCollectPayout = useCallback(async () => {
-    if (!summary) return;
+    if (!summary || !liveState) return;
+    if (!isReady || !userAddress) {
+      toast.error(t('toast.signInAgain'));
+      return;
+    }
+    setCollectIssue(null);
+    // Someone else may already have finalized this round
+    // (`finalize_to_recipient` is permissionless); finalize_and_redeem*
+    // would then abort 205. See cycle-escrow-collect.ts.
+    const route = resolveCollectRoute(liveState);
+    if (route.kind === 'none') {
+      if (route.reason === 'gated-claim') {
+        toast.error(
+          'This round requires verification, so its payout cannot be collected here. Please contact support.',
+        );
+        return;
+      }
+      // Collected or refunded since this view rendered: re-read it.
+      void refresh();
+      return;
+    }
+
     const attestationId = await resolveAttestationIdOrAbort();
     if (attestationId === 'ABORT') return;
+
+    if (route.kind === 'redeem-claim') {
+      // Ungated escrows only: the route refuses gated ones. The pass
+      // resolved above still applies the deployment's verification policy
+      // (the gate flag) to this path, but `redeem_claim` takes none.
+      setBusy('claim');
+      const lookup = await findRecipientClaim({
+        client: rpcClient,
+        network,
+        owner: userAddress,
+        escrowId: summary.escrowId,
+        cycleNo: liveState.cycleNo,
+        coinType,
+      });
+      if (lookup.kind !== 'found') {
+        setBusy(null);
+        // A failed read is "try again", never "no claim".
+        setCollectIssue({
+          escrowId: summary.escrowId,
+          kind: lookup.kind === 'absent' ? 'missing' : 'unreadable',
+        });
+        return;
+      }
+      const redeem = buildRedeemClaimTx({
+        network,
+        escrowId: summary.escrowId,
+        claimId: lookup.claim.claimId,
+        coinType,
+        // Same atomic rotation advance as the one-step collect below.
+        circleId,
+      });
+      void runWithSigner('claim', redeem, 120_000_000);
+      return;
+    }
 
     // Same arity requirement as the gated contribute: the on-chain entry
     // takes the escrow-pinned ComplianceConfig, so resolve it or refuse
@@ -734,7 +794,20 @@ export function CycleEscrowPanel({
           circleId,
         });
     void runWithSigner('claim', build, 120_000_000);
-  }, [summary, network, coinType, circleId, runWithSigner, resolveAttestationIdOrAbort]);
+  }, [
+    summary,
+    liveState,
+    isReady,
+    userAddress,
+    network,
+    coinType,
+    circleId,
+    rpcClient,
+    refresh,
+    runWithSigner,
+    resolveAttestationIdOrAbort,
+    t,
+  ]);
 
   // Recovery: advance a circle whose payout was collected but whose rotation
   // never moved on (e.g. claimed before the collect flow chained the advance).
@@ -1078,35 +1151,37 @@ export function CycleEscrowPanel({
                 Exactly one control is offered, and never a control that
                 cannot work. In particular `open` is withheld whenever the
                 circle still points at the member who just collected, since
-                opening there would snapshot them again and pay them twice. */}
+                opening there would snapshot them again and pay them twice.
+
+                The sentence above the control is keyed by the same action
+                (completedRoundCopyKey). One sentence used to serve every
+                action, promising "the admin can open the next round" above a
+                Resume Cycle instruction (0xa3fada…675ed, 2026-08-30). */}
             {stage === 'completed' ? (
               <div className="flex w-full flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div className="sm:max-w-md">
                   <p className="text-sm font-medium text-emerald-700">
-                    {t('escrow.completed', {
+                    {t(completedRoundCopyKey(nextRound.action), {
                       cycle: summary?.cycleNo ?? '—',
                       recipient: recipientLabel,
                     })}
                   </p>
                   {showAdminRoundControls && nextRound.action === 'resume-cycle' ? (
                     <p className="mt-2 text-xs text-amber-700">
-                      That was the last member of this rotation — everyone has now
-                      been paid once. Use{' '}
-                      <span className="font-semibold">Resume Cycle</span> in the
+                      Use <span className="font-semibold">Resume Cycle</span> in the
                       Circle Management section below to start the next lap, then
                       open its first round here.
                     </p>
                   ) : null}
                   {showAdminRoundControls && nextRound.action === 'advance-rotation' ? (
                     <p className="mt-2 text-xs text-amber-700">
-                      This payout was collected but the circle never moved on to the
-                      next member. Advance it below, then open the next round.
+                      Advance it below, then open the next round here.
                     </p>
                   ) : null}
                   {showAdminRoundControls && nextRound.action === 'unknown' ? (
                     <p className="mt-2 text-xs text-amber-700">
                       {nextRound.reason === 'pointer-unavailable'
-                        ? "We couldn't read where this circle's rotation stands, so we're not offering an action that might be the wrong one. Refresh to try again."
+                        ? 'Refresh to try again. No control is offered until the rotation can be read, rather than one that might be the wrong one.'
                         : 'This circle’s rotation is in a state we can’t safely act on from here. Please contact support before opening another round.'}
                     </p>
                   ) : null}
@@ -1139,6 +1214,17 @@ export function CycleEscrowPanel({
               </div>
             ) : null}
           </div>
+
+          {stage === 'full-waiting-for-claim' &&
+          isUserRecipient &&
+          collectIssue &&
+          collectIssue.escrowId === summary?.escrowId ? (
+            <p role="status" className="mt-3 text-sm text-amber-700">
+              {collectIssue.kind === 'missing'
+                ? t('escrow.collect.claimNotFound')
+                : t('escrow.collect.claimUnreadable')}
+            </p>
+          ) : null}
         </>
       )}
 
