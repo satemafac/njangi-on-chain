@@ -283,8 +283,7 @@ function legacyTemplate(
  * Send-time date label for the templates whose approved layout ends with a
  * date placeholder (deposit_returned, member_removed, order_changed,
  * payout_processed all carry one). Mirrors the legacy bot's
- * `new Date().toLocaleDateString('en-US', …)` calls and
- * buildYourTurnTemplate in your-turn-notification.ts. The value is "now" by
+ * `new Date().toLocaleDateString('en-US', …)` calls. The value is "now" by
  * design, so it is the one intentionally non-deterministic input to an
  * otherwise pure module — every other parameter comes from the event or the
  * resolved context.
