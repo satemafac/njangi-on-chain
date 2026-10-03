@@ -18,6 +18,7 @@
 // "Rotating the WhatsApp PII keys".
 
 import { createCipheriv, createDecipheriv, randomBytes } from 'crypto';
+import { WalrusReadError, isTransientWalrusStatus } from './walrus-read-error';
 
 const AES_ALGO = 'aes-256-gcm';
 const IV_BYTES = 12;
@@ -258,21 +259,64 @@ export async function storeEnvelopeInWalrus(envelope: EncryptedEnvelope): Promis
   return (await storeEnvelopeInWalrusDetailed(envelope)).blobId;
 }
 
+/** An error's message, plus its cause's: undici's "fetch failed" keeps the reason there. */
+function describeFailure(err: unknown): string {
+  if (!(err instanceof Error)) return String(err);
+  const cause = (err as Error & { cause?: unknown }).cause;
+  return cause instanceof Error ? `${err.message} (${cause.message})` : err.message;
+}
+
 /**
- * Fetches and decrypts a previously stored envelope. Used by the WhatsApp
- * webhook on cache miss to resolve a circle's routing target.
+ * Fetches a previously stored envelope from the Walrus aggregator. Every
+ * failure throws a WalrusReadError whose `transient` flag says whether a
+ * retry may succeed: true for a network error, a 5xx or a 429, false for a
+ * 404 (expired blob), any other 4xx, or a body that is not an envelope. See
+ * walrus-read-error.ts.
  */
 export async function fetchEnvelopeFromWalrus(blobId: string): Promise<EncryptedEnvelope> {
   const { aggregator } = walrusEndpoints();
   const url = `${aggregator}/v1/blobs/${encodeURIComponent(blobId)}`;
-  const response = await fetch(url);
+  let response: Response;
+  try {
+    response = await fetch(url);
+  } catch (err) {
+    throw new WalrusReadError(`Walrus aggregator unreachable: ${describeFailure(err)}`, {
+      status: null,
+      transient: true,
+      cause: err,
+    });
+  }
   if (!response.ok) {
     const body = await response.text().catch(() => '<no body>');
-    throw new Error(`Walrus aggregator returned ${response.status}: ${body}`);
+    throw new WalrusReadError(`Walrus aggregator returned ${response.status}: ${body}`, {
+      status: response.status,
+      transient: isTransientWalrusStatus(response.status),
+    });
   }
-  const envelope = (await response.json()) as EncryptedEnvelope;
+  // Read the body before parsing it: a connection that drops mid-body is a
+  // network failure, while a body that arrives whole but is not an
+  // envelope is a property of the blob.
+  let text: string;
+  try {
+    text = await response.text();
+  } catch (err) {
+    throw new WalrusReadError(`Walrus aggregator response was cut off: ${describeFailure(err)}`, {
+      status: response.status,
+      transient: true,
+      cause: err,
+    });
+  }
+  let envelope: EncryptedEnvelope | null = null;
+  try {
+    envelope = JSON.parse(text) as EncryptedEnvelope;
+  } catch {
+    // Not JSON: reported as malformed below.
+  }
   if (typeof envelope?.iv !== 'string' || typeof envelope?.ct !== 'string' || typeof envelope?.tag !== 'string') {
-    throw new Error('Walrus aggregator returned a malformed envelope.');
+    throw new WalrusReadError('Walrus aggregator returned a malformed envelope.', {
+      status: response.status,
+      transient: false,
+    });
   }
   return envelope;
 }
@@ -291,7 +335,11 @@ export async function encryptAndStorePII(
 }
 
 /**
- * High-level helper used by the WhatsApp webhook lookup path.
+ * Fetches and decrypts one blob: the WhatsApp phone lookups, the webhook's
+ * registry scan, the manage card and renewal all read through here. Throws
+ * the WalrusReadError of a failed read (see fetchEnvelopeFromWalrus) and a
+ * plain Error when the envelope does not decrypt; only a transient
+ * WalrusReadError is worth retrying.
  */
 export async function fetchAndDecryptPII(blobId: string): Promise<WhatsAppPiiPayload> {
   const envelope = await fetchEnvelopeFromWalrus(blobId);
