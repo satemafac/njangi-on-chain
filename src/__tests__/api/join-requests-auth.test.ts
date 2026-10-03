@@ -296,15 +296,26 @@ describe('GET /api/join-requests/pending/[circleId]', () => {
     expect(res.jsonBody.data).toEqual(rows);
   });
 
-  it('keeps the no-op ?clear=all answering without a session or a read', async () => {
+  it('gives ?clear=all no path of its own: without a session it is refused like any read', async () => {
     const res = createRes();
     await pendingHandler(
-      createReq({ method: 'GET', query: { circleId: 'mock-circle-1', clear: 'all' } }),
+      createReq({ method: 'GET', query: { circleId: CIRCLE_ID, clear: 'all' } }),
       res,
     );
 
-    expect(res.statusCode).toBe(200);
-    expect(res.jsonBody.data).toEqual([]);
+    expect(res.statusCode).toBe(401);
+    expect(res.jsonBody.data).toBeUndefined();
+    expect(sqlite.getPendingRequestsByCircleId).not.toHaveBeenCalled();
+  });
+
+  it('answers DELETE with 405 and touches no rows', async () => {
+    const res = createRes();
+    await pendingHandler(
+      createReq({ method: 'DELETE', query: { circleId: CIRCLE_ID }, cookies: signInAs(ADMIN) }),
+      res,
+    );
+
+    expect(res.statusCode).toBe(405);
     expect(sqlite.getPendingRequestsByCircleId).not.toHaveBeenCalled();
     expect(postgres.getPendingRequestsByCircleId).not.toHaveBeenCalled();
   });
