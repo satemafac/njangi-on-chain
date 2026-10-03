@@ -197,9 +197,7 @@ describe('completedRoundCopyKey', () => {
   });
 
   // The reported mismatch, pinned in EN: only the open-next-round sentence
-  // may promise the next round. Resume Cycle starts a new lap and resets
-  // every security deposit (njangi_circles::resume_cycle), and the sentence
-  // has to say so — that is what a member needs to know.
+  // may promise the next round.
   it('only the open-next-round sentence promises the next round', () => {
     const en = DICTIONARIES.en;
     expect(en[completedRoundCopyKey('open-next-round')]).toMatch(/open the next round/i);
@@ -208,17 +206,51 @@ describe('completedRoundCopyKey', () => {
     }
   });
 
-  it('tells members a resumed cycle needs fresh security deposits', () => {
+  // End of a lap: the admin resumes the cycle (starting the next lap) and
+  // then opens that lap's first round. Since package v7 `resume_cycle`
+  // leaves every posted security deposit in custody with its `deposit_paid`
+  // flag set, and `member_deposit_security_deposit` refuses a second one
+  // while the first is held (abort 21). A member reading "new lap" needs to
+  // hear that nothing more is owed. This sentence first shipped with the
+  // pre-v7 demand that every member post a fresh deposit.
+  it('tells members a resumed cycle keeps the deposits already posted', () => {
     const sentence = DICTIONARIES.en[completedRoundCopyKey('resume-cycle')];
-    expect(sentence).toMatch(/security deposit/i);
-    expect(sentence).toMatch(/resumes the cycle/i);
+    expect(sentence).toMatch(/last member of this rotation/i);
+    expect(sentence).toMatch(/resume the cycle to start the next lap, then open its first round/i);
+    expect(sentence).toMatch(/security deposits already posted stay in place/i);
+    expect(sentence).not.toMatch(/fresh|new (?:security )?deposit|post a (?:new |fresh )?deposit/i);
   });
 
-  // A failed read is not a fact: the unknown sentence reports that the
-  // state could not be read and suggests no action to anyone.
-  it('suggests no action when the rotation could not be read', () => {
+  // Per locale: the deposit noun the resume sentence must still mention, and
+  // the pre-v7 demand for a new deposit it must no longer make. Typed as a
+  // Record so a new locale cannot skip the check.
+  const resumeDepositWording: Record<Locale, { mentions: RegExp; preV7Demand: RegExp }> = {
+    en: { mentions: /security deposits/i, preV7Demand: /fresh security deposit/i },
+    fr: { mentions: /dépôts de garantie/i, preV7Demand: /nouveau dépôt de garantie/i },
+    pcm: { mentions: /security deposit/i, preV7Demand: /fresh security deposit/i },
+    sw: { mentions: /dhamana za usalama/i, preV7Demand: /dhamana mpya/i },
+    am: { mentions: /የዋስትና ተቀማጮች/, preV7Demand: /አዲስ የዋስትና ተቀማጭ/ },
+    ar: { mentions: /ودائع الضمان/, preV7Demand: /وديعة ضمان جديدة/ },
+    fa: { mentions: /سپرده/, preV7Demand: /سپرده تضمین جدیدی/ },
+  };
+
+  it.each(locales)('%s says the posted deposits stay when the cycle resumes', (locale) => {
+    const sentence = DICTIONARIES[locale][completedRoundCopyKey('resume-cycle')];
+    const { mentions, preV7Demand } = resumeDepositWording[locale];
+    expect(sentence).toMatch(mentions);
+    expect(sentence).not.toMatch(preV7Demand);
+  });
+
+  // `unknown` covers three states: the pointer read failed
+  // (pointer-unavailable), a recipient is missing (no-recipient), or a
+  // pointer read fine has drifted off this escrow's cycle
+  // (stalled-off-cycle). "We couldn't read …" would be false for the last
+  // two, so the sentence only says the next step could not be confirmed —
+  // and suggests no action to anyone.
+  it('suggests no action when the next step could not be confirmed', () => {
     const sentence = DICTIONARIES.en[completedRoundCopyKey('unknown')];
-    expect(sentence).toMatch(/couldn't read/i);
+    expect(sentence).toMatch(/couldn't confirm/i);
+    expect(sentence).not.toMatch(/couldn't read/i);
     expect(sentence).not.toMatch(/admin/i);
     expect(sentence).not.toMatch(/open|advance|resume/i);
   });
