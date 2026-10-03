@@ -36,6 +36,7 @@
 //     EscrowSubject).
 
 import type { WhatsAppTemplatePayload } from '../whatsapp-notifier';
+import { buildLinkConfirmation } from '../../content/whatsapp-updates';
 
 // ---------------------------------------------------------------------------
 // Amount formatting (ported from the bot's formatTokenAmount helpers)
@@ -134,7 +135,7 @@ export interface ParsedCircleEvent {
   buildBody(ctx: CircleEventMessageContext): string;
   /**
    * Builds the Meta-approved template payload for this event (legacy
-   * template names — circle_link, member_joins, payout_processed, …).
+   * template names — circle_unlink, member_joins, payout_processed, …).
    * Returns null when the cron context cannot faithfully fill the
    * approved placeholder layout; the dispatcher then falls back to
    * `buildBody` text even when WHATSAPP_TEMPLATES_ENABLED=true.
@@ -310,12 +311,14 @@ export const CIRCLE_EVENT_STREAMS: CircleEventStream[] = [
       if (!circleId) return null;
       return {
         circleId,
-        buildBody: (ctx) =>
-          `Circle connected.\n` +
-          `${ctx.circleName} is now linked to this WhatsApp number. ` +
-          `You will receive contribution, payout and membership updates here.\n` +
-          `Open circle: ${circleLink(ctx, circleId)}`,
-        buildTemplate: (ctx) => legacyTemplate('circle_link', [ctx.circleName], circleId),
+        // Lists what src/content/whatsapp-updates.ts says a linked number
+        // gets, like the help reply and the manage card, so it promises no
+        // more than they do.
+        buildBody: (ctx) => buildLinkConfirmation(ctx.circleName, circleLink(ctx, circleId)),
+        // No buildTemplate: the approved `circle_link` body (WHATSAPP_TEMPLATES.md)
+        // promises cycle deadlines and "important alerts", which nothing
+        // sends. Send a template here again only once Meta approves a body
+        // that names no updates of its own; the template doc proposes one.
       };
     },
   },

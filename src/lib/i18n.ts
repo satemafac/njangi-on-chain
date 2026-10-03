@@ -444,7 +444,7 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'billing.generic.body': 'Upgrade to Premium to unlock it for your circles.',
     'billing.whatsappSuite.title': 'WhatsApp updates are a Premium feature',
     'billing.whatsappSuite.body':
-      "Link a WhatsApp number to your circle, and that number gets the circle's updates: who joins or is removed, security deposits paid or returned, changes to the payout order, and the circle going live.",
+      "Link a WhatsApp number to your circle, and that number gets the circle's updates: who joins or is removed, security deposits paid or returned on removal, changes to the payout order, and the circle going live.",
     'billing.maxMembers.title': 'Bigger circles are a Premium feature',
     'billing.maxMembers.body':
       'Free circles hold a few close members. Premium grows a circle to the full rotation the contract supports.',
@@ -959,7 +959,7 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'billing.generic.body': 'Passez à Premium pour la débloquer pour vos cercles.',
     'billing.whatsappSuite.title': 'Les notifications WhatsApp sont une fonctionnalité Premium',
     'billing.whatsappSuite.body':
-      "Reliez un numéro WhatsApp à votre cercle, et ce numéro reçoit ses mises à jour : qui le rejoint ou en est retiré, les dépôts de garantie versés ou restitués, les changements de l'ordre des versements et le démarrage du cercle.",
+      "Reliez un numéro WhatsApp à votre cercle, et ce numéro reçoit ses mises à jour : qui le rejoint ou en est retiré, les dépôts de garantie versés, ou restitués quand l'administrateur retire quelqu'un du cercle, les changements de l'ordre des versements et le démarrage du cercle.",
     'billing.maxMembers.title': 'Les cercles plus grands sont une fonctionnalité Premium',
     'billing.maxMembers.body':
       "Les cercles gratuits réunissent quelques membres proches. Premium étend un cercle à la rotation complète prise en charge par le contrat.",
