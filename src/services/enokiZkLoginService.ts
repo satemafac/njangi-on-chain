@@ -516,18 +516,14 @@ export class EnokiZkLoginService {
         throw new Error('Missing required JWT claims');
       }
 
+      // Claim NAMES and timestamps only. The values (sub, email, name,
+      // picture) identify the user and must not reach the logs.
       console.log('Processing JWT payload:', {
-        sub: jwtPayload.sub,
-        aud: jwtPayload.aud,
         exp: jwtPayload.exp,
         iat: jwtPayload.iat,
         provider: setupData.provider,
         network: setupData.network,
-        // Log all available claims for debugging
         allClaims: Object.keys(jwtPayload),
-        name: jwtPayload.name || 'not provided',
-        email: jwtPayload.email || 'not provided',
-        picture: jwtPayload.picture || 'not provided'
       });
 
       // Get salt from Enoki salt service
@@ -592,12 +588,10 @@ export class EnokiZkLoginService {
         picture = `https://ui-avatars.com/api/?name=${encodeURIComponent(initials)}&background=${backgroundColor}&color=fff&size=128&bold=true`;
       }
       
-      console.log('Apple profile data:', { 
-        hasName: !!name, 
-        hasEmail: !!email, 
+      console.log('Apple profile data:', {
+        hasName: !!name,
+        hasEmail: !!email,
         hasPicture: !!picture,
-        extractedName: name,
-        generatedAvatar: picture
       });
     }
 
@@ -777,43 +771,8 @@ export class EnokiZkLoginService {
     }
   }
 
-  /**
-   * Format proof points for zkLogin signature
-   */
-  private formatProofPoints(proofPoints: ZkLoginProofs['proofPoints']): ZkLoginProofs['proofPoints'] {
-    try {
-      // Deep clone the proof points to ensure we don't modify the original
-      const proofPointsClone = JSON.parse(JSON.stringify(proofPoints));
-      
-      // Verify all required proof point components exist
-      if (!proofPointsClone.a || !proofPointsClone.b || !proofPointsClone.c ||
-          !Array.isArray(proofPointsClone.a) || !Array.isArray(proofPointsClone.b) || !Array.isArray(proofPointsClone.c)) {
-        throw new Error('Proof points missing required components');
-      }
-      
-      // Format the proof points according to Sui zkLogin requirements
-      return {
-        a: proofPointsClone.a.map((point: string | number) => BigInt(point).toString()),
-        b: proofPointsClone.b.map((pair: string | number | Array<string | number>) => {
-          // Handle b points correctly - must be pairs
-          if (Array.isArray(pair) && pair.length === 2) {
-            return pair.map((point: string | number) => BigInt(point).toString());
-          } else if (!Array.isArray(pair)) {
-            // If not an array, create a pair with [point, 0]
-            return [BigInt(pair).toString(), "0"];
-          } else {
-            // If array but not length 2, log and throw error
-            console.error('Invalid b point format:', pair);
-            throw new Error(`Invalid b point format: expected pair but got array of length ${pair.length}`);
-          }
-        }),
-        c: proofPointsClone.c.map((point: string | number) => BigInt(point).toString()),
-      };
-    } catch (error) {
-      console.error('Error formatting proof points:', error);
-      throw new Error(`Failed to format proof points: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
-  }
+  // Removed: `formatProofPoints`. Nothing called it, and its error paths
+  // logged raw proof values.
 
   /**
    * Signs and executes a transaction with custom content
