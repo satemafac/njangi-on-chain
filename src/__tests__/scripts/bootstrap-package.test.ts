@@ -277,6 +277,7 @@ async function bootstrap(
   const child = spawn(process.execPath, [SCRIPT, packageId], {
     cwd: dir,
     env: {
+      NODE_ENV: 'test',
       PATH: `${bin}:/usr/bin:/bin`,
       HOME: dir,
       NJANGI_BOOTSTRAP_NETWORK: 'testnet',
