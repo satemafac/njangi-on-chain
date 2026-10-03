@@ -25,15 +25,35 @@ export function suiAddressesEqual(
   return normalizeSuiAddress(a) === normalizeSuiAddress(b);
 }
 
+export interface CircleAuthority {
+  /** The circle's `admin` field, or `null` when the object carries none. */
+  admin: string | null;
+  /** Object id of the circle's `members` Table, keyed by member address. */
+  membersTableId: string | null;
+}
+
+function readTableId(value: unknown): string | null {
+  // A Table field renders as { type, fields: { id: { id }, size } }.
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+  const record = value as { fields?: unknown; id?: unknown };
+  const inner = (record.fields && typeof record.fields === 'object'
+    ? record.fields
+    : record) as { id?: unknown };
+  const uid = inner.id && typeof inner.id === 'object' ? (inner.id as { id?: unknown }).id : null;
+  return typeof uid === 'string' ? uid : null;
+}
+
 /**
- * Fetches the admin address recorded on the on-chain circle object.
- * Returns `null` when the circle does not exist or carries no admin field.
+ * Reads the circle object once: who administers it and where its members
+ * are recorded. Returns `null` when the circle does not exist.
  * Throws on RPC failure — callers must fail closed.
  */
-export async function fetchCircleAdminAddress(
+export async function fetchCircleAuthority(
   circleId: string,
   network: NetworkType,
-): Promise<string | null> {
+): Promise<CircleAuthority | null> {
   const networkConfig = getNetworkConfig(network);
   const suiClient = getPooledSuiClient({ network, rpcUrl: networkConfig.rpcUrl });
 
@@ -47,6 +67,22 @@ export async function fetchCircleAdminAddress(
     return null;
   }
 
-  const fields = (content as { fields: { admin?: string } }).fields;
-  return fields?.admin ?? null;
+  const fields = (content as { fields?: { admin?: unknown; members?: unknown } }).fields;
+  return {
+    admin: typeof fields?.admin === 'string' ? fields.admin : null,
+    membersTableId: readTableId(fields?.members),
+  };
+}
+
+/**
+ * Fetches the admin address recorded on the on-chain circle object.
+ * Returns `null` when the circle does not exist or carries no admin field.
+ * Throws on RPC failure — callers must fail closed.
+ */
+export async function fetchCircleAdminAddress(
+  circleId: string,
+  network: NetworkType,
+): Promise<string | null> {
+  const authority = await fetchCircleAuthority(circleId, network);
+  return authority?.admin ?? null;
 }

@@ -137,23 +137,6 @@ export class JoinRequestDatabase {
     }
   }
 
-  // Get all requests for a circle
-  async getRequestsByCircleId(circleId: string): Promise<JoinRequest[]> {
-    try {
-      const result = await pool().query(
-        `SELECT * FROM join_requests 
-         WHERE circle_id = $1
-         ORDER BY updated_at DESC`,
-        [circleId]
-      );
-
-      return result.rows as JoinRequest[];
-    } catch (error) {
-      console.error('Error getting circle requests:', error);
-      return [];
-    }
-  }
-
   // Get user info by address for a specific circle
   // Returns the most recent request (any status) for this user/circle combination
   async getUserByAddress(circleId: string, userAddress: string): Promise<JoinRequest | null> {

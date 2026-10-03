@@ -4,6 +4,10 @@ import { useRouter } from 'next/router';
 import { useAuth } from '@/contexts/AuthContext';
 import { CallbackStatusShell } from '@/components/ui/CallbackStatusShell';
 import { claimCallbackToken } from '@/lib/auth-callback-guard';
+import {
+  clearAuthCallbackFragment,
+  readAuthCallbackFragment,
+} from '@/lib/auth-callback-fragment';
 import { isAppPath, takePostLoginDestination } from '@/lib/post-login-redirect';
 import { trackFunnel } from '@/lib/funnel-events';
 
@@ -54,6 +58,7 @@ export default function AuthCallback() {
     // authenticated user belongs on the dashboard, not the landing page.
     const redirectAfterFailure = () => {
       redirectTimeoutRef.current = setTimeout(() => {
+        clearAuthCallbackFragment();
         if (
           window.localStorage.getItem('isAuthenticated') === 'true' &&
           window.localStorage.getItem('account')
@@ -69,29 +74,23 @@ export default function AuthCallback() {
       try {
         console.log('Processing authentication callback');
         
-        // Try to get the ID token from different places
+        // Try to get the ID token from different places. Never log the URL,
+        // the fragment or the query: they carry the id_token, a JWT with the
+        // user's email and sub.
         let idToken = null;
-        let appleUserData = null;
-        
-        // 1. Try URL hash (fragment)
-        const hash = window.location.hash.substring(1);
+
+        // 1. Try the URL fragment. _document parks it off the address bar
+        //    before Next boots (see auth-callback-fragment.ts); this reads
+        //    the stash and falls back to the live hash.
+        const hash = readAuthCallbackFragment();
         const hashParams = new URLSearchParams(hash);
         idToken = hashParams.get('id_token');
         const hashError = hashParams.get('error');
         const hashErrorDescription = hashParams.get('error_description');
         const hashCode = hashParams.get('code');
-        
-        // Extract Apple user data if available
-        const userDataParam = hashParams.get('user');
-        if (userDataParam) {
-          try {
-            appleUserData = JSON.parse(decodeURIComponent(userDataParam));
-            console.log('Apple user profile data found:', appleUserData);
-          } catch (e) {
-            console.warn('Failed to parse Apple user data:', e);
-          }
-        }
-        
+        // Apple's first sign-in also forwards a `user` payload (name, email)
+        // in the fragment. Nothing here needs it, so it is not read.
+
         // 2. If not in hash, try search params (query string)
         if (!idToken) {
           console.log('ID token not found in URL hash, checking search params');
@@ -119,10 +118,11 @@ export default function AuthCallback() {
           }
         }
         
-        // 3. Try extracting from full URL if token format is recognizable
+        // 3. Try extracting from the raw fragment / full URL if the token
+        //    format is recognizable
         if (!idToken) {
           console.log('Attempting to extract token from full URL');
-          const fullUrl = window.location.href;
+          const fullUrl = `${window.location.href}#${hash}`;
           const tokenMatch = fullUrl.match(/id_token=([^&]+)/);
           if (tokenMatch && tokenMatch[1]) {
             idToken = tokenMatch[1];
@@ -130,14 +130,6 @@ export default function AuthCallback() {
           }
         }
         
-        console.log('URL information:', {
-          fullUrl: window.location.href,
-          hash: window.location.hash,
-          search: window.location.search,
-          hashLength: hash.length,
-          idTokenFound: !!idToken
-        });
-
         if (!idToken) {
           setIsError(true);
           setStatus('Authentication failed');
@@ -158,6 +150,11 @@ export default function AuthCallback() {
         
         // Complete the zkLogin flow
         await handleCallback(idToken);
+
+        // Every effect run has read the fragment by now (the StrictMode
+        // duplicate returned synchronously above); stop the JWT from
+        // outliving this page on the window object.
+        clearAuthCallbackFragment();
         
         // Set progress to 100% when done
         setProgress(100);
@@ -203,6 +200,7 @@ export default function AuthCallback() {
           setIsError(false);
           setStatus('Authentication successful! Redirecting...');
           redirectTimeoutRef.current = setTimeout(() => {
+            clearAuthCallbackFragment();
             const stored = takePostLoginDestination();
             if (stored && isAppPath(stored)) {
               router.replace(stored);

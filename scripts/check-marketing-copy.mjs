@@ -30,8 +30,13 @@ const SCAN_DIRS = [
   // of user-facing prose would sit outside the guard entirely.
   'src/content',
   'whatsapp-bot-backend/src/services',
+  // The legacy bot's successor: the WhatsApp circle-event message copy the
+  // /api/cron/whatsapp-circle-events relay sends (circle-events.ts).
+  'src/lib/whatsapp-bot',
 ];
-const SCAN_FILES = ['src/lib/i18n.ts'];
+// your-turn-notification.ts holds the "your turn" WhatsApp nudge copy, in
+// seven languages, that members receive outside the app.
+const SCAN_FILES = ['src/lib/i18n.ts', 'src/lib/your-turn-notification.ts'];
 const EXTENSIONS = new Set(['.tsx', '.ts', '.md']);
 const IGNORE_DIRS = new Set(['api', '__tests__', 'node_modules']);
 

@@ -27,9 +27,13 @@ long outage doesn't replay stale messages.
   today; see [Known gaps](#known-gaps).
 - **"It's your turn"**, from `/api/cron/cycle-finalized`, tells a round's
   recipient that the payout is ready to collect. It is triggered by the
-  escrow's `CycleFinalized` event and goes to a number the recipient linked
-  as a circle admin. Only circle admins can link a number, so a recipient who
-  never linked one gets no nudge.
+  contribution that fills the round's pot (the escrow's `ContributionRecorded`
+  event that brings it to the required number of payers), states the payout
+  in the round's own coin, and is dropped if the recipient has already
+  collected it or the round was refunded by the time the cron runs (every 15
+  minutes). It goes to a number the recipient linked as a circle admin. Only
+  circle admins can link a number, so a recipient who never linked one gets
+  no nudge.
 
 The same dispatcher also sends stale-attestation reminders
 ([`src/lib/attestation-stale.ts`](../src/lib/attestation-stale.ts)) and ramp
@@ -42,7 +46,7 @@ answers every text message sent to the business number:
 
 | Message | Reply |
 | --- | --- |
-| `help` or `?` | What the channel sends, and these commands |
+| `help` or `?` | The updates a linked number gets, from [`src/content/whatsapp-updates.ts`](../src/content/whatsapp-updates.ts), and the `/status <circle-id>` and `/help` commands |
 | `/status <circle-id>` | That circle's live status, read from the chain |
 | `/status` | The status of every circle linked to the sender's number |
 | Anything else | A short acknowledgment that points to `/status` and `/help` |
@@ -63,6 +67,16 @@ any other message that contains `status` counts as `/status`.
   random nonce on chain, never the number itself. A confirm call then adds
   the link to the `whatsapp_phone_index` table, keyed by an HMAC of the
   number. `POST /api/whatsapp/admin-unlink-circle` removes a link.
+- **Showing the link.** The card reads
+  `GET /api/whatsapp/admin-link-circle`. For the circle admin it adds
+  `includeRecipient=true`, and the route decrypts the number only for a
+  session it can tie to the on-chain admin. Even then it returns a mask
+  (`+237 ••• ••• 1234`,
+  [`src/lib/whatsapp-recipient-mask.ts`](../src/lib/whatsapp-recipient-mask.ts))
+  and the date of the link, never the number. It opens the blob recorded in
+  `whatsapp_phone_index` first, because renewal (below) changes the blob id
+  there and not on chain. If the route refuses the session, the card still
+  shows that the circle is linked and asks the admin to sign in again.
 - **Sending.** Every notification goes through `sendMemberNotification` in
   [`src/lib/whatsapp-notifier.ts`](../src/lib/whatsapp-notifier.ts). It claims
   a dedupe slot, sends through the WhatsApp Cloud API, and records the
@@ -82,18 +96,31 @@ any other message that contains `status` counts as `/status`.
   Those events come from the retired payment rail, and no circle on the
   per-round escrow emits them. PR #43 repoints the streams to the escrow's
   own events.
-- **The "your turn" nudge arrives after the payout is collected.** The app
-  finalizes a round only inside the recipient's collect transaction
-  (`finalize_and_redeem`), so `CycleFinalized` fires as the payout is
-  collected, and the nudge follows at the next cron run. It arrives first
-  only when someone finalizes the round outside the app, for example with
-  `finalize_to_recipient`.
-- **Group links receive nothing.** The link form also accepts a WhatsApp
-  group id (`…@g.us`), and the link is stored, but every sender reads only a
-  phone number.
-- **The help reply promises more than is sent.** It lists deadline reminders
-  and circle insights, which nothing sends, along with the contribution and
-  payout updates above.
+- **Group links are refused.** A business number can message only groups it
+  created through Meta's Groups API. That API is open only to Official
+  Business Accounts, members join by invite link (8 at most), and a send
+  addresses the group by the id the API returned, not a `…@g.us` id from the
+  WhatsApp app. So the link form takes only a phone number, and
+  `POST /api/whatsapp/admin-link-circle` answers `linkType` 2 with 400
+  `WHATSAPP_GROUP_LINKS_UNSUPPORTED`. The check is in the route only: the
+  Move module still accepts `LINK_TYPE_GROUP`. A group link made before
+  PR #64 stays linked until the admin unlinks it. It receives nothing,
+  because every sender reads only a phone number, and the manage card marks
+  it "⚠️ Not supported".
+- **The link confirmation promises more than is sent.** The help reply and
+  the manage card list only the updates in
+  [`src/content/whatsapp-updates.ts`](../src/content/whatsapp-updates.ts),
+  but the confirmation is not built from that file. Its text, from the
+  `circle_linked` stream, says contribution and payout updates will follow,
+  and the `circle_link` template in
+  [`WHATSAPP_TEMPLATES.md`](../WHATSAPP_TEMPLATES.md) adds cycle deadlines.
+  None of those go out today.
+- **A deposit refunded by a stop-and-refund gets no message.** The help reply
+  and the manage card promise "Security deposits paid or returned". A return
+  is sent only when an admin removes a member, which emits
+  `SecurityDepositReturned`. A stop-and-refund (`execute_recovery` or
+  `trigger_auto_release`) emits `RecoveryMemberRefunded` instead, and no
+  stream reads it.
 
 ## Setting it up
 
@@ -141,14 +168,17 @@ the window. To switch to templates (the header comment of
    as different languages and fails a send whose language has no approved
    version (error 132001), so make the two agree before you switch.
 3. Match each template's placeholders to the parameters the code passes (see
-   `src/lib/whatsapp-bot/circle-events.ts` and
-   `src/lib/your-turn-notification.ts`). A mismatch fails with error 132000.
+   `src/lib/whatsapp-bot/circle-events.ts`). A mismatch fails with error
+   132000.
 4. Once every template is approved, set `WHATSAPP_TEMPLATES_ENABLED=true` in
    Vercel and redeploy.
 
-Security deposits, contributions and circle activation have no template wired
-yet. They stay free-form text even with the flag on, so they reach only
-people inside the window.
+Security deposits, contributions, circle activation and the "your turn" nudge
+have no template wired yet. They stay free-form text even with the flag on,
+so they reach only people inside the window. The nudge used to borrow
+`payout_processed`, but that template's approved copy says the payout was
+already sent, which is false while the pot waits to be collected, so it needs
+an approved template of its own.
 
 ## Checking it works
 

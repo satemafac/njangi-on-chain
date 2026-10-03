@@ -1,6 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import joinRequestDatabase from '../../../../services/join-request-database';
 import databaseService from '../../../../services/database-service';
+import { requireCircleAdmin, sendJoinRequestAuthFailure } from '../../../../lib/join-request-auth';
 
 type ResponseData = {
   success: boolean;
@@ -32,6 +33,12 @@ export default async function handler(
         success: false,
         message: 'Missing or invalid circle ID'
       });
+    }
+
+    // Only the circle's on-chain admin may approve or reject its requests.
+    const auth = await requireCircleAdmin(req, circleId);
+    if (!auth.ok) {
+      return sendJoinRequestAuthFailure(res, auth);
     }
 
     if (!userAddress || typeof userAddress !== 'string') {
