@@ -412,7 +412,8 @@ Heroku is retired: Vercel is the only deploy target. The `Procfile`,
 | 6 | `0x859e3add…` | superseded 2026-09-06 |
 | 7 | `0x9250490b…` | PR #19 (`resume_cycle` keeps deposits, `reconcile_deposit_paid`); published 2026-09-06 19:14Z, tx `HXPdLZJB…`; superseded the same night |
 | 8 | `0x401ed420…` | PR #20 (open-round marker, abort 234 `E_ROUND_ALREADY_OPEN`, `release_open_round`); published 2026-09-06 ~20:20Z, tx `H87Dirpn…`; guard verified live in lap 5; `NEXT_PUBLIC_ESCROW_ROUND_GUARD_ENABLED=true`; superseded by v9 the same night |
-| 9 | `0xf8afd3df…` | PR #14 (`create_circle` stores the real custody `wallet_id`; `create_custody_wallet_returning_id`); published 2026-09-06 with `sui` 1.79.0, tx `Ap9Xpvx2…`, from `main` 5864d5f; all references point here |
+| 9 | `0xf8afd3df…` | PR #14 (`create_circle` stores the real custody `wallet_id`; `create_custody_wallet_returning_id`); published 2026-09-06 with `sui` 1.79.0, tx `Ap9Xpvx2…`, from `main` 5864d5f; superseded by v10 |
+| 10 | `0x1ee9995c…` | PR #83 (`finalize_and_redeem*` collects an already-finalized round: same guards as `redeem_claim`, a finalized round's stray `Claim` is void, 206); published 2026-10-03 with `sui` 1.81.0, tx `Ew6fu3Am…`, ~0.77 SUI; `NEXT_PUBLIC_ESCROW_FINALIZED_COLLECT_ENABLED=true`; defines no new types; all references point here |
 No Move PR is waiting on a publish. Upgrade with the CLI: `suiup install
 sui@testnet -y` when it lags the network, then `sui client upgrade
 --upgrade-capability <cap from Published.toml>` from `move/` — the CLI holds

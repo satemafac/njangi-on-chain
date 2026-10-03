@@ -77,7 +77,7 @@ describe('circle-chain helpers', () => {
         }),
       ).toEqual([
         '0x89cddf4dfe654e7c7b16333096d9e750cf04bb96f7de934403a512d460594f02',
-        '0xf8afd3dfcf94f152ec9d1f8cb870b77525353a20564bb0224bcad5520d621614',
+        '0x1ee9995cae5c5e6c5aab75b278733511889b2a67f8dad53773ac36f3215f86b3',
         '0x859e3add80ce891423d49702b2b3350addf1726ca634000c7394748c0c416c8e',
       ]);
 
@@ -94,7 +94,7 @@ describe('circle-chain helpers', () => {
         }),
       ).toEqual([
         '0xc5aed33e4da2530d0f9b36a64d96d662b109ba2962bb6918bc3fa21be1622465',
-        '0xf8afd3dfcf94f152ec9d1f8cb870b77525353a20564bb0224bcad5520d621614',
+        '0x1ee9995cae5c5e6c5aab75b278733511889b2a67f8dad53773ac36f3215f86b3',
         '0x89cddf4dfe654e7c7b16333096d9e750cf04bb96f7de934403a512d460594f02',
         '0x859e3add80ce891423d49702b2b3350addf1726ca634000c7394748c0c416c8e',
       ]);
