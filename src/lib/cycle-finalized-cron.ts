@@ -8,8 +8,8 @@
 //   1. The notify POST omitted `recipient`, so the endpoint resolved the
 //      WhatsApp link for the *circle id* and every nudge silently no-oped.
 //      (Fixed in the caller — the drain hands the full parsed event to the
-//      notify callback, and parseCycleFinalizedEvent rejects events
-//      without a recipient.)
+//      notify callback, and the recipient now comes from the escrow
+//      snapshot; parseYourTurnEscrow rejects an escrow without one.)
 //   2. The cursor logic was inverted: it queried ascending but assumed
 //      descending, persisted the OLDEST event id of each batch, never
 //      followed nextCursor, and so re-processed the batch every poll while
@@ -41,9 +41,26 @@
 // id. Callers must build the MoveEventType filter from
 // `getPublishedPackageMetadata(network).originalId` — filtering on the
 // upgraded `published-at` id silently matches nothing.
+//
+// TRIGGER (2026-09-27): the nudge says the pot is full and the payout is
+// ready to collect, which is true from the contribution that fills the
+// pot until the recipient collects it. It used to fire on
+// `CycleFinalized`, but the app's Collect button calls
+// `finalize_and_redeem`, which emits CycleFinalized AND ClaimRedeemed in
+// the same transaction (testnet tx FLtRuWh…, 2026-09-07), so every nudge
+// arrived after the payout had been collected. The stream is now
+// `ContributionRecorded`: a nudge goes out for the contribution that
+// brings `contributors_so_far` up to the snapshot's
+// `required_contributors` (the contract's own finalize gate), and only
+// while the escrow is neither claimed nor refunded when the cron reads it.
+// A CycleFinalized from the permissionless `finalize_to_recipient` needs
+// no nudge of its own: finalizing requires a full pot, so the
+// contribution that filled it came first and was nudged under the same
+// dedupe key.
 
 import { randomUUID } from 'crypto';
 import { getSharedPgPool } from './pg-pool';
+import { getCoinLabelFromType } from './whatsapp-bot/circle-events';
 import { appLogger } from '../utils/logger';
 
 // ---------------------------------------------------------------------------
@@ -185,54 +202,185 @@ export async function drainCycleFinalizedEvents(
 }
 
 // ---------------------------------------------------------------------------
-// Event parsing + amount formatting (pure helpers)
+// "Your turn" trigger: the contribution that fills the pot (pure helpers)
 // ---------------------------------------------------------------------------
 
-export interface ParsedCycleFinalized {
+type RawRecord = Record<string, unknown>;
+
+function asRecord(value: unknown): RawRecord | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as RawRecord)
+    : null;
+}
+
+function nonEmptyString(value: unknown): string | null {
+  return typeof value === 'string' && value !== '' ? value : null;
+}
+
+/** A u64 as decimal digits. u64s arrive as strings (numbers on some nodes). */
+function u64Digits(value: unknown): string | null {
+  const text =
+    typeof value === 'number' && Number.isSafeInteger(value) ? String(value) : value;
+  return typeof text === 'string' && /^\d+$/.test(text) ? text : null;
+}
+
+/** A u64 that is a count or an index, so it must fit a safe integer. */
+function u64Count(value: unknown): number | null {
+  const digits = u64Digits(value);
+  const parsed = digits === null ? Number.NaN : Number(digits);
+  return Number.isSafeInteger(parsed) ? parsed : null;
+}
+
+export interface ParsedContributionRecorded {
   escrowId: string;
   cycleNo: number;
-  recipient: string;
-  amount: string;
+  /** Contributors recorded in the escrow, this contribution included. */
+  contributorsSoFar: number;
+  /** Escrow balance in base units right after this contribution. */
+  totalContributed: string;
 }
 
 /**
- * Parses the on-chain `njangi_cycle_escrow::CycleFinalized` payload:
- * `{ escrow_id: ID, cycle_no: u64, recipient: address, amount: u64,
- *    finalized_by: address }`. There is NO circle_id field — the old worker
- * expected one and dropped every event as "malformed". Returns null for
- * payloads missing the escrow id or recipient.
+ * Parses `njangi_cycle_escrow::ContributionRecorded`:
+ * `{ escrow_id: ID, cycle_no: u64, contributor: address, amount: u64,
+ *    contributors_so_far: u64, total_contributed: u64 }`. Like every escrow
+ * event it names the escrow but neither the circle nor the coin. Returns
+ * null when any field the trigger reads is missing or malformed.
  */
-export function parseCycleFinalizedEvent(
+export function parseContributionRecordedEvent(
   parsedJson: unknown,
-): ParsedCycleFinalized | null {
-  if (!parsedJson || typeof parsedJson !== 'object') return null;
-  const raw = parsedJson as Record<string, unknown>;
-  const escrowId = typeof raw.escrow_id === 'string' ? raw.escrow_id : null;
-  const recipient = typeof raw.recipient === 'string' ? raw.recipient : null;
-  if (!escrowId || !recipient) return null;
+): ParsedContributionRecorded | null {
+  const raw = asRecord(parsedJson);
+  if (!raw) return null;
+  const escrowId = nonEmptyString(raw.escrow_id);
+  const cycleNo = u64Count(raw.cycle_no);
+  const contributorsSoFar = u64Count(raw.contributors_so_far);
+  const totalContributed = u64Digits(raw.total_contributed);
+  if (!escrowId || cycleNo === null || contributorsSoFar === null || !totalContributed) {
+    return null;
+  }
+  return { escrowId, cycleNo, contributorsSoFar, totalContributed };
+}
 
-  const cycleNoRaw = raw.cycle_no;
-  const cycleNo =
-    typeof cycleNoRaw === 'number'
-      ? cycleNoRaw
-      : typeof cycleNoRaw === 'string' && cycleNoRaw.trim() !== ''
-        ? Number(cycleNoRaw)
-        : 0;
+/**
+ * What the nudge reads off the `CycleEscrow<T>` an event names. The circle,
+ * coin, recipient and required count are frozen when the escrow opens;
+ * `claimed` and `refunded` are live, and they are the point of reading at
+ * send time: they say whether "ready to collect" is still true.
+ */
+export interface YourTurnEscrow {
+  circleId: string;
+  /** `T` of `CycleEscrow<T>`, e.g. `0x2::sui::SUI` or `0x…::usdc::USDC`. */
+  coinType: string;
+  /** The round's scheduled payout recipient, from the snapshot. */
+  recipient: string;
+  /** Payers the finalize gate requires: every member except the recipient. */
+  requiredContributors: number;
+  /** The recipient already collected (finalize_and_redeem or redeem_claim). */
+  claimed: boolean;
+  /** Refunds began (cancelled round or expired claim): nothing to collect. */
+  refunded: boolean;
+}
 
-  const amountRaw = raw.amount;
-  const amount =
-    typeof amountRaw === 'string'
-      ? amountRaw
-      : typeof amountRaw === 'number'
-        ? String(amountRaw)
-        : '0';
+const CYCLE_ESCROW_TYPE = /::njangi_cycle_escrow::CycleEscrow<(.+)>$/;
 
-  return {
-    escrowId,
-    cycleNo: Number.isFinite(cycleNo) ? cycleNo : 0,
-    recipient,
-    amount,
-  };
+/** getObject error codes that answer "no such object" rather than fail. */
+const DEFINITIVE_OBJECT_ERRORS = new Set(['notExists', 'deleted']);
+
+/**
+ * Parses a `getObject({ showType, showContent })` response for the escrow
+ * a ContributionRecorded names.
+ *
+ * Null when the response is an answer that holds no usable escrow: the
+ * object does not exist or was deleted, is some other type, or lacks a
+ * field the nudge needs. The cron skips those events, since a retry would
+ * read the same thing.
+ *
+ * THROWS when the response is not an answer: an error code other than
+ * notExists/deleted, or an object without the type or content that was
+ * asked for. The cron then halts without advancing its cursor, because an
+ * escrow it could not read is not an escrow whose pot is still open.
+ * Transport failures throw before this is reached.
+ */
+export function parseYourTurnEscrow(objectResponse: unknown): YourTurnEscrow | null {
+  const response = asRecord(objectResponse);
+  const error = asRecord(response?.error);
+  if (error) {
+    const code = nonEmptyString(error.code) ?? 'unknown';
+    if (DEFINITIVE_OBJECT_ERRORS.has(code)) return null;
+    throw new Error(`escrow read returned RPC error "${code}"`);
+  }
+  const data = asRecord(response?.data);
+  const content = asRecord(data?.content);
+  const typeTag = nonEmptyString(data?.type) ?? nonEmptyString(content?.type);
+  if (!typeTag) throw new Error('escrow read returned no object type');
+  const coinType = typeTag.match(CYCLE_ESCROW_TYPE)?.[1];
+  if (!coinType) return null;
+  const fields = asRecord(content?.fields);
+  if (!fields) throw new Error('escrow read returned no object content');
+
+  // Nested structs arrive as { type, fields } on most nodes, flattened on some.
+  const snapshotRaw = asRecord(fields.snapshot);
+  const snapshot = asRecord(snapshotRaw?.fields) ?? snapshotRaw;
+  const circleId = nonEmptyString(fields.circle_id);
+  const recipient = nonEmptyString(snapshot?.recipient);
+  const requiredContributors = u64Count(snapshot?.required_contributors);
+  const { claimed, refunded } = fields;
+  if (
+    !circleId ||
+    !recipient ||
+    !requiredContributors ||
+    typeof claimed !== 'boolean' ||
+    typeof refunded !== 'boolean'
+  ) {
+    return null;
+  }
+  return { circleId, coinType, recipient, requiredContributors, claimed, refunded };
+}
+
+export type YourTurnSkipReason = 'not_pot_filling' | 'already_collected' | 'refunded';
+
+/**
+ * Why a contribution earns no "your turn" nudge, or null when it does.
+ * The pot is full from the contribution whose running count reaches the
+ * snapshot's `required_contributors`, the comparison the contract's
+ * finalize gate makes (`contributors_count >= required_contributors`).
+ * The nudge is sent only while that pot is still there to collect.
+ * Finalized but unclaimed (a Claim minted by `finalize_to_recipient` and
+ * not yet redeemed) still counts as ready to collect.
+ */
+export function yourTurnSkipReason(
+  event: ParsedContributionRecorded,
+  escrow: YourTurnEscrow,
+): YourTurnSkipReason | null {
+  if (event.contributorsSoFar < escrow.requiredContributors) return 'not_pot_filling';
+  if (escrow.claimed) return 'already_collected';
+  if (escrow.refunded) return 'refunded';
+  return null;
+}
+
+/**
+ * Decimals by coin label. SUI and USDC are the two coins a circle settles
+ * in (circle-settlement.ts); USDT is a 6-decimal stablecoin too. Matches
+ * the known-decimals guard the circle-event relay applies to escrow events.
+ */
+const KNOWN_COIN_DECIMALS = new Map<string, number>([
+  ['SUI', 9],
+  ['USDC', 6],
+  ['USDT', 6],
+]);
+
+/**
+ * The payout in display units for the escrow's own coin, e.g.
+ * "200000" + `0x…::usdc::USDC` → "0.2 USDC", or null when the coin's
+ * decimals are not known. Opening an escrow is permissionless and generic
+ * over `T`, and one env-wide COIN_DECIMALS could not be right for SUI and
+ * USDC circles at once; a figure off by 10^3 is worse than no figure.
+ */
+export function formatEscrowPayout(baseUnits: string, coinType: string): string | null {
+  const symbol = getCoinLabelFromType(coinType);
+  const decimals = KNOWN_COIN_DECIMALS.get(symbol);
+  return decimals === undefined ? null : formatCoinAmount(baseUnits, decimals, symbol);
 }
 
 /** "1500000000" + (9, "SUI") → "1.5 SUI". Ported from the legacy worker. */
@@ -259,12 +407,31 @@ export function formatCoinAmount(
 // Postgres cursor persistence — `cycle_finalized_cursor` table
 // ---------------------------------------------------------------------------
 
-/** Cursor row key: scoped per defining package id + network. */
-export function cycleFinalizedCursorKey(
-  packageId: string,
-  network: string,
-): string {
-  return `${packageId}:${network}`;
+/**
+ * Cursor + lease row of the "your turn" stream, scoped per event type,
+ * defining package id and network. The event type is in the key because a
+ * cursor paged over one event type is never resumed against another: the
+ * row this cron used while it read CycleFinalized (`${packageId}:${network}`)
+ * is left as it was, and this row starts from genesis, where the age cap
+ * skips everything older than a day before any read.
+ */
+export function yourTurnCursorKey(packageId: string, network: string): string {
+  return `your-turn:contribution_recorded:${packageId}:${network}`;
+}
+
+/** Default nudge-worthiness window: older events advance without a send. */
+export const DEFAULT_YOUR_TURN_MAX_EVENT_AGE_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * CYCLE_FINALIZED_MAX_EVENT_AGE_MS, or 24h when it is unset or malformed.
+ * A malformed value must not switch the age cap off: `age > NaN` is always
+ * false, so every event would count as fresh, and a fresh cursor drains
+ * the stream's whole history on its first pass.
+ */
+export function yourTurnMaxEventAgeMs(raw: string | undefined): number {
+  const trimmed = raw?.trim();
+  const parsed = trimmed ? Number(trimmed) : Number.NaN;
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : DEFAULT_YOUR_TURN_MAX_EVENT_AGE_MS;
 }
 
 let cursorTableReady: Promise<void> | null = null;
