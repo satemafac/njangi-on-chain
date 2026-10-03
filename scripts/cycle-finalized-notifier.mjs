@@ -49,11 +49,21 @@ const PACKAGE_ID = process.env.PACKAGE_ID;
 const NOTIFY_ENDPOINT = process.env.NOTIFY_ENDPOINT;
 const INTERNAL_NOTIFY_SECRET = process.env.INTERNAL_NOTIFY_SECRET;
 const POLL_INTERVAL_MS = Number(process.env.POLL_INTERVAL_MS ?? 60000);
+// fullnode.{testnet,mainnet}.sui.io answer every JSON-RPC method with
+// -32601, so default the way scripts/bootstrap-package.mjs does: the app's
+// NEXT_PUBLIC_<NETWORK>_RPC_URL, else the publicnode defaults from
+// src/config/public-env.ts. publicnode fails event queries that reach
+// pruned history, so without a recent cursor set SUI_RPC_URL to an archival
+// endpoint.
+const DEFAULT_RPC_URLS = {
+  testnet: 'https://sui-testnet-rpc.publicnode.com',
+  mainnet: 'https://sui-rpc.publicnode.com',
+};
+const RPC_NETWORK = NETWORK === 'mainnet' ? 'mainnet' : 'testnet';
 const RPC_URL =
-  process.env.SUI_RPC_URL ??
-  (NETWORK === 'mainnet'
-    ? 'https://fullnode.mainnet.sui.io:443'
-    : 'https://fullnode.testnet.sui.io:443');
+  process.env.SUI_RPC_URL ||
+  process.env[`NEXT_PUBLIC_${RPC_NETWORK.toUpperCase()}_RPC_URL`] ||
+  DEFAULT_RPC_URLS[RPC_NETWORK];
 const CURSOR_FILE = path.resolve(process.cwd(), '.cycle-finalized-cursor.json');
 const COIN_DECIMALS = Number(process.env.COIN_DECIMALS ?? 9);
 const COIN_SYMBOL = process.env.COIN_SYMBOL ?? 'SUI';
