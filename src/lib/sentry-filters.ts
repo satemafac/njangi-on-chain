@@ -19,12 +19,15 @@
 // Nor does it keep secrets out of URLs and log lines, in any runtime (same
 // SDK, 2026-10-03):
 //   * the browser client sends location.href, fragment included, as
-//     request.url on every event. On /auth/callback the fragment holds the
-//     OAuth id_token, and the navigation breadcrumb away from that page
-//     keeps it ("from": "/auth/callback#id_token=…") on every later error in
-//     the tab;
-//   * console breadcrumbs keep the logged arguments, and the callback page
-//     logs the whole URL;
+//     request.url on every event, and a navigation breadcrumb keeps the URL
+//     it left ("from": "/auth/callback#id_token=…") on every later error in
+//     the tab. auth-callback-fragment.ts moves the OAuth fragment off the
+//     address bar before the SDK starts, but only where its inline script
+//     runs;
+//   * console breadcrumbs keep the logged arguments, URLs and tokens
+//     included;
+//   * the envelope's trace header keeps its own copy of the transaction
+//     name, raw path included;
 //   * server events keep query strings (request.url, query_string, the
 //     onRequestError context's request_path, the url.full and http.target
 //     span attributes), such as the hub.verify_token Meta sends the WhatsApp

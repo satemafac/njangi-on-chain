@@ -19,10 +19,10 @@ if (dsn) {
     // zkLogin/PII hygiene: never attach request bodies, cookies, or user IP.
     sendDefaultPii: false,
     // sendDefaultPii does not cover URLs or log lines: every event carries
-    // location.href with its fragment (the OAuth id_token on /auth/callback),
-    // and breadcrumbs keep URLs and console arguments. The scrubber strips
-    // fragments, query values, share tokens and token-shaped strings
-    // (src/lib/sentry-filters.ts).
+    // location.href, fragment included (the OAuth id_token on /auth/callback
+    // wherever the inline script that parks it did not run), and breadcrumbs
+    // keep URLs and console arguments. The scrubber strips fragments, query
+    // values, share tokens and token-shaped strings (src/lib/sentry-filters.ts).
     beforeSend: scrubSentryEvent,
     beforeSendTransaction: scrubSentryEvent,
     beforeBreadcrumb: scrubSentryBreadcrumb,

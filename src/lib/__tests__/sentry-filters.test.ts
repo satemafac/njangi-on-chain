@@ -9,9 +9,10 @@
  * although the config sets sendDefaultPii: false.
  *
  * sendDefaultPii does not keep secrets out of URLs and log lines either: the
- * OAuth id_token in /auth/callback's fragment, Meta's hub.verify_token in the
- * webhook's query string, and Circle Record share tokens in paths. Every
- * sample below is fake, in the shape the app really handles.
+ * OAuth id_token in /auth/callback's fragment (where the inline script that
+ * parks it did not run), Meta's hub.verify_token in the webhook's query
+ * string, and Circle Record share tokens in paths. Every sample below is
+ * fake, in the shape the app really handles.
  */
 
 import { createHash } from 'crypto';
@@ -368,8 +369,10 @@ describe('scrubSentryEvent', () => {
   });
 
   it('strips the id_token and share tokens from a browser error event', () => {
-    // As the browser SDK sends it: request from location.href, breadcrumbs
-    // already normalized into the event.
+    // As the browser SDK sends it where the callback's inline script did not
+    // park the fragment: request from location.href, breadcrumbs already
+    // normalized into the event. The console breadcrumb is the URL log the
+    // callback page wrote before the fragment was parked.
     const event: Event = {
       exception: { values: [{ type: 'Error', value: `Invalid JWT: ${FAKE_JWT}` }] },
       request: {
