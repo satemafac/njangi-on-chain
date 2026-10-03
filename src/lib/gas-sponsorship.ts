@@ -78,6 +78,15 @@ export const SPONSORABLE_MOVE_FUNCTIONS: readonly string[] = Object.freeze([
   'njangi_cycle_escrow::contribute_timed_with_attestation',
   'njangi_cycle_escrow::finalize_and_redeem',
   'njangi_cycle_escrow::finalize_and_redeem_with_attestation',
+  // Collect on a round someone else already finalized (#81): the recipient
+  // redeems the Claim<T> in their own wallet. redeem_claim asserts that the
+  // sender IS the claim's recipient and consumes an owned Claim only they
+  // can pass in; `recipient` is a read the PTB uses as the transfer target.
+  // Neither lets a sponsored caller move funds they could not move
+  // themselves. Both are needed: Enoki rejects the whole PTB if any one
+  // target is unlisted.
+  'njangi_cycle_escrow::recipient',
+  'njangi_cycle_escrow::redeem_claim',
   'njangi_cycle_escrow::advance_circle_after_claim',
   'njangi_cycle_escrow::open_cycle_stable',
   'njangi_cycle_escrow::open_cycle_stable_with_gate',

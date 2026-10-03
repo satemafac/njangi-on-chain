@@ -9,13 +9,25 @@
  *   - SUI-value-from-gas-coin is never sponsored (would pay from sponsor)
  *   - non-premium admin is never sponsored
  *   - a missing package id yields an empty (safe) allowlist
+ *   - every transaction the Collect button can build is fully allowlisted
  */
 
+// The escrow builders resolve the package id when they are called.
+const TESTNET_PKG = '0x' + '9'.repeat(64);
+process.env.NEXT_PUBLIC_TESTNET_PACKAGE_ID = TESTNET_PKG;
+
+import { Transaction } from '@mysten/sui/transactions';
 import {
   assessSponsorship,
   allowedMoveCallTargets,
   SPONSORABLE_MOVE_FUNCTIONS,
 } from '../gas-sponsorship';
+import {
+  buildAdvanceCircleAfterClaimTx,
+  buildFinalizeAndRedeemTx,
+  buildFinalizeAndRedeemWithAttestationTx,
+  buildRedeemClaimTx,
+} from '@/services/cycle-escrow-service';
 
 const PKG = '0xabc';
 
@@ -37,6 +49,59 @@ describe('allowedMoveCallTargets', () => {
     const targets = allowedMoveCallTargets(PKG).join('\n').toLowerCase();
     expect(targets).not.toContain('cetus');
     expect(targets).not.toContain('swap');
+  });
+});
+
+describe('the Collect payout transactions are sponsorable end to end', () => {
+  // /api/sponsor/prepare refuses a kind if any one MoveCall falls outside the
+  // allowlist, and Enoki does the same, so every route the Collect button can
+  // build must be covered whole, including the chained rotation advance.
+  // Since #81 that includes redeeming a Claim<T> someone else's finalize
+  // minted. The collect path signs with the member's own gas today; this
+  // keeps it sponsorable if it is ever wired through /api/sponsor.
+  const ADDR = (b: string) => '0x' + b.repeat(64);
+  const BASE = {
+    network: 'testnet' as const,
+    coinType: `${ADDR('c')}::usdc::USDC`,
+    escrowId: ADDR('a'),
+    circleId: ADDR('d'),
+  };
+
+  /** Same reading of a transaction as assertKindIsSponsorable. */
+  const moveCallTargets = (build: (txb: Transaction) => void): string[] => {
+    const txb = new Transaction();
+    build(txb);
+    return txb.getData().commands.flatMap((command) =>
+      'MoveCall' in command && command.MoveCall
+        ? [`${command.MoveCall.package}::${command.MoveCall.module}::${command.MoveCall.function}`]
+        : [],
+    );
+  };
+
+  it.each([
+    ['collect (one step)', () => buildFinalizeAndRedeemTx(BASE), ['finalize_and_redeem', 'advance_circle_after_claim']],
+    [
+      'collect (one step, verification-gated)',
+      () =>
+        buildFinalizeAndRedeemWithAttestationTx({
+          ...BASE,
+          attestationObjectId: ADDR('b'),
+          complianceConfigId: ADDR('e'),
+        }),
+      ['finalize_and_redeem_with_attestation', 'advance_circle_after_claim'],
+    ],
+    [
+      'collect a round someone else finalized',
+      () => buildRedeemClaimTx({ ...BASE, claimId: ADDR('f') }),
+      ['recipient', 'redeem_claim', 'advance_circle_after_claim'],
+    ],
+    ['advance after an earlier collect', () => buildAdvanceCircleAfterClaimTx(BASE), ['advance_circle_after_claim']],
+  ])('%s', (_route, makeBuild, expectedFunctions) => {
+    const targets = moveCallTargets(makeBuild());
+    // Pins the route's shape, so a builder change cannot make the check vacuous.
+    expect(targets.map((target) => target.split('::')[2])).toEqual(expectedFunctions);
+    const allowed = new Set(allowedMoveCallTargets(TESTNET_PKG));
+    expect(targets.filter((target) => !allowed.has(target))).toEqual([]);
   });
 });
 
