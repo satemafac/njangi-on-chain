@@ -412,9 +412,16 @@ describe('bootstrap-package.mjs ComplianceConfig step', () => {
       { ...testnet, fail: { [`sui_getObject:${TESTNET_CONFIG}`]: { status: 429 } } },
       V9,
       TESTNET_CONFIG,
+      `reading ${TESTNET_CONFIG} failed: rpc sui_getObject http 429`,
     ],
     // Testnet with the variable unset: publicnode no longer serves the publish.
-    ['the publish that introduced the config type is pruned', testnet, V9, ''],
+    [
+      'the publish that introduced the config type is pruned',
+      testnet,
+      V9,
+      '',
+      'Could not find the referenced transaction [TransactionDigest(4QJj9JMDMBs5mUtvQwMXpFEbh3AigXJ5ZxAeXTRb25jt)]',
+    ],
     [
       'the event query fails',
       {
@@ -427,8 +434,9 @@ describe('bootstrap-package.mjs ComplianceConfig step', () => {
       },
       UPGRADED,
       '',
+      `querying ${types(UPGRADED).createdEvent} events failed`,
     ],
-  ])('signs nothing and leaves the env file byte-identical when %s', async (_label, failingChain, pkg, configured) => {
+  ])('signs nothing and leaves the env file byte-identical when %s', async (_label, failingChain, pkg, configured, cause) => {
     chain = failingChain;
     // Placeholder registries prove that nothing at all is signed, not just create_config.
     const before = `# local\n${KEYS.wa}=0xyour_testnet_whatsapp_registry_id\n${KEYS.asset}=\n${KEYS.config}=${configured}\n`;
@@ -445,6 +453,7 @@ describe('bootstrap-package.mjs ComplianceConfig step', () => {
     expect(signed(run)).toEqual([]);
     expect(run.env).toBe(before);
     expect(run.stdout).toContain(`${KEYS.config}: `);
+    expect(run.stdout).toContain(cause);
     expect(run.stderr).toContain('stopped before signing anything');
   });
 
