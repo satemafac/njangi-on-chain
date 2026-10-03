@@ -501,7 +501,7 @@ describe('ported event dispatch (smoke)', () => {
     // the freeform body (the fallback). This is the wiring the cron was missing.
     expect(call.template).toBeDefined();
     expect(call.template.name).toBe('member_joins');
-    expect(call.template.language).toBe('en');
+    expect(call.template.language).toBe('en_US');
     expect(call.body).toContain('just joined');
   });
 

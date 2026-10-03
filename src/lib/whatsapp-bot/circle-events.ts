@@ -262,7 +262,9 @@ function legacyTemplate(
 ): WhatsAppTemplatePayload {
   return {
     name,
-    language: 'en',
+    // Must match the language the templates were approved under in WhatsApp
+    // Manager: English (US). Meta fails a send in any other language (132001).
+    language: 'en_US',
     components: [
       { type: 'body', parameters: textParams(bodyParams) },
       ...(urlButtonParam
