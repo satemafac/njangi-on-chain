@@ -52,6 +52,7 @@ export default function YourPage() {
 | `circleId` | string | Yes | The ID of the circle to link/unlink |
 | `adminAddress` | string | Yes | The admin's Sui address |
 | `adminToken` | string | Yes | The admin's authentication token (from zkLogin session) |
+| `isAdmin` | boolean | No (default `false`) | Set by the manage page from `circle.admin === userAddress`. Only then does the card ask for the masked linked number (see [Link Status Endpoint](#link-status-endpoint)) |
 | `onLinked` | (status: boolean) => void | No | Callback when link status changes |
 
 ## Features
@@ -94,7 +95,8 @@ export default function YourPage() {
    ```
    ✅ Linked badge
    Link Type: ...
-   Recipient: ...
+   Recipient: +237 ••• ••• 1234 (masked by the server; admin view only),
+              or one line on why it can't be shown
    Linked on: ...
    [What the linked number gets — WHATSAPP_UPDATE_LINES in src/content/whatsapp-updates.ts]
    [Unlink from WhatsApp] button
@@ -163,6 +165,33 @@ Response:
   }
 }
 ```
+
+### Link Status Endpoint
+
+```
+GET /api/whatsapp/admin-link-circle?circleId=0x123...&network=testnet[&includeRecipient=true]
+
+Response:
+{
+  "success": true,
+  "data": {
+    "isLinked": true,
+    "linkType": 1,
+    "walrusBlobId": "...",
+    "linkNonceHex": "...",
+    "maskedRecipient": "+237 ••• ••• 1234",  // includeRecipient=true, circle admin only
+    "linkedAt": "2026-09-30T10:15:00.000Z"    // includeRecipient=true, circle admin only
+  }
+}
+```
+
+The card adds `includeRecipient=true` only when `isAdmin` is set. The route
+then decrypts the number only for a `session-id` cookie that resolves to the
+on-chain circle admin, and returns it masked (`src/lib/whatsapp-recipient-mask.ts`):
+the full number never leaves the server. The Recipient box renders that mask
+and the "Linked on" date. On a 401 or 403 the card falls back to the plain
+probe and shows "Sign in again to see which number is linked."
+(`src/lib/whatsapp-link-status.ts`).
 
 ## Styling
 

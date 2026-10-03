@@ -52,14 +52,10 @@ describe('WhatsApp card: a failed link-status read', () => {
     expect(onFailure).not.toMatch(/isLinked:\s*false/);
   });
 
-  it('includes a non-OK reply and a reply without an isLinked flag', () => {
-    // Both used to fall through to `isLinked: false`. If this read moves into
-    // a lib helper, point these at the card's call to it and pin the throws
-    // in the helper's unit tests.
-    expect(check()).toMatch(/if \(!response\.ok\) \{\s*throw new Error\(/);
-    expect(check()).toMatch(
-      /if \(typeof data\?\.data\?\.isLinked !== 'boolean'\) \{\s*throw new Error\(/,
-    );
+  it('reads through fetchWhatsAppLinkStatus, which throws when the read fails', () => {
+    // The throws (a failed probe, a reply without a boolean isLinked) are
+    // pinned in src/lib/__tests__/whatsapp-link-status.test.ts.
+    expect(check()).toContain('await fetchWhatsAppLinkStatus(');
   });
 
   it('is cleared by the next check and by nothing else', () => {

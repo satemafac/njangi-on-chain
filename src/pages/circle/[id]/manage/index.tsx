@@ -7459,6 +7459,7 @@ export default function ManageCircle() {
                       circleId={id as string}
                       adminAddress={userAddress || ''}
                       account={account}
+                      isAdmin={Boolean(userAddress && circle.admin === userAddress)}
                       onLinked={(status) => {
                         if (status) {
                           toast.success('Circle linked to WhatsApp!');
