@@ -1,6 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import joinRequestDatabase, { JoinRequest } from '../../../../services/join-request-database';
 import databaseService from '../../../../services/database-service';
+import { requireCircleAdmin, sendJoinRequestAuthFailure } from '../../../../lib/join-request-auth';
 
 type ResponseData = {
   success: boolean;
@@ -31,6 +32,24 @@ export default async function handler(
   }
 
   if (req.method === 'GET') {
+    // `?clear=all` (the Navbar's localhost "Clear all") clears nothing and
+    // returns no rows, so it reads no data and needs no session.
+    if (clear === 'all') {
+      console.log('[DEBUG] Clear parameter not implemented');
+      return res.status(200).json({
+        success: true,
+        data: [],
+        message: 'Clear function not implemented for SQLite database'
+      });
+    }
+
+    // The pending queue lists applicants' addresses and names: only the
+    // circle's on-chain admin may read it.
+    const auth = await requireCircleAdmin(req, circleId);
+    if (!auth.ok) {
+      return sendJoinRequestAuthFailure(res, auth);
+    }
+
     try {
       console.log(`[DEBUG] Fetching pending requests for circle ID: ${circleId}`);
       console.log(`[DEBUG] Is localhost: ${isLocalhost()}`);
@@ -40,16 +59,6 @@ export default async function handler(
       if (isLocalhost()) {
         // Use local SQLite database service for localhost
         console.log('[DEBUG] Using local SQLite database service');
-        
-        // Handle clear parameter
-        if (clear === 'all') {
-          console.log('[DEBUG] Clear parameter not implemented for SQLite database');
-          return res.status(200).json({
-            success: true,
-            data: [],
-            message: 'Clear function not implemented for SQLite database'
-          });
-        }
         
         try {
           requests = databaseService.getPendingRequestsByCircleId(circleId);
