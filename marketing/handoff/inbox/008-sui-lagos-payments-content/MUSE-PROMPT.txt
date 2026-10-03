@@ -1,0 +1,7 @@
+New content job from Stalanic, staged 2026-10-01 in marketing/handoff/inbox/008-sui-lagos-payments-content/.
+
+Read JOB.md first (brief, deliverables, tie-in angles, voice and compliance rules), then TRANSCRIPT.md (full transcript of Tayo Oviosu's Sui Live talk on the future of African payments).
+
+Draft the content mix from JOB.md: one LinkedIn post, one Instagram carousel outline (5-7 slides), one 30-45s Reel script, and 2-3 comment angles for Sui/Paga-ecosystem engagement. All in Njangi On-Chain brand voice: first-person plural "we", no em dashes, never promise yield/return/interest, never sell on fees, verify every product fact against the repo.
+
+Write RESULT.md in the same folder with the drafts (or draft files linked from it) and flag anything you could not verify. Drafts only: Muse brings them to Stalanic for approval before anything goes live.

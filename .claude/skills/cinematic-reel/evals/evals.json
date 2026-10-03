@@ -1,0 +1,23 @@
+{
+  "skill_name": "cinematic-reel",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "ok next week's episode is the susu (ghana / caribbean). muse dropped the script in marketing/handoff/inbox/005-traditions-ep2-susu. same series look as the tontine one, gemini voice again, and have it ready for me to review by tonight",
+      "expected_output": "A new spec (circles-ep02-susu.spec.json), a copied film page with the EPISODE sections rewritten (no people, circle motif reused), Gemini VO with QA table, probe contact sheet reviewed before the full render, Lyria score QA'd for vocals, a rendered MP4 + cover, deliverables in the 005 packet, and a RESULT.md noting any fact fixes and the AI info label.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "can we make a 20 second reel for the founding circle badge launch? something that looks like an iphone ad — gold badge, slow camera, one line of text. no voiceover this time, just music",
+      "expected_output": "A short spec with one or two scenes and captions off, a new shot built on the engine (gold object, studio floor, continuous camera), a Lyria score with custom cues and vocals check, render at 16 samples, cover inside the 3:4 crop; no synthetic people; copy passes the vocabulary rules.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "the douala scene in the tontine video feels flat compared to the rest, fix it and re-render",
+      "expected_output": "Probes of only the plate scene first, changes limited to the EPISODE cloth shot (folds, raking light, camera), calibration numbers respected (no bloom on type), a full re-render reusing the cached voice and score, and a transition check around the two dissolves.",
+      "files": []
+    }
+  ]
+}

@@ -1,0 +1,175 @@
+{
+  "name": "circles-ep02-susu",
+  "source": "marketing/handoff/inbox/005-traditions-ep2-susu (SCRIPT + MOTION-BRIEF + VO-SCRIPT, drafted by Muse 2026-09-27)",
+  "film_page": "assets/circles/film-ep02.html",
+  "packet": "marketing/handoff/inbox/005-traditions-ep2-susu",
+  "script_changes": [
+    "Scene 1 VO: 'One word from Ghana: susu. It means little by little.' -> 'One word from West Africa: susu. In Ghana's Twi, it means little by little.' The Caribbean susu is widely traced to the Yoruba esusu (Bascom 1952; the site's /learn/esusu), so opening on Ghana and then saying 'it crossed the Atlantic' credited the crossing to the wrong people. The Twi meaning stays, attributed to Twi (Ghanaian national press: MyJoyOnline).",
+    "Pronunciation guide: Trinidad is TRIN-ih-dad (stress on the first syllable), not trin-ih-DAD."
+  ],
+  "caption_breaks": "' | ' in a scene's vo marks a caption break. The markers are stripped before TTS and Whisper QA.",
+  "fps": 30,
+  "voice": {
+    "model": "gemini-3.8-flash-tts",
+    "voice": "Fola",
+    "temperature": 1.0,
+    "direction": "Deep, warm documentary voice. Measured, unhurried pace, around 130 words per minute. Confident but never hypey. Think heritage documentary trailer, not a commercial. Minimal processing, natural room tone.",
+    "pronunciation": "susu = SOO-soo; Twi = chwee; Trinidad = TRIN-ih-dad; ajo = ah-JAW (the Yoruba word)",
+    "whisper_hint": "Susu. Twi. Ghana. Trinidad. Brooklyn. Ajo. Circles of the World."
+  },
+  "params": {
+    "eyebrow": "CIRCLES OF THE WORLD · NO. 2",
+    "series_title": "Circles\nof the World",
+    "episode_label": "NO. 2 · THE SUSU",
+    "next": "Next week: the Ajo",
+    "link": "LINK IN BIO · NJANGIONCHAIN.COM",
+    "cover_title": "The Susu",
+    "cover_tag": "Nobody holds the hand."
+  },
+  "scenes": [
+    {
+      "id": "word",
+      "visual": "word",
+      "headline": "",
+      "vo": "One word from West Africa: | susu. | In Ghana's Twi, | it means little by little. | A plan built | from small pieces.",
+      "delivery": "warm, intimate, slow",
+      "lead": 1.1,
+      "tail": 0.8,
+      "keywords": [
+        "susu",
+        "little"
+      ]
+    },
+    {
+      "id": "ocean",
+      "visual": "ocean",
+      "headline": "It crossed the *ocean.*",
+      "vo": "It crossed the Atlantic centuries ago, | and it never died. | Trinidad. | Brooklyn. | Anywhere the diaspora gathers.",
+      "delivery": "weight, history, a slight lift on \"never died\"",
+      "lead": 0.5,
+      "tail": 1.3,
+      "keywords": [
+        "atlantic",
+        "trinidad",
+        "brooklyn"
+      ]
+    },
+    {
+      "id": "payin",
+      "visual": "payin",
+      "headline": "*Everyone* pays in.",
+      "vo": "It works like this. | Everyone pays in.",
+      "delivery": "crisp, rhythmic, one punch",
+      "lead": 0.3,
+      "tail": 0.7,
+      "keywords": [
+        "everyone"
+      ]
+    },
+    {
+      "id": "takepot",
+      "visual": "takepot",
+      "headline": "One takes *the hand.*",
+      "vo": "One person takes the whole hand.",
+      "delivery": "crisp, rhythmic, one punch",
+      "lead": 0.25,
+      "tail": 0.8,
+      "keywords": [
+        "whole",
+        "hand"
+      ]
+    },
+    {
+      "id": "round",
+      "visual": "round",
+      "headline": "It goes *round.*",
+      "vo": "Then it goes round, | until every member | has had a turn.",
+      "delivery": "crisp, rhythmic, one punch",
+      "lead": 0.25,
+      "tail": 0.8,
+      "keywords": [
+        "round",
+        "every",
+        "turn"
+      ]
+    },
+    {
+      "id": "banker",
+      "visual": "plate",
+      "headline": "",
+      "vo": "In Trinidad, | a banker lady collects | from her neighbors every week. | When your turn comes, | the whole hand is yours at once. | No bank. | No paperwork. | Just trust.",
+      "delivery": "warm, human, unhurried; this is the heart of the film",
+      "lead": 0.7,
+      "tail": 1.0,
+      "keywords": [
+        "trust",
+        "hand"
+      ]
+    },
+    {
+      "id": "catch",
+      "visual": "catch",
+      "headline": "*The catch:*\nsomeone holds the hand.",
+      "vo": "One catch. | Someone has to hold the hand. | And when the circle | stretches across oceans, | trust has further to travel.",
+      "delivery": "tension, slow down on the last line",
+      "lead": 0.45,
+      "tail": 0.8,
+      "keywords": [
+        "hold",
+        "hand",
+        "oceans"
+      ]
+    },
+    {
+      "id": "nobody",
+      "visual": "nobody",
+      "headline": "*Nobody* holds the hand.",
+      "headline_at": "nobody",
+      "big": true,
+      "vo": "We kept the circle | and removed that one risk. | Same susu, | one new rule: | nobody holds the hand. | It runs on rules | nobody can quietly break.",
+      "delivery": "confident lift, peak conviction on \"nobody holds the hand\"",
+      "lead": 0.45,
+      "tail": 1.0,
+      "keywords": [
+        "nobody",
+        "holds",
+        "hand",
+        "rules"
+      ]
+    },
+    {
+      "id": "title",
+      "visual": "title",
+      "headline": "",
+      "captions": false,
+      "vo": "Circles of the World. Next week: the ajo. Link in bio to start your circle.",
+      "delivery": "clean sign-off",
+      "lead": 0.35,
+      "tail": 2.2,
+      "keywords": []
+    }
+  ],
+  "score": {
+    "cues": {
+      "word": {
+        "prompt": "Warm, intimate felt piano and soft low strings, gentle plucked kalimba notes falling one by one, D major, spacious and tender",
+        "density": 0.2,
+        "brightness": 0.35,
+        "mute_drums": true
+      },
+      "ocean": {
+        "prompt": "Wide cinematic strings swelling like the open sea, distant kora arpeggios, a long journey across water, rising and hopeful",
+        "density": 0.32,
+        "brightness": 0.42,
+        "mute_drums": true
+      },
+      "plate": {
+        "prompt": "Tender Trinidad steelpan melody over felt piano and warm sustained strings, gentle Caribbean lilt, intimate and human",
+        "density": 0.3,
+        "brightness": 0.48,
+        "mute_drums": true
+      }
+    },
+    "shift": 0.3
+  }
+}

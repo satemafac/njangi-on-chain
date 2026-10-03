@@ -1,0 +1,154 @@
+{
+  "name": "reel-008-move-transact-save",
+  "source": "marketing/handoff/inbox/008-sui-lagos-payments-content (DRAFTS.md section 3, drafted by Claude for Muse's job 008; Stalanic chose the Reel first and to keep Sui in, 2026-10-01)",
+  "script_changes": [
+    "Hook: 'doesn't have an app' -> 'has no app' (shorter, lands harder in the first 3 s).",
+    "The narrator now speaks the three words ('Move. Transact. Save.'); the draft only showed them. Tayo's own line is 'Move, transact, save. That is financial freedom.'",
+    "Dropped 'His company has spent seventeen years building new ways to move money' and the place names from the voice to fit 30-45 s; LAGOS / CAMEROON / GHANA stay on screen under the names.",
+    "'It runs on trust, with one weak spot' -> 'The catch:'; 'Not the organizer. Not us.' -> 'Not even us.' (same claim, shorter)."
+  ],
+  "fps": 30,
+  "voice": {
+    "model": "gemini-3.8-flash-tts",
+    "voice": "Fola",
+    "temperature": 1.0,
+    "direction": "Deep, warm documentary voice, the same narrator as Circles of the World, a touch brisker for a short Reel: around 140 words per minute. Confident but never hypey. Heritage documentary trailer, not a commercial. Minimal processing, natural room tone.",
+    "pronunciation": "Sui = swee (one syllable, rhymes with 'we'); Paga = PAH-gah; Tayo = TAH-yoh; Oviosu = oh-vee-oh-soo (four even syllables, pure vowels); esusu = eh-SOO-soo; njangi = n-JAHN-gee; susu = SOO-soo; Njangi On-Chain = n-JAHN-gee on-chain; save = SAYV (end on a clearly voiced v)",
+    "whisper_hint": "Sui Live. Paga. Tayo Oviosu. Esusu. Njangi. Susu. Njangi On-Chain."
+  },
+  "params": {
+    "eyebrow": "TAYO OVIOSU · PAGA · SUI LIVE, MIAMI 2026",
+    "cover_title": "Move. Transact. Save.",
+    "cover_tag": "Nobody holds the pot.",
+    "link": "NJANGIONCHAIN.COM"
+  },
+  "scenes": [
+    {
+      "id": "hook",
+      "visual": "phone",
+      "headline": "Africa’s original savings app has *no app.*",
+      "captions": false,
+      "vo": "Africa’s original savings app | has no app.",
+      "delivery": "intriguing and quiet, a small knowing smile on 'has no app'",
+      "lead": 0.4,
+      "tail": 0.5,
+      "keywords": [
+        "app"
+      ]
+    },
+    {
+      "id": "triad",
+      "visual": "triad",
+      "headline": "Move. Transact. *Save.*",
+      "vo": "At Sui Live, | Paga’s founder Tayo Oviosu said | financial freedom is three things. | Move. | Transact. | Save.",
+      "delivery": "informative, then let each of the three words land on its own with a short pause before it; 'save' the warmest",
+      "lead": 0.35,
+      "tail": 0.8,
+      "keywords": [
+        "move",
+        "transact",
+        "save"
+      ]
+    },
+    {
+      "id": "heritage",
+      "visual": "heritage",
+      "headline": "Esusu · Njangi · Susu",
+      "vo": "The saving part, | communities built long ago: | esusu, | njangi, | susu.",
+      "delivery": "warm and proud, unhurried; a small lift on each name",
+      "lead": 0.35,
+      "tail": 0.6,
+      "keywords": [
+        "esusu",
+        "njangi",
+        "susu"
+      ]
+    },
+    {
+      "id": "mechanic",
+      "visual": "mechanic",
+      "headline": "*Everyone* pays in. / One takes *the pot.* / It goes *round.*",
+      "vo": "Everyone pays in. | One takes the pot. | It goes round.",
+      "delivery": "crisp and rhythmic, three clean beats",
+      "lead": 0.25,
+      "tail": 2.0,
+      "keywords": [
+        "everyone",
+        "pot",
+        "round"
+      ]
+    },
+    {
+      "id": "catch",
+      "visual": "catch",
+      "headline": "*The catch:*\nsomebody holds the pot.",
+      "vo": "The catch: | somebody has to hold the pot.",
+      "delivery": "tension, slow down on the last words",
+      "lead": 0.4,
+      "tail": 0.7,
+      "keywords": [
+        "hold",
+        "pot"
+      ]
+    },
+    {
+      "id": "nobody",
+      "visual": "nobody",
+      "headline": "*Nobody* holds the pot.",
+      "headline_at": "nobody",
+      "vo": "We kept the circle | and changed one thing. | Nobody holds the pot. | Not even us.",
+      "delivery": "confident lift, peak conviction on 'nobody holds the pot', then a settled, quiet 'not even us'",
+      "lead": 0.4,
+      "tail": 1.0,
+      "keywords": [
+        "nobody",
+        "holds",
+        "pot",
+        "us"
+      ]
+    },
+    {
+      "id": "title",
+      "visual": "title",
+      "headline": "",
+      "captions": false,
+      "vo": "Njangi On-Chain. | The same circle, | with less friction.",
+      "delivery": "clean, warm sign-off",
+      "lead": 0.3,
+      "tail": 2.0,
+      "keywords": []
+    }
+  ],
+  "score": {
+    "cues": {
+      "phone": {
+        "prompt": "Minimal and modern: a single soft sustained pad with sparse felt piano notes, quiet, curious, intimate, D major",
+        "density": 0.14,
+        "brightness": 0.36,
+        "mute_drums": true
+      },
+      "triad": {
+        "prompt": "Forward motion building: pulsing low strings and kora arpeggios gathering pace, a soft talking drum pulse, cinematic and purposeful",
+        "density": 0.4,
+        "brightness": 0.5,
+        "mute_drums": false
+      },
+      "heritage": {
+        "prompt": "Warm kora melody with felt piano and sustained strings, West African heritage, proud and tender",
+        "density": 0.3,
+        "brightness": 0.46,
+        "mute_drums": true
+      },
+      "mechanic": {
+        "prompt": "Calm steady kora ostinato with a soft talking drum and shaker pulse, felt piano chords, clear and light",
+        "density": 0.42,
+        "brightness": 0.5,
+        "mute_drums": false
+      }
+    },
+    "shift": 0.3
+  },
+  "caption_breaks": "' | ' in a scene's vo marks a caption break. The markers are stripped before TTS and Whisper QA.",
+  "film_page": "assets/circles/film-008.html",
+  "packet": "marketing/handoff/inbox/008-sui-lagos-payments-content"
+}

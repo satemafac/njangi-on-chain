@@ -292,6 +292,85 @@ member"; AI label off (audio is a real recording, visuals are HTML); no
 location tag (see the Douala discussion on 1.6: it narrows a global-diaspora
 message and implies a presence we don't have).
 
+### 1.8 · Instagram Reel · 78.5s · Tradition · **Circles of the World, Ep. 1: The Tontine** — LIVE since Sat 2026-09-26 11:00 AM ET
+
+The first episode of the weekly series, and the first film made with the
+`cinematic-reel` skill: a 3D film rendered on the GPU (gold coins for 1653,
+the strike-through that bends into the circle, pay-in, the turn going round,
+a wax-print drape for Douala, the circle stretching across water, then
+"nobody holds the pot" with every member tied to every other). Voice: Gemini
+TTS (Fola); music: Lyria RealTime, cued to each scene. Script by Muse, two
+fact-fixes approved by the founder ("1653. France."; in Africa "the same
+word came to mean the opposite").
+
+Live at https://www.instagram.com/reel/DdwTzhblpd0/ (verified by Muse
+2026-10-01). Scheduled by Muse through Meta Business Suite (post ID
+2053692878620804);
+packet `marketing/handoff/inbox/004-traditions-ep1-tontine/` (RESULT.md has the
+details). Slot: Saturdays 11:00 AM ET = 16:00 Douala/Lagos/London, the series
+slot from now on; Insights had no hourly data at 34 followers.
+
+**Caption:** `CAPTION.txt` in the packet (the 1653 hook, "in Cameroon we also
+call it njangi, which is where our name comes from", Douala, the catch,
+"nobody holds the pot", next week the susu).
+`#CirclesOfTheWorld #tontine #njangi #susu #africandiaspora`
+
+**Settings:** custom cover (The Tontine, gold star mark); original audio, no
+Instagram music; no location, no tags, no Facebook cross-post (no Page is
+connected). AI label: off. Business Suite's Reel composer has no "Made with
+AI" toggle, and the founder chose to schedule without it.
+
+**Next:** Ep. 2, the susu (1.9), moved up a day to Fri 2026-10-02.
+
+### 1.9 · Instagram Reel · 86s · Tradition · **Circles of the World, Ep. 2: The Susu** — LIVE since Fri 2026-10-02 11:00 AM ET
+
+Built with the `cinematic-reel` skill in the series look: gold coins landing
+one at a time on a stack ("little by little"), a gold route drawn over dark
+water from West Africa to Trinidad to Brooklyn that gathers into the circle,
+the banker lady's blue tin of envelopes in louvred sun (objects only, no
+people), then the series mechanics and "nobody holds the hand". Voice: Gemini
+TTS (Fola); music: Lyria RealTime with a steelpan line under Trinidad. One
+fact-fix to Muse's script, posted as built at the founder's go: "One word
+from West Africa: susu. In Ghana's Twi, it means little by little." The
+Caribbean susu traces to the Yoruba esusu, so "from Ghana... crossed the
+Atlantic" credited the crossing to the wrong people.
+
+Live at https://www.instagram.com/reel/Dd_wgH_AbLN/ (Muse's RESULT.md, "After
+it goes live"). Scheduled by Muse through Meta Business Suite on 2026-10-01
+(Business Suite's Scheduled list showed no post ID; copyright check clean). Packet
+`marketing/handoff/inbox/005-traditions-ep2-susu/`: `BUILD.md` build notes,
+`JOB.md` publish job, `RESULT.md` Muse's report. Slot: Friday 11:00 AM ET =
+16:00 Douala/Lagos/London, the series hour, one day earlier than the Saturday
+slot at the founder's request.
+
+**Caption:** `CAPTION.txt` in the packet (susu means little by little in Twi,
+Trinidad and Brooklyn, the banker lady, the catch "someone had to hold the
+hand", next week the ajo).
+`#CirclesOfTheWorld #susu #njangi #rotatingsavings #africandiaspora`
+
+**Settings:** as Ep. 1: custom cover (The Susu, gold star mark, "Nobody holds
+the hand."); original audio, no Instagram music; no location, tags or
+Facebook cross-post. AI label: off. The composer still has no toggle, and the
+founder chose to schedule without it again (2026-10-01).
+
+**Next:** Ep. 3, the ajo (packet 006). Its script mixes the alajo collector
+model (daily round, one day's contribution as the fee) with rotating-circle
+lines; fact-check before building.
+
+### 1.10 · LinkedIn + Instagram carousel + Reel · Sui Live tie-in · **"Move, transact, save"** — DRAFTED, not posted
+
+Content around Tayo Oviosu's Sui Live talk ("From Lagos to the World", Miami,
+recorded 7 May 2026): a LinkedIn post, a 7-slide carousel, a ~40 s Reel
+(`marketing/assets/reel-008-move-transact-save.spec.json`, film
+`marketing/assets/circles/film-008.*`) and three comment angles. Packet
+`marketing/handoff/inbox/008-sui-lagos-payments-content/` (`DRAFTS.md`,
+`RESULT.md`). His words are quoted short and credited; no footage or audio of
+him is used, and nothing implies a partnership with Paga. The working
+transcript stays local (third-party material, gitignored).
+
+**Waiting on the founder:** review the drafts and the Reel, make the AI-label
+call, then hand the approved pieces to Muse.
+
 ---
 
 # Week 2 — establish the contrast

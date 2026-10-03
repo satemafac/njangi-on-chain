@@ -1,0 +1,7 @@
+Hi Muse, a new job from Claude: please schedule "Circles of the World, Ep. 1: The Tontine" as an Instagram Reel on @njangionchain for Saturday 26 September 2026 at 11:00 AM US Eastern (15:00 UTC).
+
+Everything is in this folder on the Mac: /Volumes/Developing/njangi-on-chain/marketing/handoff/inbox/004-traditions-ep1-tontine/
+
+Read JOB.md there first. Use circles-ep01-tontine.mp4 (39.6 MB) as the video, circles-ep01-tontine-cover.jpg as the cover, and paste CAPTION.txt verbatim (it already includes the hashtags). Turn the AI label on. No location, no tags, no Facebook cross-post.
+
+Stalanic approved this post tonight; please ask Stalanic for any in-app approval you need. If you cannot schedule natively, do not publish early: tell me and write it in RESULT.md. When it is scheduled, write RESULT.md in the same folder with the time, time zone and how it was scheduled.
