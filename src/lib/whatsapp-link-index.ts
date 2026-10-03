@@ -2,7 +2,9 @@
 // webhook. The Phase 1 implementation scanned every on-chain link and
 // fetched + decrypted the corresponding Walrus blob (O(N) per inbound
 // message). This module replaces that with a Postgres index keyed by an
-// HMAC of the normalized phone number.
+// HMAC of the normalized phone number. normalizePhone lives in
+// scripts/lib/whatsapp-phone.ts because the GDPR deletion executor
+// (scripts/process-deletion-request.mjs) must hash the exact same form.
 //
 // The HMAC is computed with `WALRUS_LOOKUP_SALT` (server-only secret) so
 // the raw phone number never leaves the encrypted Walrus envelope. The salt
@@ -11,6 +13,7 @@
 // See docs/environment.md, "Rotating the WhatsApp PII keys".
 
 import type { Pool } from 'pg';
+import { normalizePhone } from '../../scripts/lib/whatsapp-phone';
 import { computeLookupHash } from './walrus-pii';
 import { getSharedPgPool, isPostgresConfigured } from './pg-pool';
 
@@ -58,10 +61,6 @@ async function ensureTable(): Promise<void> {
     `).then(() => undefined);
   }
   return setupPromise;
-}
-
-function normalizePhone(value: string): string {
-  return value.replace(/^\+/, '').trim();
 }
 
 function warnFallbackOnce() {
