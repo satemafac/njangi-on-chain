@@ -18,7 +18,11 @@
 // "Rotating the WhatsApp PII keys".
 
 import { createCipheriv, createDecipheriv, randomBytes } from 'crypto';
-import { WalrusReadError, isTransientWalrusStatus } from './walrus-read-error';
+import {
+  WalrusReadError,
+  isRefusedWalrusStatus,
+  isTransientWalrusStatus,
+} from './walrus-read-error';
 
 const AES_ALGO = 'aes-256-gcm';
 const IV_BYTES = 12;
@@ -269,8 +273,9 @@ function describeFailure(err: unknown): string {
 /**
  * Fetches a previously stored envelope from the Walrus aggregator. Every
  * failure throws a WalrusReadError whose `transient` flag says whether a
- * retry may succeed: true for a network error, a 5xx or a 429, false for a
- * 404 (expired blob), any other 4xx, or a body that is not an envelope. See
+ * retry may succeed: true for a network error, a 5xx, a 429 or a refusal
+ * (401, 403: fixed by fixing WALRUS_AGGREGATOR_URL), false for a 404 or 410
+ * (expired blob), any other 4xx, or a body that is not an envelope. See
  * walrus-read-error.ts.
  */
 export async function fetchEnvelopeFromWalrus(blobId: string): Promise<EncryptedEnvelope> {
@@ -287,10 +292,15 @@ export async function fetchEnvelopeFromWalrus(blobId: string): Promise<Encrypted
     });
   }
   if (!response.ok) {
+    const { status } = response;
     const body = await response.text().catch(() => '<no body>');
-    throw new WalrusReadError(`Walrus aggregator returned ${response.status}: ${body}`, {
-      status: response.status,
-      transient: isTransientWalrusStatus(response.status),
+    // A refusal names the setting to check: it fails every read until fixed.
+    const answer = isRefusedWalrusStatus(status)
+      ? `${status} (read refused: check WALRUS_AGGREGATOR_URL)`
+      : String(status);
+    throw new WalrusReadError(`Walrus aggregator returned ${answer}: ${body}`, {
+      status,
+      transient: isTransientWalrusStatus(status),
     });
   }
   // Read the body before parsing it: a connection that drops mid-body is a

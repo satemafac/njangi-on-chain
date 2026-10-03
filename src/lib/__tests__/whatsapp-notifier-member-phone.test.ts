@@ -11,7 +11,8 @@
  * (aggregator unreachable, 5xx, 429) was recorded as `no_link` too; it now
  * throws once no other blob answers, with the claim settled as
  * `lookup_failed: …`, so the cycle-finalized drain halts and the next run
- * sends.
+ * sends. A 401/403 refusal from a misconfigured aggregator does the same,
+ * logged as an error.
  */
 
 jest.mock('../pg-pool', () => {
@@ -49,6 +50,7 @@ import {
 import { drainCycleFinalizedEvents } from '../cycle-finalized-cron';
 import { getSharedPgPool } from '../pg-pool';
 import { fetchAndDecryptPII } from '../walrus-pii';
+import type * as WalrusPii from '../walrus-pii';
 import type { WhatsAppPiiPayload } from '../walrus-pii';
 import { WalrusReadError } from '../walrus-read-error';
 import { lookupBlobsForCircle } from '../whatsapp-link-index';
@@ -140,6 +142,31 @@ function unavailable(status: number | null): WalrusReadError {
       : `Walrus aggregator returned ${status}: try again later`,
     { status, transient: true },
   );
+}
+
+/**
+ * The error the REAL fetchEnvelopeFromWalrus throws when the aggregator
+ * refuses the read, as it does behind a misconfigured
+ * WALRUS_AGGREGATOR_URL (walrus-pii is mocked here, so it is loaded
+ * actual).
+ */
+async function refusal(status: 401 | 403): Promise<WalrusReadError> {
+  const { fetchEnvelopeFromWalrus } = jest.requireActual<typeof WalrusPii>('../walrus-pii');
+  const graphFetch = global.fetch;
+  global.fetch = (async () => ({
+    ok: false,
+    status,
+    text: async () => 'forbidden',
+  })) as unknown as typeof fetch;
+  try {
+    await fetchEnvelopeFromWalrus(RENEWED_BLOB);
+  } catch (err) {
+    if (err instanceof WalrusReadError) return err;
+    throw err;
+  } finally {
+    global.fetch = graphFetch;
+  }
+  throw new Error('expected the aggregator to refuse the read');
 }
 
 /**
@@ -359,6 +386,30 @@ describe('Walrus read failures', () => {
       expect(fetchedBlobs()).toEqual([RENEWED_BLOB, ANCHORED_BLOB]);
       expect(records).toEqual([
         ['cycle_finalized', MEMBER, '0xescrow:4', false, `lookup_failed: ${outage.message}`],
+      ]);
+      expect(fetchMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([401, 403] as const)(
+    'throws a refusal (%i), logged as an error, and settles the claim as lookup_failed',
+    async (status) => {
+      const records = fakeAuditLog();
+      const refused = await refusal(status);
+      registryHolds(onChainLink({ circleId: CIRCLE, linkedBy: MEMBER, blobId: ANCHORED_BLOB }));
+      indexMock.mockResolvedValue([RENEWED_BLOB]);
+      // A refusal turns every read away, the anchored blob's included.
+      walrusStores({ [RENEWED_BLOB]: refused, [ANCHORED_BLOB]: refused });
+
+      await expect(sendMemberNotification(input)).rejects.toBe(refused);
+      expect(fetchedBlobs()).toEqual([RENEWED_BLOB, ANCHORED_BLOB]);
+      expect(appLogger.error).toHaveBeenCalledWith(
+        '[whatsapp-notifier] Walrus aggregator refused the read',
+        { memberAddress: MEMBER, transient: true, error: refused.message },
+      );
+      expect(refused.message).toContain('check WALRUS_AGGREGATOR_URL');
+      expect(records).toEqual([
+        ['cycle_finalized', MEMBER, '0xescrow:4', false, `lookup_failed: ${refused.message}`],
       ]);
       expect(fetchMock).not.toHaveBeenCalled();
     },

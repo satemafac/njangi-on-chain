@@ -21,18 +21,20 @@
 // THROW contract: infra failures propagate so the cron halts without
 // advancing its cursor. A registry object read error always throws. An
 // index read error, or a TRANSIENT Walrus read failure (aggregator
-// unreachable, 5xx, 429 — see walrus-read-error.ts), is held while the
-// remaining sources are tried (the registry's anchored blob resolves until
-// its original lease ends) and rethrown when none of them resolves a
-// phone: past the anchor's lease only the index's blob could answer, and
-// Walrus may serve it on the next run. "No link" returns null (skip +
-// advance). Permanent per-blob failures — a 404 (lease lapsed), a malformed
-// envelope, an AES-GCM failure (corrupt envelope or wrong key) — are warned
-// and skipped: one bad envelope must not wedge the stream.
+// unreachable, 5xx, 429, or a 401/403 refusal — see walrus-read-error.ts),
+// is held while the remaining sources are tried (the registry's anchored
+// blob resolves until its original lease ends) and rethrown when none of
+// them resolves a phone: past the anchor's lease only the index's blob
+// could answer, and Walrus may serve it on the next run. A refusal is
+// logged as an error: it fails every read until WALRUS_AGGREGATOR_URL is
+// fixed. "No link" returns null (skip + advance). Permanent per-blob
+// failures — a 404 or 410 (lease lapsed), a malformed envelope, an AES-GCM
+// failure (corrupt envelope or wrong key) — are warned and skipped: one bad
+// envelope must not wedge the stream.
 
 import type { SuiClient } from '@mysten/sui/client';
 import { fetchAndDecryptPII } from '../walrus-pii';
-import { isTransientWalrusReadError } from '../walrus-read-error';
+import { isRefusedWalrusReadError, isTransientWalrusReadError } from '../walrus-read-error';
 import { lookupBlobsForCircle } from '../whatsapp-link-index';
 import { getActiveWhatsAppRegistries } from '../../services/whatsapp-registry-service';
 import type { NetworkType } from '../../services/whatsapp-registry-service';
@@ -60,8 +62,9 @@ interface HeldError {
 
 /**
  * The phone in one blob, or null when this blob cannot give one. Every
- * failure is warned; a transient Walrus read failure is also held in
- * `held`, since the blob may well resolve on a retry.
+ * failure is logged — a refusal as an error, anything else as a warning; a
+ * transient Walrus read failure is also held in `held`, since the blob may
+ * well resolve on a retry.
  */
 async function decryptPhone(
   blobId: string,
@@ -74,11 +77,18 @@ async function decryptPhone(
   } catch (err) {
     const transient = isTransientWalrusReadError(err);
     if (transient) held.error ??= err;
-    appLogger.warn('[circle-phone] failed to decrypt PII envelope', {
+    const details = {
       circleId,
       transient,
       error: err instanceof Error ? err.message : String(err),
-    });
+    };
+    if (isRefusedWalrusReadError(err)) {
+      // 401/403: the aggregator refused this server, not this blob, and
+      // every read fails the same way until the configuration is fixed.
+      appLogger.error('[circle-phone] Walrus aggregator refused the read', details);
+    } else {
+      appLogger.warn('[circle-phone] failed to decrypt PII envelope', details);
+    }
     return null;
   }
 }

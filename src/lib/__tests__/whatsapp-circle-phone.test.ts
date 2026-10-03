@@ -10,7 +10,8 @@
  * lost for good. It now rethrows the index error, so the cron halts and
  * retries. A transient Walrus read failure (aggregator unreachable, 5xx,
  * 429) used to read as "no phone" the same way, and now follows the same
- * rule; a 404 stays a per-blob warning.
+ * rule, as does a 401/403 refusal from a misconfigured aggregator (logged
+ * as an error); a 404 stays a per-blob warning.
  */
 
 jest.mock('../walrus-pii', () => ({
@@ -29,6 +30,7 @@ jest.mock('../../utils/logger', () => ({
 import type { SuiClient } from '@mysten/sui/client';
 import { resolveCirclePhone } from '../whatsapp-bot/circle-phone';
 import { fetchAndDecryptPII } from '../walrus-pii';
+import type * as WalrusPii from '../walrus-pii';
 import type { WhatsAppPiiPayload } from '../walrus-pii';
 import { WalrusReadError } from '../walrus-read-error';
 import { lookupBlobsForCircle } from '../whatsapp-link-index';
@@ -103,6 +105,31 @@ function unavailable(status: number | null): WalrusReadError {
       : `Walrus aggregator returned ${status}: try again later`,
     { status, transient: true },
   );
+}
+
+/**
+ * The error the REAL fetchEnvelopeFromWalrus throws when the aggregator
+ * refuses the read, as it does behind a misconfigured
+ * WALRUS_AGGREGATOR_URL (walrus-pii is mocked here, so it is loaded
+ * actual).
+ */
+async function refusal(status: 401 | 403): Promise<WalrusReadError> {
+  const { fetchEnvelopeFromWalrus } = jest.requireActual<typeof WalrusPii>('../walrus-pii');
+  const realFetch = global.fetch;
+  global.fetch = (async () => ({
+    ok: false,
+    status,
+    text: async () => 'forbidden',
+  })) as unknown as typeof fetch;
+  try {
+    await fetchEnvelopeFromWalrus(RENEWED_BLOB);
+  } catch (err) {
+    if (err instanceof WalrusReadError) return err;
+    throw err;
+  } finally {
+    global.fetch = realFetch;
+  }
+  throw new Error('expected the aggregator to refuse the read');
 }
 
 /** Blob ids the lookup fetched from Walrus, in order. */
@@ -304,6 +331,31 @@ describe('Walrus read failures', () => {
         '[circle-phone] failed to decrypt PII envelope',
         expect.objectContaining({ circleId: CIRCLE, transient: true }),
       );
+    },
+  );
+
+  it.each([401, 403] as const)(
+    'rethrows a refusal (%i) that fails every read, logged as an error',
+    async (status) => {
+      // A refusal is the aggregator turning this server away, not an answer
+      // about the blob: the circle may well be linked.
+      const refused = await refusal(status);
+      indexMock.mockResolvedValue([RENEWED_BLOB]);
+      registryHolds(onChainLink({ circleId: CIRCLE, blobId: ANCHORED_BLOB }));
+      walrusStores({ [RENEWED_BLOB]: refused, [ANCHORED_BLOB]: refused });
+
+      await expect(resolve()).rejects.toBe(refused);
+      expect(fetchedBlobs()).toEqual([RENEWED_BLOB, ANCHORED_BLOB]);
+      expect(appLogger.error).toHaveBeenCalledTimes(2);
+      expect(appLogger.error).toHaveBeenCalledWith(
+        '[circle-phone] Walrus aggregator refused the read',
+        {
+          circleId: CIRCLE,
+          transient: true,
+          error: `Walrus aggregator returned ${status} (read refused: check WALRUS_AGGREGATOR_URL): forbidden`,
+        },
+      );
+      expect(appLogger.warn).not.toHaveBeenCalled();
     },
   );
 
