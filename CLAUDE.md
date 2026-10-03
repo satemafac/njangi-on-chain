@@ -358,8 +358,13 @@ publish runbook below is separate (it ships contracts, not the web app).
 3. Cron jobs are declared in `vercel.json` and run on Vercel's scheduler; each
    authenticates with `CRON_SECRET` via a timing-safe bearer check and uses the
    fenced-lease machinery in `src/lib/cycle-finalized-cron.ts`:
-   - `/api/cron/cycle-finalized` (every minute) — your-turn WhatsApp nudges.
-   - `/api/cron/whatsapp-circle-events` (every minute) — circle lifecycle relays.
+   - `/api/cron/cycle-finalized` (every 15 minutes, Sui-first probe gated by
+     `src/lib/cron-event-probe.ts`) — the your-turn WhatsApp nudge, keyed to
+     the `ContributionRecorded` that fills a round's pot and skipped once the
+     escrow is claimed or refunded. Not `CycleFinalized`: the Collect button
+     emits that in the same tx that pays the recipient.
+   - `/api/cron/whatsapp-circle-events` (every 15 minutes, Sui-first probe
+     gated) — circle lifecycle relays.
    - `/api/cron/walrus-renewal` (daily, `0 3 * * *`) — renews Walrus PII blobs
      before expiry (tracked via `walrus_end_epoch` in Postgres). End epochs are
      WALRUS epochs (a day on testnet, two weeks on mainnet), read from the
@@ -427,13 +432,16 @@ nothing signed or written. Reads go to `NEXT_PUBLIC_<NET>_RPC_URL` (override:
 on the active network.
 
 **Cycle-finalized WhatsApp notifier** (deprecated local-dev poller; production
-runs the same logic as the Vercel `/api/cron/cycle-finalized` job above):
+runs the Vercel `/api/cron/cycle-finalized` job above, which no longer shares
+its trigger):
 - Script: `scripts/cycle-finalized-notifier.mjs`, run by hand against a dev
   server with `npm run notifier:cycle-finalized`; never deploy it as a
   worker. Polls `CycleFinalized` events every `POLL_INTERVAL_MS`
   (default 60s), persists its cursor (Postgres when `DATABASE_URL` is set,
   else the git-ignored `.cycle-finalized-cursor.json`), and POSTs to
-  `/api/whatsapp/notify/your-turn` for each new recipient.
+  `/api/whatsapp/notify/your-turn` for each new recipient. CycleFinalized
+  fires when the recipient collects, so its nudges arrive after the payout
+  is gone; use it only to exercise the notify route.
 - Required env: `PACKAGE_ID`, `NOTIFY_ENDPOINT` (full URL of the notify
   route), `INTERNAL_NOTIFY_SECRET` (must match the app's),
   `NETWORK` (`testnet`/`mainnet`), `SUI_RPC_URL` (optional override),

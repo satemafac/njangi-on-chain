@@ -1,6 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import joinRequestDatabase from '../../../services/join-request-database';
 import databaseService from '../../../services/database-service';
+import { requireSessionAddress, sendJoinRequestAuthFailure } from '../../../lib/join-request-auth';
 
 type ResponseData = {
   success: boolean;
@@ -34,6 +35,12 @@ export default async function handler(
         success: false,
         message: 'Missing required query parameters: circleId and userAddress'
       });
+    }
+
+    // Members may only ask about their own request.
+    const auth = await requireSessionAddress(req, userAddress);
+    if (!auth.ok) {
+      return sendJoinRequestAuthFailure(res, auth);
     }
 
     console.log(`[DEBUG] Checking pending request for circle: ${circleId}, user: ${userAddress}`);

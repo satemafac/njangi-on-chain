@@ -47,6 +47,7 @@ import BillingUpsellModal, {
   type UpgradeRequiredDetails,
 } from '@/components/BillingUpsellModal';
 import { humanizeErrorMessage } from '@/lib/user-error-messages';
+import { JOIN_REQUESTS_LOAD_FAILED, joinRequestAccessMessage } from '@/lib/join-request-access-copy';
 import {
   ZkLoginClient,
   ZkLoginError,
@@ -685,6 +686,9 @@ export default function ManageCircle() {
   const [isUpdatingRecoveryDelegate, setIsUpdatingRecoveryDelegate] = useState(false);
   const [members, setMembers] = useState<Member[]>([]);
   const [pendingRequests, setPendingRequests] = useState<JoinRequest[]>([]);
+  // Why the pending list didn't load (null when it did): a refused or failed
+  // read is shown as such, never as "No pending requests".
+  const [pendingRequestsError, setPendingRequestsError] = useState<string | null>(null);
   const [suiPrice, setSuiPrice] = useState(1.25);
   const [copiedId, setCopiedId] = useState(false);
   const [isApproving, setIsApproving] = useState(false);
@@ -1483,6 +1487,8 @@ export default function ManageCircle() {
       
       if (!response.ok) {
         debugLog('API error response', { status: response.status, statusText: response.statusText });
+        setPendingRequests([]);
+        setPendingRequestsError(joinRequestAccessMessage(response.status));
         return;
       }
       
@@ -1492,18 +1498,39 @@ export default function ManageCircle() {
       if (data.success && Array.isArray(data.data)) {
         console.log(`[ManagePage] Received ${data.data.length} pending requests`);
         setPendingRequests(data.data);
+        setPendingRequestsError(null);
       } else {
         console.error('[ManagePage] Invalid response format:', data);
         setPendingRequests([]);
+        setPendingRequestsError(JOIN_REQUESTS_LOAD_FAILED);
       }
     } catch (error) {
       console.error('[ManagePage] Failed to fetch pending requests:', error);
       setPendingRequests([]);
+      setPendingRequestsError(JOIN_REQUESTS_LOAD_FAILED);
     }
     // finally { // Removed
     //   setLoading(false);
     // }
   }, [id]);
+
+  // Approving writes each request's status through an admin-only route.
+  // Check that access BEFORE the on-chain approval, so a lapsed sign-in
+  // can't leave a member approved on chain while their request stays
+  // pending here.
+  const confirmJoinRequestAccess = async (toastId: string): Promise<boolean> => {
+    const failed = "Couldn't confirm you can approve requests. Refresh and try again.";
+    try {
+      const response = await fetch(`/api/join-requests/pending/${id}`);
+      if (response.ok) {
+        return true;
+      }
+      toast.error(joinRequestAccessMessage(response.status, failed), { id: toastId });
+    } catch {
+      toast.error(failed, { id: toastId });
+    }
+    return false;
+  };
 
   // Call the admin_approve_member function on the blockchain
   const callAdminApproveMember = async (circleId: string, memberAddress: string): Promise<boolean> => {
@@ -1964,6 +1991,9 @@ export default function ManageCircle() {
       // If rejecting, first try to approve on blockchain
       if (approve) {
         const blockchainToastId = 'blockchain-approve-member';
+        if (!(await confirmJoinRequestAccess(blockchainToastId))) {
+          return;
+        }
         toast.loading(`Approving ${shortenAddress(request.user_address)} on blockchain...`, { id: blockchainToastId });
         
         const blockchainSuccess = await callAdminApproveMember(
@@ -1997,7 +2027,10 @@ export default function ManageCircle() {
       
       if (!response.ok || !result.success) {
         console.error(`[ManagePage] Failed to update request status in database:`, result);
-        toast.error('Failed to update request in database. Please try again.', { id: databaseToastId, duration: 5000 });
+        toast.error(
+          joinRequestAccessMessage(response.status, 'Failed to update request in database. Please try again.'),
+          { id: databaseToastId, duration: 5000 },
+        );
         return;
       }
       
@@ -2064,6 +2097,9 @@ export default function ManageCircle() {
     if (!circle || !account) return;
     
     const toastId = 'increase-and-approve';
+    if (!(await confirmJoinRequestAccess(toastId))) {
+      return;
+    }
     
     try {
       toast.loading('Increasing maximum members...', { id: toastId });
@@ -2117,7 +2153,10 @@ export default function ManageCircle() {
         const result = await response.json();
         
         if (!response.ok || !result.success) {
-          toast.error('Failed to update request in database', { id: toastId });
+          toast.error(
+            joinRequestAccessMessage(response.status, 'Failed to update request in database'),
+            { id: toastId },
+          );
           return;
         }
         
@@ -2271,6 +2310,9 @@ export default function ManageCircle() {
       onConfirm: async () => {
         const bulkApproveToastId = 'bulk-approve-toast';
         try {
+          if (!(await confirmJoinRequestAccess(bulkApproveToastId))) {
+            return;
+          }
           toast.loading('Processing bulk approval...', { id: bulkApproveToastId });
           // Extract all the member addresses from pending requests
           const memberAddresses = pendingRequests.map(req => req.user_address);
@@ -5548,15 +5590,25 @@ export default function ManageCircle() {
                         </button>
                         <button
                           type="button"
-                          onClick={() => scrollToManageSection(pendingRequests.length > 0 ? 'approvals' : 'invite')}
+                          onClick={() =>
+                            scrollToManageSection(
+                              pendingRequests.length > 0 || pendingRequestsError ? 'approvals' : 'invite',
+                            )
+                          }
                           className={mobileWorkspaceButtonClass}
                         >
                           <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
                             Approvals
                           </p>
-                          <p className="mt-2 text-sm font-semibold text-slate-950">{pendingRequests.length}</p>
+                          <p className="mt-2 text-sm font-semibold text-slate-950">
+                            {pendingRequestsError ? '—' : pendingRequests.length}
+                          </p>
                           <p className="mt-1 text-xs text-slate-500">
-                            {pendingRequests.length > 0 ? 'Requests waiting' : 'No pending requests'}
+                            {pendingRequestsError
+                              ? "Couldn't load"
+                              : pendingRequests.length > 0
+                                ? 'Requests waiting'
+                                : 'No pending requests'}
                           </p>
                         </button>
                         <button
@@ -7176,6 +7228,22 @@ export default function ManageCircle() {
                 </div>
                 
                 {/* Pending Join Requests Section */}
+                {pendingRequestsError && (
+                  <div className={sectionCardClass} ref={(element) => setManageSectionRef('approvals', element)}>
+                    <p className={sectionEyebrowClass}>Approvals</p>
+                    <h3 className={`${sectionTitleClass} mt-2`}>Pending Join Requests</h3>
+                    <p className="mt-2 text-sm text-red-600" role="alert">
+                      {pendingRequestsError}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => fetchPendingRequests()}
+                      className={`${secondaryActionClass} mt-4`}
+                    >
+                      Try again
+                    </button>
+                  </div>
+                )}
                 {pendingRequests.length > 0 && (
                   <div className={sectionCardClass} ref={(element) => setManageSectionRef('approvals', element)}>
                     <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
