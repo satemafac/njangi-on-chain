@@ -121,6 +121,28 @@ describe('resolveCustodyWalletId', () => {
     expect(result).toEqual({ walletId: WALLET, source: 'transaction_history' });
   });
 
+  it.each(['post_security_deposit', 'claim_own_refund', 'refund_asset'])(
+    'recovers the wallet from the caller’s own v11 %s transaction',
+    async (fn) => {
+      const v11Tx = JSON.parse(JSON.stringify(depositTx));
+      v11Tx.transaction.data.transaction.transactions = [
+        { MoveCall: { package: PKG, module: 'njangi_circles', function: fn } },
+      ];
+      const client = makeClient({
+        getDynamicFieldObject: jest.fn(async () => fieldHolding(CIRCLE)),
+        queryTransactionBlocks: jest.fn(async () => ({ data: [v11Tx] })),
+      });
+      const result = await resolveCustodyWalletId({
+        client,
+        circleId: CIRCLE,
+        packageId: PKG,
+        userAddress: USER,
+        queryEvents: jest.fn(async () => ({ data: [] })),
+      });
+      expect(result).toEqual({ walletId: WALLET, source: 'transaction_history' });
+    },
+  );
+
   it('rejects candidates that do not validate as this circle’s CustodyWallet', async () => {
     // An event naming some other object must not be trusted just because it
     // parsed — validation is what makes the whole scheme safe.
@@ -509,5 +531,18 @@ describe('resolveCustodyWalletId — creation transaction tier', () => {
       expect.stringContaining('read failed'),
       expect.objectContaining({ digest: 'CREATE_DIGEST' }),
     );
+  });
+});
+
+describe('dashboard history labels know the v11 entrypoints', () => {
+  const dashboard = readFileSync(join(process.cwd(), 'src/pages/dashboard.tsx'), 'utf8');
+  it.each([
+    "'::create_circle_with_asset'",
+    "'::post_security_deposit'",
+    "'::contribute_round'",
+    "'::refund_asset'",
+    "'::claim_own_refund'",
+  ])('matches %s', (suffix) => {
+    expect(dashboard).toContain(`value.endsWith(${suffix})`);
   });
 });
