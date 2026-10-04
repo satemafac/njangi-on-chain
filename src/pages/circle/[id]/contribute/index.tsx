@@ -4254,7 +4254,7 @@ export default function ContributeToCircle() {
                   circleName={circle.name}
                   isAdmin={!!userAddress && circle.admin === userAddress}
                   memberNames={memberNameMap}
-                  {...resolveCircleSettlementCoin(circle.autoSwapEnabled)}
+                  openCoin={resolveCircleSettlementCoin(circle.autoSwapEnabled)}
                 />
               ) : null}
 

@@ -77,6 +77,13 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'escrow.action.sendingBack': 'Sending back…',
     'escrow.sendBack.membershipUnknown':
       "We couldn't check whether you're a member of this round, so sending the contributions back isn't offered here yet. Refresh to try again.",
+    'escrow.coin.unreadable':
+      "We couldn't read which coin this round uses, so nothing can be signed here yet. Refresh to try again.",
+    'escrow.coin.unsupported':
+      "This round uses a coin the app doesn't support, so nothing can be signed here. Please contact support.",
+    'escrow.coin.openUnconfigured':
+      "This circle's coin isn't set up for this network, so the round can't be opened. Please contact support.",
+    'coin.unsupported': 'unsupported coin',
     'escrow.onlyAdminOpens': 'Only the circle admin can open the round.',
     'escrow.yourShare': 'Your share this round',
     'escrow.whoseTurn': 'Whose turn it is',
@@ -590,6 +597,13 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'escrow.action.sendingBack': 'Renvoi en cours…',
     'escrow.sendBack.membershipUnknown':
       "Nous n'avons pas pu vérifier si vous faites partie de ce tour : le renvoi des contributions n'est donc pas encore proposé ici. Actualisez pour réessayer.",
+    'escrow.coin.unreadable':
+      "Nous n'avons pas pu lire l'actif utilisé par ce tour : rien ne peut encore être signé ici. Actualisez pour réessayer.",
+    'escrow.coin.unsupported':
+      "Ce tour utilise un actif que l'application ne prend pas en charge : rien ne peut être signé ici. Veuillez contacter l'assistance.",
+    'escrow.coin.openUnconfigured':
+      "L'actif de ce cercle n'est pas configuré pour ce réseau : le tour ne peut pas être ouvert. Veuillez contacter l'assistance.",
+    'coin.unsupported': 'actif non pris en charge',
     'escrow.onlyAdminOpens': "Seul l'administrateur du cercle peut ouvrir le tour.",
     'escrow.yourShare': 'Votre part ce tour',
     'escrow.whoseTurn': "C'est le tour de",

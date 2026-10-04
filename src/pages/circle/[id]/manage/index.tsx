@@ -7442,7 +7442,7 @@ export default function ManageCircle() {
                       circleIsActive={circle.isActive && depositsHeldForRounds}
                       autoOpenWhenReady={autoOpenFirstRound}
                       onAutoOpenFired={() => setAutoOpenFirstRound(false)}
-                      {...resolveCircleSettlementCoin(circle.autoSwapEnabled)}
+                      openCoin={resolveCircleSettlementCoin(circle.autoSwapEnabled)}
                     />
                   </div>
                 ) : null}

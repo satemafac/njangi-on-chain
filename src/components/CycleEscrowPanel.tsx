@@ -55,9 +55,19 @@ import {
   resolveComplianceConfigId,
 } from '@/lib/compliance-gate';
 import {
+  isEscrowRoundGuardEnabled,
   isFinalizedEscrowCollectEnabled,
   isTimedEscrowEntriesEnabled,
 } from '@/config/feature-flags';
+import type { SettlementCoin } from '@/lib/circle-settlement';
+import {
+  escrowCallCoin,
+  escrowReleaseCoinType,
+  formatEscrowAmount,
+  resolveEscrowCoin,
+  resolveOpenRoundCoin,
+} from '@/lib/escrow-coin';
+import type { SupportedCoin } from '@/lib/supported-coins';
 import VerificationRequiredModal from '@/components/VerificationRequiredModal';
 import PayoutCelebration from '@/components/PayoutCelebration';
 import {
@@ -72,12 +82,14 @@ import {
 interface CycleEscrowPanelProps {
   circleId: string;
   network: NetworkType;
-  /** Canonical Move type for the circle's contribution currency. Defaults to SUI. */
-  coinType?: string;
-  /** Display symbol, e.g. "SUI" or "USDC". */
-  coinSymbol?: string;
-  /** Token decimals — 9 for SUI, 6 for USDC. Used to format amounts. */
-  coinDecimals?: number;
+  /**
+   * The coin a NEW round opens in: the circle's SUI/USDC mode
+   * (resolveCircleSettlementCoin). Nothing else. Every call on a round that
+   * already exists, and every amount shown for it, uses that round's own
+   * coin from its escrow snapshot (src/lib/escrow-coin.ts), because the
+   * admin can change the mode between laps.
+   */
+  openCoin: SettlementCoin;
   /** Optional human label for the circle, used in the header. */
   circleName?: string;
   /** True when the signed-in user is the admin. */
@@ -111,28 +123,10 @@ interface CycleEscrowPanelProps {
   onAutoOpenFired?: () => void;
 }
 
-const DEFAULT_COIN_TYPE =
-  '0x0000000000000000000000000000000000000000000000000000000000000002::sui::SUI';
-
 function shortenAddress(addr: string | null | undefined): string {
   if (!addr) return '—';
   const lower = addr.toLowerCase();
   return lower.length > 14 ? `${lower.slice(0, 8)}…${lower.slice(-4)}` : lower;
-}
-
-function formatAmount(baseUnits: string | bigint, decimals: number, symbol: string) {
-  try {
-    const v = typeof baseUnits === 'bigint' ? baseUnits : BigInt(baseUnits);
-    if (v === 0n) return `0 ${symbol}`;
-    const divisor = 10n ** BigInt(decimals);
-    const whole = v / divisor;
-    const fraction = v % divisor;
-    if (fraction === 0n) return `${whole.toString()} ${symbol}`;
-    const fractionStr = fraction.toString().padStart(decimals, '0').replace(/0+$/, '');
-    return `${whole.toString()}.${fractionStr} ${symbol}`;
-  } catch {
-    return `${String(baseUnits)} ${symbol}`;
-  }
 }
 
 function explain(error: unknown): string {
@@ -143,9 +137,7 @@ function explain(error: unknown): string {
 export function CycleEscrowPanel({
   circleId,
   network,
-  coinType = DEFAULT_COIN_TYPE,
-  coinSymbol = 'SUI',
-  coinDecimals = 9,
+  openCoin,
   circleName,
   isAdmin,
   memberNames,
@@ -407,7 +399,23 @@ export function CycleEscrowPanel({
     });
   }, [liveState?.members, contributors, recipient, memberNames]);
 
-  const friendlyAmount = formatAmount(contributionAmountBase, coinDecimals, coinSymbol);
+  // The round's own coin, read from its escrow snapshot. Not the circle's
+  // current mode: that only decides what a NEW round opens in.
+  const escrowCoin = useMemo(
+    () => resolveEscrowCoin(liveState, summary, network),
+    [liveState, summary, network],
+  );
+  const callCoin = escrowCallCoin(escrowCoin);
+  const unsupportedCoinLabel = t('coin.unsupported');
+  const escrowCoinRefusalKey =
+    escrowCoin?.kind === 'unsupported' ? 'escrow.coin.unsupported' : 'escrow.coin.unreadable';
+  // Pay, collect, refund and advance all need the round's coin, and only a
+  // supported one: an unreadable type is refused rather than guessed.
+  const requireCallCoin = useCallback((): SupportedCoin | null => {
+    if (!callCoin) toast.error(t(escrowCoinRefusalKey));
+    return callCoin;
+  }, [callCoin, escrowCoinRefusalKey, t]);
+  const friendlyAmount = formatEscrowAmount(contributionAmountBase, escrowCoin, unsupportedCoinLabel);
   // The whole pot, which is what a collect pays out. Taken from the state
   // read before the claim, which drains the balance.
   const potBase = useMemo(() => (liveState ? potBaseUnits(liveState) : '0'), [liveState]);
@@ -442,7 +450,9 @@ export function CycleEscrowPanel({
           setCelebration({
             digest: result.digest,
             amount:
-              potBase !== '0' ? formatAmount(potBase, coinDecimals, coinSymbol) : friendlyAmount,
+              potBase !== '0'
+                ? formatEscrowAmount(potBase, escrowCoin, unsupportedCoinLabel)
+                : friendlyAmount,
             cycleNo: liveState?.cycleNo ?? summary?.cycleNo ?? '—',
           });
         }
@@ -482,17 +492,10 @@ export function CycleEscrowPanel({
       summary?.cycleNo,
       potBase,
       liveState?.cycleNo,
-      coinDecimals,
-      coinSymbol,
+      escrowCoin,
+      unsupportedCoinLabel,
     ],
   );
-
-  // SUI is the only non-stablecoin settlement token. Any other coin type
-  // (USDC, etc.) is a USD-pegged stablecoin, so we open the escrow with the
-  // `open_cycle_stable` path that derives the per-member amount from the
-  // circle's USD value at the coin's decimals. Match SUI in either form —
-  // short `0x2::sui::SUI` or the long zero-padded address.
-  const isStableSettlement = !coinType.toLowerCase().endsWith('::sui::sui');
 
   const updateOpenLock = useCallback((next: OpenRoundLock) => {
     openLockRef.current = next;
@@ -508,6 +511,14 @@ export function CycleEscrowPanel({
     if (isOpenRoundLocked(openLockRef.current)) return;
     if (!isReady) {
       toast.error(t('toast.signInAgain'));
+      return;
+    }
+    // A new round opens in the circle's mode, which must be SUI or this
+    // network's USDC. USDC opens through `open_cycle_stable`, which derives
+    // the share from the circle's USD value at USDC's decimals.
+    const open = resolveOpenRoundCoin(openCoin.coinType, network);
+    if (!open) {
+      toast.error(t('escrow.coin.openUnconfigured'));
       return;
     }
     // Escrow opens sign client-side (straight to RPC), so the server
@@ -545,14 +556,22 @@ export function CycleEscrowPanel({
     // duplicate-open guard is published; the builder chains the release
     // ahead of the open (flag-gated on that publish, see the service).
     const releaseEscrowId = summary && liveState?.refunded ? summary.escrowId : undefined;
+    // The release takes the refunded escrow's own coin, which can differ
+    // from the open's when the mode changed since that round.
+    const releaseCoinType = releaseEscrowId ? escrowReleaseCoinType(escrowCoin) : null;
+    if (releaseEscrowId && isEscrowRoundGuardEnabled() && !releaseCoinType) {
+      toast.error(t('escrow.coin.unreadable'));
+      return;
+    }
     const build = buildOpenCycleTx({
       network,
       circleId,
-      coinType,
+      coinType: open.coin.coinType,
       withComplianceGate: gated,
       complianceConfigId,
-      stableDecimals: isStableSettlement ? coinDecimals : undefined,
+      stableDecimals: open.stableDecimals,
       releaseEscrowId,
+      releaseCoinType: releaseCoinType ?? undefined,
     });
     const submitting = beginOpenRound(priorEscrowId);
     updateOpenLock(submitting);
@@ -590,9 +609,8 @@ export function CycleEscrowPanel({
     userAddress,
     network,
     circleId,
-    coinType,
-    coinDecimals,
-    isStableSettlement,
+    openCoin.coinType,
+    escrowCoin,
     summary,
     liveState?.refunded,
     signAndExecute,
@@ -681,6 +699,9 @@ export function CycleEscrowPanel({
 
   const onPayShare = useCallback(async () => {
     if (!summary || !userAddress) return;
+    const coin = requireCallCoin();
+    if (!coin) return;
+    const coinType = coin.coinType;
     const attestationId = await resolveAttestationIdOrAbort();
     if (attestationId === 'ABORT') return;
 
@@ -744,7 +765,7 @@ export function CycleEscrowPanel({
       ownerAddress: userAddress,
     });
     void runWithSigner('pay', build, 100_000_000);
-  }, [summary, userAddress, network, coinType, contributionAmountBase, runWithSigner, resolveAttestationIdOrAbort]);
+  }, [summary, userAddress, network, requireCallCoin, contributionAmountBase, runWithSigner, resolveAttestationIdOrAbort]);
 
   const onCollectPayout = useCallback(async () => {
     if (!summary || !liveState) return;
@@ -752,6 +773,9 @@ export function CycleEscrowPanel({
       toast.error(t('toast.signInAgain'));
       return;
     }
+    const coin = requireCallCoin();
+    if (!coin) return;
+    const coinType = coin.coinType;
     setCollectIssue(null);
     // Someone else may already have finalized this round
     // (`finalize_to_recipient` is permissionless). Until the package that
@@ -849,7 +873,7 @@ export function CycleEscrowPanel({
     isReady,
     userAddress,
     network,
-    coinType,
+    requireCallCoin,
     circleId,
     rpcClient,
     refresh,
@@ -863,14 +887,16 @@ export function CycleEscrowPanel({
   // Permissionless + idempotent on-chain, so it's safe to expose to the admin.
   const onAdvanceCycle = useCallback(() => {
     if (!summary) return;
+    const coin = requireCallCoin();
+    if (!coin) return;
     const build = buildAdvanceCircleAfterClaimTx({
       network,
-      coinType,
+      coinType: coin.coinType,
       circleId,
       escrowId: summary.escrowId,
     });
     void runWithSigner('advance', build, 60_000_000);
-  }, [summary, network, coinType, circleId, runWithSigner]);
+  }, [summary, network, requireCallCoin, circleId, runWithSigner]);
 
   // An expired round's pot can only go back to its contributors, and
   // refund_expired_claim (permissionless) does exactly that, paying nobody
@@ -879,9 +905,15 @@ export function CycleEscrowPanel({
   // recipient or the admin, to act (resolveExpiredClaimRefundAccess).
   const onSendContributionsBack = useCallback(() => {
     if (!summary || refundAccess !== 'offer') return;
-    const build = buildRefundExpiredClaimTx({ network, coinType, escrowId: summary.escrowId });
+    const coin = requireCallCoin();
+    if (!coin) return;
+    const build = buildRefundExpiredClaimTx({
+      network,
+      coinType: coin.coinType,
+      escrowId: summary.escrowId,
+    });
     void runWithSigner('refund', build, 100_000_000);
-  }, [summary, refundAccess, network, coinType, runWithSigner]);
+  }, [summary, refundAccess, network, requireCallCoin, runWithSigner]);
 
   return (
     <section className="rounded-2xl border border-emerald-200 bg-white p-5 shadow-sm">
@@ -985,6 +1017,14 @@ export function CycleEscrowPanel({
         </div>
       ) : (
         <>
+          {escrowCoin && escrowCoin.kind !== 'supported' ? (
+            <p
+              role="status"
+              className="mt-5 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"
+            >
+              {t(escrowCoinRefusalKey)}
+            </p>
+          ) : null}
           <div className="mt-5 grid gap-3 sm:grid-cols-3">
             <div className="rounded-lg bg-emerald-50 p-3">
               <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-emerald-700">
@@ -1156,7 +1196,7 @@ export function CycleEscrowPanel({
                   <button
                     type="button"
                     onClick={onPayShare}
-                    disabled={!isReady || busy === 'pay'}
+                    disabled={!isReady || busy === 'pay' || !callCoin}
                     className="inline-flex items-center justify-center rounded-full bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-50"
                   >
                     {busy === 'pay'
@@ -1176,7 +1216,7 @@ export function CycleEscrowPanel({
                   <button
                     type="button"
                     onClick={onCollectPayout}
-                    disabled={!isReady || busy === 'claim'}
+                    disabled={!isReady || busy === 'claim' || !callCoin}
                     className="inline-flex items-center justify-center rounded-full bg-emerald-700 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-800 disabled:opacity-50"
                   >
                     {busy === 'claim'
@@ -1217,7 +1257,7 @@ export function CycleEscrowPanel({
                   <button
                     type="button"
                     onClick={onSendContributionsBack}
-                    disabled={!isReady || busy === 'refund'}
+                    disabled={!isReady || busy === 'refund' || !callCoin}
                     className="inline-flex shrink-0 items-center justify-center rounded-full bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-50"
                   >
                     {busy === 'refund' ? t('escrow.action.sendingBack') : t('escrow.action.sendBack')}
@@ -1314,7 +1354,7 @@ export function CycleEscrowPanel({
                   <button
                     type="button"
                     onClick={onAdvanceCycle}
-                    disabled={!isReady || busy === 'advance'}
+                    disabled={!isReady || busy === 'advance' || !callCoin}
                     title="This payout was collected but the rotation never moved on. Click to advance the circle to the next recipient."
                     className="inline-flex shrink-0 items-center justify-center rounded-full border border-emerald-300 bg-white px-4 py-2 text-sm font-semibold text-emerald-800 shadow-sm hover:bg-emerald-50 disabled:opacity-50"
                   >
