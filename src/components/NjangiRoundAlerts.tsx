@@ -14,13 +14,12 @@ import { getPooledSuiClient } from '@/services/sui-rpc-failover';
 import type { NetworkType } from '@/services/whatsapp-registry-service';
 import { readChainClockMs } from '@/lib/chain-clock';
 import { claimWindowClosed } from '@/lib/cycle-escrow-collect';
+import { formatEscrowAmount, resolveEscrowCoin } from '@/lib/escrow-coin';
 
 export interface CircleForAlerts {
   id: string;
   name: string;
   admin: string;
-  coinSymbol?: string;
-  coinDecimals?: number;
 }
 
 interface NjangiRoundAlertsProps {
@@ -37,21 +36,6 @@ interface ActionableAlert {
   circleName: string;
   cycleNo: number;
   amount: string;
-}
-
-function formatAmount(baseUnits: string, decimals: number, symbol: string) {
-  try {
-    const v = BigInt(baseUnits);
-    if (v === 0n) return `0 ${symbol}`;
-    const divisor = 10n ** BigInt(decimals);
-    const whole = v / divisor;
-    const frac = v % divisor;
-    if (frac === 0n) return `${whole.toString()} ${symbol}`;
-    const fracStr = frac.toString().padStart(decimals, '0').replace(/0+$/, '');
-    return `${whole.toString()}.${fracStr} ${symbol}`;
-  } catch {
-    return `${baseUnits} ${symbol}`;
-  }
 }
 
 /**
@@ -116,9 +100,16 @@ export function NjangiRoundAlerts({ circles, userAddress, network }: NjangiRound
             continue;
           }
 
-          const symbol = circle.coinSymbol ?? 'SUI';
-          const decimals = circle.coinDecimals ?? 9;
-          const friendly = formatAmount(state.contributionAmount, decimals, symbol);
+          // In the round's own coin, from its escrow snapshot. A default of
+          // "SUI, 9 decimals" showed a 0.30 USDC share as "0.0003 SUI".
+          // A coin that could not be read leaves the circle unchecked.
+          const coin = resolveEscrowCoin(state, escrow, network);
+          if (!coin || coin.kind === 'unknown') {
+            failed += 1;
+            continue;
+          }
+          const unsupported = t('coin.unsupported');
+          const friendly = formatEscrowAmount(state.contributionAmount, coin, unsupported);
           const isRecipient =
             state.recipient.toLowerCase() === userAddress.toLowerCase();
           const fullyFunded =
@@ -132,7 +123,7 @@ export function NjangiRoundAlerts({ circles, userAddress, network }: NjangiRound
               circleName: circle.name,
               cycleNo: state.cycleNo,
               // The pot, not one share: it is what this member will collect.
-              amount: formatAmount(potBaseUnits(state), decimals, symbol),
+              amount: formatEscrowAmount(potBaseUnits(state), coin, unsupported),
             });
             continue;
           }
@@ -177,7 +168,7 @@ export function NjangiRoundAlerts({ circles, userAddress, network }: NjangiRound
     return () => {
       cancelled = true;
     };
-  }, [circles, userAddress, network]);
+  }, [circles, userAddress, network, t]);
 
   const grouped = useMemo(() => {
     return {
