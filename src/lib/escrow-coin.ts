@@ -8,6 +8,11 @@
 // the other. Now the escrow's own type decides, by exact match
 // (src/lib/supported-coins.ts), and a type that could not be read is a
 // refusal, never a guess. Only opening a NEW round uses the circle's mode.
+//
+// Paying in is a commitment, so it needs a supported coin. Getting money
+// out of a round (collect, send the contributions back, advance after a
+// collect, release before a re-open) is never blocked by the app's coin
+// list: it is built with the escrow's own type whenever that type was read.
 
 import type { NetworkType } from '@/config/public-env';
 import {
@@ -34,21 +39,23 @@ export function resolveEscrowCoin(
 }
 
 /**
- * The type argument for a call that pays, collects or refunds this round:
- * only a supported coin. An unsupported coin is never offered for payment,
- * and an unreadable one is never guessed.
+ * The coin a payment into this round is built with: only a supported coin.
+ * An unsupported coin is never offered for payment, and an unreadable one is
+ * never guessed.
  */
-export function escrowCallCoin(coin: CoinTypeResolution | null): SupportedCoin | null {
+export function escrowPayCoin(coin: CoinTypeResolution | null): SupportedCoin | null {
   return coin?.kind === 'supported' ? coin.coin : null;
 }
 
 /**
- * The type argument for `release_open_round<T>`, which moves no funds and
- * only unpins a round that can no longer pay out. It must be the escrow's
- * own type, so any coin type that was read qualifies; an unreadable type
- * does not.
+ * The type argument for every call that gets money out of this round or
+ * moves it along: collect (`finalize_and_redeem*`, `redeem_claim`),
+ * `refund_expired_claim`, `advance_circle_after_claim` and
+ * `release_open_round`. It must be the escrow's own type, so any coin type
+ * that was read qualifies, supported or not; only an unreadable one is
+ * refused, since no call can be built without it.
  */
-export function escrowReleaseCoinType(coin: CoinTypeResolution | null): string | null {
+export function escrowExitCoinType(coin: CoinTypeResolution | null): string | null {
   if (coin?.kind === 'supported') return coin.coin.coinType;
   if (coin?.kind === 'unsupported') return coin.coinType;
   return null;
@@ -56,7 +63,8 @@ export function escrowReleaseCoinType(coin: CoinTypeResolution | null): string |
 
 /**
  * An amount of this round's coin for display: "0.3 USDC", the unsupported
- * label, or "—" while the coin (or the amount) is unknown.
+ * label (never a scaled number), or "—" while the coin (or the amount) is
+ * unknown.
  */
 export function formatEscrowAmount(
   base: string | bigint,

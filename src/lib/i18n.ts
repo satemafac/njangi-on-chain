@@ -80,7 +80,7 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'escrow.coin.unreadable':
       "We couldn't read which coin this round uses, so nothing can be signed here yet. Refresh to try again.",
     'escrow.coin.unsupported':
-      "This round uses a coin the app doesn't support, so nothing can be signed here. Please contact support.",
+      "This round uses a coin the app doesn't support, so paying into it is off and its amounts aren't shown. Collecting or sending back what's already in it still works.",
     'escrow.coin.openUnconfigured':
       "This circle's coin isn't set up for this network, so the round can't be opened. Please contact support.",
     'coin.unsupported': 'unsupported coin',
@@ -588,7 +588,7 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'escrow.coin.unreadable':
       "Nous n'avons pas pu lire l'actif utilisé par ce tour : rien ne peut encore être signé ici. Actualisez pour réessayer.",
     'escrow.coin.unsupported':
-      "Ce tour utilise un actif que l'application ne prend pas en charge : rien ne peut être signé ici. Veuillez contacter l'assistance.",
+      "Ce tour utilise un actif que l'application ne prend pas en charge : le versement y est désactivé et ses montants ne sont pas affichés. Collecter ou renvoyer ce qu'il contient déjà reste possible.",
     'escrow.coin.openUnconfigured':
       "L'actif de ce cercle n'est pas configuré pour ce réseau : le tour ne peut pas être ouvert. Veuillez contacter l'assistance.",
     'coin.unsupported': 'actif non pris en charge',

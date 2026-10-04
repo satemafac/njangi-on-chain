@@ -6,8 +6,8 @@
 import { readFileSync } from 'fs';
 import path from 'path';
 import {
-  escrowCallCoin,
-  escrowReleaseCoinType,
+  escrowPayCoin,
+  escrowExitCoinType,
   formatEscrowAmount,
   resolveEscrowCoin,
   resolveOpenRoundCoin,
@@ -26,16 +26,16 @@ describe('resolveEscrowCoin', () => {
   it("reads the round's coin from its own snapshot, whatever the circle's mode is now", () => {
     // A USDC-mode circle whose previous lap ran in SUI: the round is SUI.
     const coin = resolveEscrowCoin({ assetType: SUI_SNAPSHOT }, null, 'testnet');
-    expect(escrowCallCoin(coin)).toEqual(SUI_COIN);
-    expect(escrowCallCoin(resolveEscrowCoin({ assetType: USDC_SNAPSHOT }, null, 'testnet'))).toEqual(USDC_COIN);
+    expect(escrowPayCoin(coin)).toEqual(SUI_COIN);
+    expect(escrowPayCoin(resolveEscrowCoin({ assetType: USDC_SNAPSHOT }, null, 'testnet'))).toEqual(USDC_COIN);
   });
 
   it('prefers the live state and falls back to the discovery summary', () => {
     expect(
-      escrowCallCoin(resolveEscrowCoin({ assetType: USDC_SNAPSHOT }, { assetType: SUI_SNAPSHOT }, 'testnet')),
+      escrowPayCoin(resolveEscrowCoin({ assetType: USDC_SNAPSHOT }, { assetType: SUI_SNAPSHOT }, 'testnet')),
     ).toEqual(USDC_COIN);
-    expect(escrowCallCoin(resolveEscrowCoin(null, { assetType: SUI_SNAPSHOT }, 'testnet'))).toEqual(SUI_COIN);
-    expect(escrowCallCoin(resolveEscrowCoin({ assetType: '' }, { assetType: SUI_SNAPSHOT }, 'testnet'))).toEqual(
+    expect(escrowPayCoin(resolveEscrowCoin(null, { assetType: SUI_SNAPSHOT }, 'testnet'))).toEqual(SUI_COIN);
+    expect(escrowPayCoin(resolveEscrowCoin({ assetType: '' }, { assetType: SUI_SNAPSHOT }, 'testnet'))).toEqual(
       SUI_COIN,
     );
   });
@@ -47,22 +47,26 @@ describe('resolveEscrowCoin', () => {
   });
 });
 
-describe('escrowCallCoin', () => {
-  it('signs payments, collects and refunds only in a supported coin', () => {
-    expect(escrowCallCoin({ kind: 'unknown' })).toBeNull();
-    expect(escrowCallCoin({ kind: 'unsupported', coinType: OTHER })).toBeNull();
-    expect(escrowCallCoin(null)).toBeNull();
+describe('escrowPayCoin', () => {
+  it('builds a payment only in a supported coin', () => {
+    expect(escrowPayCoin({ kind: 'unknown' })).toBeNull();
+    expect(escrowPayCoin({ kind: 'unsupported', coinType: OTHER })).toBeNull();
+    expect(escrowPayCoin(null)).toBeNull();
   });
 });
 
-describe('escrowReleaseCoinType', () => {
-  it("releases with the released escrow's own type, supported or not, never a guessed one", () => {
-    expect(escrowReleaseCoinType(resolveEscrowCoin({ assetType: SUI_SNAPSHOT }, null, 'testnet'))).toBe(
+describe('escrowExitCoinType', () => {
+  it("builds collect, send-back, advance and release with the escrow's own type, supported or not", () => {
+    expect(escrowExitCoinType(resolveEscrowCoin({ assetType: SUI_SNAPSHOT }, null, 'testnet'))).toBe(
       '0x2::sui::SUI',
     );
-    expect(escrowReleaseCoinType({ kind: 'unsupported', coinType: OTHER })).toBe(OTHER);
-    expect(escrowReleaseCoinType({ kind: 'unknown' })).toBeNull();
-    expect(escrowReleaseCoinType(null)).toBeNull();
+    expect(escrowExitCoinType(resolveEscrowCoin({ assetType: OTHER.slice(2) }, null, 'testnet'))).toBe(OTHER);
+    expect(escrowExitCoinType({ kind: 'unsupported', coinType: OTHER })).toBe(OTHER);
+  });
+
+  it('refuses only an unreadable type, since no call can be built without one', () => {
+    expect(escrowExitCoinType({ kind: 'unknown' })).toBeNull();
+    expect(escrowExitCoinType(null)).toBeNull();
   });
 });
 
@@ -103,6 +107,19 @@ describe('CycleEscrowPanel', () => {
     expect(source).not.toMatch(/coinType\?: string;/);
     expect(source).not.toMatch(/coinDecimals\s*=\s*9/);
     expect(source).toContain('resolveEscrowCoin(liveState, summary, network)');
+  });
+
+  it('refuses only payments in an unsupported coin; collect, send-back and advance use the exit type', () => {
+    // One payment path, three ways out.
+    expect(source.match(/requirePayCoin\(\)/g)).toHaveLength(1);
+    expect(source.match(/requireExitCoinType\(\)/g)).toHaveLength(3);
+    expect(source).toMatch(/const onPayShare[\s\S]*?requirePayCoin\(\)[\s\S]*?const onCollectPayout/);
+    expect(source).toContain('escrowExitCoinType(escrowCoin)');
+    // The way-out buttons are gated on the exit type, not the pay coin.
+    expect(source.match(/busy === 'pay' \|\| !payCoin/g)).toHaveLength(1);
+    for (const busy of ['claim', 'refund', 'advance']) {
+      expect(source).toContain(`busy === '${busy}' || !exitCoinType`);
+    }
   });
 
   it('builds no call on an existing round from the open coin', () => {
