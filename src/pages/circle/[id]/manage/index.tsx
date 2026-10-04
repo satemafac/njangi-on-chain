@@ -58,6 +58,12 @@ import WhatsAppCircleIntegration from '../../../../components/WhatsAppCircleInte
 import CycleEscrowPanel from '@/components/CycleEscrowPanel';
 import MilestonesManageCard from '@/components/milestones/MilestonesManageCard';
 import { resolveCircleSettlementCoin } from '@/lib/circle-settlement';
+import {
+  readRoundOpen,
+  settlementModeLock,
+  settlementModeLockMessage,
+  type RoundOpenRead,
+} from '@/lib/settlement-mode-lock';
 import { readObject, queryEventsCached, invalidateObject, invalidateSuiRead } from '@/lib/sui-read';
 import { allDepositsHeldForRounds, depositsHeldButFlagsCleared } from '@/lib/deposit-status';
 import { getPooledSuiClient, logSuiReadError } from '@/services/sui-rpc-failover';
@@ -721,6 +727,10 @@ export default function ManageCircle() {
   const [usdcContributionBalance, setUsdcContributionBalance] = useState<number | null>(null);
   const [fetchingUsdcBalance, setFetchingUsdcBalance] = useState(false);
   const [fetchingSuiBalance, setFetchingSuiBalance] = useState(false);
+  // Whether a round is still open, for the SUI/USDC mode switch: an open
+  // round keeps running in its own coin, so the switch waits for it. Null
+  // until checked; see src/lib/settlement-mode-lock.ts.
+  const [settlementRound, setSettlementRound] = useState<RoundOpenRead | null>(null);
   const [paidOutInCurrentSessionMembers, setPaidOutInCurrentSessionMembers] = useState<Set<string>>(new Set());
 
   // State for local currency display of custody USDC balances in manage page
@@ -2839,6 +2849,28 @@ export default function ManageCircle() {
     });
   }, []);
 
+  // Reads whether one of this circle's rounds is still open and records it
+  // for the mode switch's lock notice.
+  const checkSettlementRound = useCallback(async (): Promise<RoundOpenRead | null> => {
+    if (!circle?.id) return null;
+    const read = await readRoundOpen(
+      getCurrentNetwork() as NetworkType,
+      circle.id,
+      getSuiClientFromPool(getCurrentRpcUrl()),
+    );
+    setSettlementRound(read);
+    return read;
+  }, [circle?.id]);
+
+  // Checked once the switch could be available: before the circle starts, or
+  // while it is paused between laps.
+  const settlementModeSwitchable = Boolean(circle && (!circle.isActive || circle.paused));
+  useEffect(() => {
+    setSettlementRound(null);
+    if (!settlementModeSwitchable) return;
+    void checkSettlementRound();
+  }, [settlementModeSwitchable, checkSettlementRound]);
+
   // Circle-level routing policy toggle persisted on-chain.
   // We currently reuse the existing `toggleAutoSwap` endpoint for this flag.
   const toggleNativeSuiOptIn = async (enabled: boolean) => {
@@ -2848,9 +2880,17 @@ export default function ManageCircle() {
         return false;
       }
 
-      // Lock token mode changes while the current cycle is active.
+      // The contract only allows the switch while the circle is inactive or
+      // paused between laps; the app also waits for any open round, which
+      // keeps running in its own coin. Re-read right before signing.
       if (circle.isActive && !circle.paused) {
-        toast.error('Token mode is locked during an active cycle. Wait until the cycle is completed and payouts are finished.');
+        toast.error(settlementModeLockMessage('lap-running'));
+        return false;
+      }
+      const round = await checkSettlementRound();
+      const lock = settlementModeLock({ isActive: circle.isActive, paused: circle.paused, round });
+      if (lock) {
+        toast.error(settlementModeLockMessage(lock));
         return false;
       }
       
@@ -3131,7 +3171,15 @@ export default function ManageCircle() {
   }) => {
     const [allowNativeSui, setAllowNativeSui] = useState(circle.autoSwapEnabled);
     const [isConfiguring, setIsConfiguring] = useState(false);
-    const isTokenModeLockedForActiveCycle = circle.isActive && !circle.paused;
+    // Locked while a lap runs (the contract refuses) and while a round is
+    // open. A check that failed or has not answered leaves the switch
+    // clickable: a click checks again before anything is signed.
+    const tokenModeLock = settlementModeLock({
+      isActive: circle.isActive,
+      paused: circle.paused,
+      round: settlementRound,
+    });
+    const isTokenModeLocked = tokenModeLock === 'lap-running' || tokenModeLock === 'round-open';
     
     // Keep local toggle state synchronized with on-chain circle config.
     useEffect(() => {
@@ -3142,8 +3190,14 @@ export default function ManageCircle() {
     }, [circle.autoSwapEnabled, allowNativeSui]);
     
     const handleToggleNativeSuiOptIn = async () => {
-      if (isTokenModeLockedForActiveCycle) {
-        toast.error('Token mode is locked during an active cycle. Wait until the cycle is completed and payouts are finished.');
+      if (circle.isActive && !circle.paused) {
+        toast.error(settlementModeLockMessage('lap-running'));
+        return;
+      }
+      const round = await checkSettlementRound();
+      const lock = settlementModeLock({ isActive: circle.isActive, paused: circle.paused, round });
+      if (lock) {
+        toast.error(settlementModeLockMessage(lock));
         return;
       }
 
@@ -3252,8 +3306,8 @@ export default function ManageCircle() {
                     <button
                       type="button"
                       onClick={handleToggleNativeSuiOptIn}
-                      disabled={isConfiguring || isTokenModeLockedForActiveCycle}
-                      className={`relative inline-flex h-6 w-11 items-center rounded-full ${allowNativeSui ? 'bg-blue-600' : 'bg-gray-200'} ${(isConfiguring || isTokenModeLockedForActiveCycle) ? 'opacity-50 cursor-not-allowed' : ''}`}
+                      disabled={isConfiguring || isTokenModeLocked}
+                      className={`relative inline-flex h-6 w-11 items-center rounded-full ${allowNativeSui ? 'bg-blue-600' : 'bg-gray-200'} ${(isConfiguring || isTokenModeLocked) ? 'opacity-50 cursor-not-allowed' : ''}`}
                     >
                       <span className="sr-only">Enable SUI circle mode</span>
                       <span 
@@ -3263,10 +3317,11 @@ export default function ManageCircle() {
                   </div>
                 </div>
 
-                {isTokenModeLockedForActiveCycle && (
+                {tokenModeLock && (
                   <div className="rounded-[18px] border border-amber-200 bg-amber-50 p-3">
-                    <p className="text-sm text-amber-700">
-                      <strong>Locked:</strong> Token mode cannot be changed while cycle {circle.currentCycle} is active. Update it after the cycle completes and payouts are done.
+                    <p role="status" className="text-sm text-amber-700">
+                      {isTokenModeLocked ? <strong>Locked: </strong> : null}
+                      {settlementModeLockMessage(tokenModeLock)}
                     </p>
                   </div>
                 )}
