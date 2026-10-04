@@ -12,15 +12,14 @@ https://business.facebook.com/wa/manage/message-templates/
 
 **Settings for ALL templates:**
 - Category: `UTILITY`
-- Language: `English (US)` / `en_US`. This is the language WhatsApp Manager approved the templates in.
+- Language: `English` / `en`. Every approved template is in this language (WhatsApp Manager's language filter lists only "English", checked 2026-10-03). Create new templates in **English**, not English (US).
 - Header: None (text only for simplicity)
 - Footer: None (or optional short text)
 
-**Language code must match**: every template send has to use `en_US`, the approved
-code. Meta does not fall back between language codes: a send as `en` to a template
-approved only as `en_US` fails with error 132001. The code has sent circle-event
-templates as `en` (`legacyTemplate` in `src/lib/whatsapp-bot/circle-events.ts`), so
-before you set `WHATSAPP_TEMPLATES_ENABLED=true`, check that it sends `en_US`.
+**Language code must match**: every template send has to use `en`, the approved
+code. Meta does not fall back between language codes: a send as `en_US` to a template
+approved only as `en` fails with error 132001. `legacyTemplate` in
+`src/lib/whatsapp-bot/circle-events.ts` sends `en`.
 
 **IMPORTANT**: 
 - Variables (`{{1}}`, `{{2}}`, etc.) cannot be at the start or end of the template body.
