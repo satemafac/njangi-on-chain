@@ -47,8 +47,8 @@ module njangi::njangi_v11_tests {
     const SUI_CONTRIB: u64 = 2_000_000_000;
     const SUI_DEPOSIT: u64 = 1_000_000_000;
 
-    const FLAGS_STABLE: u64 = 7; // settlement | collateral | usd-pegged
-    const FLAGS_SUI: u64 = 3;    // settlement | collateral
+    const FLAGS_STABLE: u64 = 7; // settlement | deposit | usd-pegged
+    const FLAGS_SUI: u64 = 3;    // settlement | deposit
 
     // ==========================================================
     // helpers

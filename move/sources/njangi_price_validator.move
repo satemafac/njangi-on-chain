@@ -43,7 +43,7 @@ module njangi::njangi_price_validator {
     // canonical one (anyone can mint a registry with `init_registry`).
     const E_REGISTRY_NOT_CANONICAL: u64 = 109;
     // v11: the asset is registered and enabled but lacks the role the
-    // caller needs (settlement / collateral).
+    // caller needs (settlement / security deposit).
     const E_ASSET_LACKS_ROLE: u64 = 110;
     const E_INVALID_FLAGS: u64 = 111;
     const E_INVALID_ADMIN: u64 = 112;
@@ -61,7 +61,7 @@ module njangi::njangi_price_validator {
     // admin sets them, so nothing changes for them by accident.
     // ----------------------------------------------------------
     const FLAG_SETTLEMENT: u64 = 1; // may be a circle's contribution asset
-    const FLAG_COLLATERAL: u64 = 2; // may back a security deposit
+    const FLAG_DEPOSIT: u64 = 2; // may be paid as a circle's security deposit
     const FLAG_USD_PEGGED: u64 = 4; // native = cents * 10^(decimals - 2) is meaningful
     const ALL_FLAGS: u64 = 7;
 
@@ -132,7 +132,7 @@ module njangi::njangi_price_validator {
     }
 
     /// Register a new asset. Caller must be the registry admin. Use this for
-    /// stablecoins or new collateral assets after publishing the package, so
+    /// stablecoins or other new assets after publishing the package, so
     /// the on-chain whitelist can grow without redeploying the protocol.
     public fun register_asset(
         registry: &mut AssetRegistry,
@@ -386,7 +386,7 @@ module njangi::njangi_price_validator {
     }
 
     public fun flag_settlement(): u64 { FLAG_SETTLEMENT }
-    public fun flag_collateral(): u64 { FLAG_COLLATERAL }
+    public fun flag_deposit(): u64 { FLAG_DEPOSIT }
     public fun flag_usd_pegged(): u64 { FLAG_USD_PEGGED }
 
     /// The gate every v11 commitment path runs: the registry is canonical,

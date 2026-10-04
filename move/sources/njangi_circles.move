@@ -588,7 +588,7 @@ module njangi::njangi_circles {
     /// A circle's asset terms, fixed for the life of the circle.
     /// `settlement_asset` is the coin rounds are paid in; `assets` lists
     /// every asset the circle accepts (today: exactly the settlement asset,
-    /// which is also its collateral).
+    /// which is also the asset its security deposits are paid in).
     public struct CircleAssetPolicy has store, copy, drop {
         settlement_asset: vector<u8>,
         assets: vector<AssetTerms>,
@@ -918,18 +918,18 @@ module njangi::njangi_circles {
         // --- End of deposit check ---
 
         // v11: on a circle with pinned asset terms, every seat (and the
-        // admin) must also hold collateral in the circle's v11 deposit
-        // records. The flag alone is not enough there: only a recorded
-        // deposit is collateral.
+        // admin) must also have a security deposit recorded in the circle's
+        // v11 deposit records. The flag alone is not enough there: only a
+        // recorded deposit counts.
         if (has_asset_policy(circle)) {
             if (table::contains(&circle.members, circle.admin)) {
-                assert!(collateral_held(circle, circle.admin) > 0, 21);
+                assert!(deposit_held(circle, circle.admin) > 0, 21);
             };
             let mut j = 0;
             while (j < len) {
                 let seat = *vector::borrow(&circle.rotation_order, j);
                 if (seat != @0x0) {
-                    assert!(collateral_held(circle, seat) > 0, 21);
+                    assert!(deposit_held(circle, seat) > 0, 21);
                 };
                 j = j + 1;
             };
@@ -2789,7 +2789,7 @@ module njangi::njangi_circles {
         // in the circle's v11 deposit records; the legacy per-member fields
         // describe legacy storage only.
         let held = if (has_asset_policy(circle)) {
-            collateral_held(circle, member_addr)
+            deposit_held(circle, member_addr)
         } else {
             members::get_deposit_balance(table::borrow(&circle.members, member_addr))
         };
@@ -3936,7 +3936,7 @@ module njangi::njangi_circles {
 
     /// Posts the sender's security deposit in coin `T`: one of the circle's
     /// pinned assets, at exactly its pinned amount, and (registry) still
-    /// allowed as collateral. The coin is recorded as the sender's deposit
+    /// allowed for security deposits. The coin is recorded as the sender's deposit
     /// in the circle's custody wallet; it leaves only as a refund to them.
     public fun post_security_deposit<T>(
         circle: &mut Circle,
@@ -3962,7 +3962,7 @@ module njangi::njangi_circles {
         assert!(option::is_some(&terms_opt), E_ASSET_NOT_ALLOWED);
         let terms = option::destroy_some(terms_opt);
         assert!(terms.security_deposit > 0, E_ASSET_NOT_ALLOWED);
-        price_validator::assert_usable<T>(registry, price_validator::flag_collateral());
+        price_validator::assert_usable<T>(registry, price_validator::flag_deposit());
 
         let amount = coin::value(&deposit);
         assert!(amount == terms.security_deposit, EIncorrectDepositAmount);
@@ -4205,7 +4205,7 @@ module njangi::njangi_circles {
         let refund = coin::from_balance(custody::split_deposit_balance<T>(wallet, amount), ctx);
         transfer::public_transfer(refund, member);
         clear_deposit_marker_if(circle, member, &asset);
-        if (table::contains(&circle.members, member) && collateral_held(circle, member) == 0) {
+        if (table::contains(&circle.members, member) && deposit_held(circle, member) == 0) {
             members::set_deposit_paid(table::borrow_mut(&mut circle.members, member), false);
         };
 
@@ -4323,7 +4323,7 @@ module njangi::njangi_circles {
     }
 
     // The member's recorded deposits across the circle's pinned assets.
-    fun collateral_held(circle: &Circle, member: address): u64 {
+    fun deposit_held(circle: &Circle, member: address): u64 {
         if (!has_asset_policy(circle)) {
             return 0
         };
