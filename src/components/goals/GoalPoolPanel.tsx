@@ -26,6 +26,12 @@ import {
   resolveComplianceConfigId,
 } from '@/lib/compliance-gate';
 import VerificationRequiredModal from '@/components/VerificationRequiredModal';
+import {
+  parseCoinAmount,
+  resolveSupportedCoin,
+  UNSUPPORTED_COIN_LABEL,
+  type SupportedCoin,
+} from '@/lib/supported-coins';
 
 interface Props {
   poolId: string;
@@ -33,15 +39,17 @@ interface Props {
   userAddress: string | null;
 }
 
-function resolveCoin(coinType: string): { symbol: string; decimals: number } {
-  return coinType.toLowerCase().endsWith('::sui::sui')
-    ? { symbol: 'SUI', decimals: 9 }
-    : { symbol: 'USDC', decimals: 6 };
-}
-
+// The pool's coin by exact type: SUI or the network's USDC. Every other coin
+// used to read as "USDC, 6 decimals", so a chip-in was scaled by a guess.
+// An unsupported coin shows no amounts and takes no new chip-ins; release,
+// cancel and refund still work, since they move what is already there.
 function fmt(base: string | bigint, decimals: number): string {
   const n = Number(BigInt(base)) / 10 ** decimals;
   return n.toLocaleString(undefined, { maximumFractionDigits: decimals >= 9 ? 4 : 2 });
+}
+
+function amountIn(coin: SupportedCoin | null, base: string | bigint): string {
+  return coin ? `${fmt(base, coin.decimals)} ${coin.symbol}` : UNSUPPORTED_COIN_LABEL;
 }
 
 function short(addr: string): string {
@@ -114,7 +122,7 @@ export default function GoalPoolPanel({ poolId, network, userAddress }: Props) {
 
   const view = useMemo(() => {
     if (!state) return null;
-    const coin = resolveCoin(state.coinType);
+    const coin = resolveSupportedCoin(state.coinType, network);
     const now = Date.now();
     const total = BigInt(state.totalRaised);
     const target = BigInt(state.targetAmount);
@@ -151,7 +159,7 @@ export default function GoalPoolPanel({ poolId, network, userAddress }: Props) {
       total,
       target,
       targetMs,
-      canContribute: !state.released && !state.cancelled,
+      canContribute: !state.released && !state.cancelled && coin !== null,
       canRelease: !state.released && !state.cancelled && goalMet && balanceGtZero(state.balance),
       canCancelAdmin: isAdmin && !state.released && !state.cancelled && !goalMet,
       canCancelDeadline: !state.released && !state.cancelled && deadlinePassed && !goalMet,
@@ -162,14 +170,24 @@ export default function GoalPoolPanel({ poolId, network, userAddress }: Props) {
       canRefund: state.cancelled && (myContribution === null || myAmount > BigInt(0)),
       contributionUnknown: myContribution === null,
     };
-  }, [state, userAddress, myContribution]);
+  }, [state, userAddress, myContribution, network]);
 
   const onContribute = useCallback(async () => {
     if (!state || !userAddress) return;
-    const coin = resolveCoin(state.coinType);
-    const value = parseFloat(amountInput);
-    if (!Number.isFinite(value) || value <= 0) {
-      toast.error('Enter an amount to chip in.');
+    const coin = resolveSupportedCoin(state.coinType, network);
+    if (!coin) {
+      toast.error("This pot holds a coin the app doesn't support, so chipping in is off.");
+      return;
+    }
+    // Exact base units: Math.round(value * 10 ** decimals) went through
+    // floating point.
+    const base = parseCoinAmount(amountInput, coin.decimals);
+    if (base === null || base <= BigInt(0)) {
+      toast.error(
+        base === null && amountInput.trim() !== ''
+          ? `Enter an amount with at most ${coin.decimals} decimal places.`
+          : 'Enter an amount to chip in.',
+      );
       return;
     }
     // Gated pools route through contribute_with_attestation — resolve the
@@ -202,7 +220,6 @@ export default function GoalPoolPanel({ poolId, network, userAddress }: Props) {
         return;
       }
     }
-    const base = BigInt(Math.round(value * 10 ** coin.decimals));
     void runWithSigner(
       buildContributeToPoolTx({
         network,
@@ -299,7 +316,7 @@ export default function GoalPoolPanel({ poolId, network, userAddress }: Props) {
           goalKind={view.isDate ? 'date' : 'amount'}
           primaryLabel={
             view.hasAmount
-              ? `Goal: ${fmt(view.target, coin.decimals)} ${coin.symbol}`
+              ? `Goal: ${amountIn(coin, view.target)}`
               : new Date(view.targetMs).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
           }
           secondaryLabel={
@@ -307,9 +324,11 @@ export default function GoalPoolPanel({ poolId, network, userAddress }: Props) {
               ? 'Cancelled — refunds open'
               : released
                 ? `Released to ${short(state.beneficiary)}`
-                : view.hasAmount
-                  ? `${fmt(view.total, coin.decimals)} of ${fmt(view.target, coin.decimals)} ${coin.symbol}${view.hasReleaseDate ? ` · by ${new Date(view.targetMs).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}` : ''}`
-                  : `${fmt(view.total, coin.decimals)} ${coin.symbol} pooled`
+                : !coin
+                  ? `Amounts in an ${UNSUPPORTED_COIN_LABEL}`
+                  : view.hasAmount
+                    ? `${fmt(view.total, coin.decimals)} of ${fmt(view.target, coin.decimals)} ${coin.symbol}${view.hasReleaseDate ? ` · by ${new Date(view.targetMs).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}` : ''}`
+                    : `${fmt(view.total, coin.decimals)} ${coin.symbol} pooled`
           }
         />
 
@@ -328,9 +347,16 @@ export default function GoalPoolPanel({ poolId, network, userAddress }: Props) {
         </div>
       </div>
 
+      {!coin && !released && !cancelled ? (
+        <p role="status" className="rounded-[24px] border border-amber-200 bg-amber-50 p-5 text-sm text-amber-900">
+          This pot holds a coin the app doesn&rsquo;t support, so its amounts aren&rsquo;t shown and
+          chipping in is off.
+        </p>
+      ) : null}
+
       {/* Contribute — gated pools included; the handler resolves the
           caller's attestation and explains when verification is missing. */}
-      {view.canContribute ? (
+      {view.canContribute && coin ? (
         <div className="rounded-[24px] border border-emerald-200/70 bg-gradient-to-br from-emerald-50 to-[#fbfaf7] p-5">
           <h3 className={`${goalDisplayFont.className} text-lg font-semibold text-[#0f5132]`}>Chip in to the pot</h3>
           <p className="mt-1 text-sm text-[#3f6b54]">Add any amount — every contribution makes the pot grow.</p>
@@ -352,7 +378,7 @@ export default function GoalPoolPanel({ poolId, network, userAddress }: Props) {
             </button>
           </div>
           {view.myAmount > BigInt(0) ? (
-            <p className="mt-2 text-xs text-[#3f6b54]">You have chipped in {fmt(view.myAmount, coin.decimals)} {coin.symbol} so far.</p>
+            <p className="mt-2 text-xs text-[#3f6b54]">You have chipped in {amountIn(coin, view.myAmount)} so far.</p>
           ) : null}
         </div>
       ) : null}
@@ -362,7 +388,7 @@ export default function GoalPoolPanel({ poolId, network, userAddress }: Props) {
         <div className="rounded-[24px] border border-amber-200 bg-amber-50/80 p-5">
           <h3 className={`${goalDisplayFont.className} text-lg font-semibold text-amber-900`}>The goal is reached 🎉</h3>
           <p className="mt-1 text-sm text-amber-800">
-            Release the full pot ({fmt(view.total, coin.decimals)} {coin.symbol}) to {short(state.beneficiary)}.
+            Release the full pot ({amountIn(coin, view.total)}) to {short(state.beneficiary)}.
           </p>
           <button type="button" onClick={onRelease} disabled={busy} className={`${primaryBtn} mt-3 bg-amber-500 hover:bg-amber-600`}>
             Release the pot
@@ -375,10 +401,10 @@ export default function GoalPoolPanel({ poolId, network, userAddress }: Props) {
         <div className="rounded-[24px] border border-stone-200 bg-white p-5">
           <h3 className="text-base font-semibold text-[#171923]">Claim your refund</h3>
           <p className="mt-1 text-sm text-[#5f6674]">
-            This pool was cancelled. You can reclaim your {fmt(view.myAmount, coin.decimals)} {coin.symbol}.
+            This pool was cancelled. You can reclaim your {amountIn(coin, view.myAmount)}.
           </p>
           <button type="button" onClick={onRefund} disabled={busy} className={`${primaryBtn} mt-3`}>
-            Refund {fmt(view.myAmount, coin.decimals)} {coin.symbol}
+            Refund {amountIn(coin, view.myAmount)}
           </button>
         </div>
       ) : null}
@@ -401,7 +427,7 @@ export default function GoalPoolPanel({ poolId, network, userAddress }: Props) {
 
       {released ? (
         <p className="text-center text-sm font-medium text-emerald-700">
-          Released {fmt(view.total, coin.decimals)} {coin.symbol} to the beneficiary. 🎉
+          Released {amountIn(coin, view.total)} to the beneficiary. 🎉
         </p>
       ) : null}
 

@@ -1,52 +1,44 @@
-import { getCurrentCoinTypes, getCurrentTokens } from '@/services/network-config';
+// stablecoin-metadata.ts — label and decimals for a custody wallet's
+// stablecoin, as the recovery and balance cards show it.
+//
+// The only stablecoin the app supports is the network's USDC, known by exact
+// type (src/lib/supported-coins.ts). This used to guess: an unknown type got
+// 6 decimals and its raw type string as its label, and anything containing
+// "usde" got 9. Every other coin now comes back with `decimals: null`, which
+// the cards render as an unsupported coin rather than a scaled number.
+
+import { getCurrentNetwork } from '@/services/network-config';
+import { normalizeCoinType, resolveSupportedCoin, supportedCoinBySymbol } from '@/lib/supported-coins';
 
 export interface StablecoinMetadata {
   label: string;
   coinType: string;
-  decimals: number;
+  /** 6 for the network's USDC; null for every other coin, which is never scaled. */
+  decimals: number | null;
 }
 
 export function resolveStablecoinMetadata(targetCoinType?: string | null): StablecoinMetadata {
-  const coinTypes = getCurrentCoinTypes();
-  const tokens = getCurrentTokens();
-  const normalizedTarget = (targetCoinType || '').trim();
-  const normalizedUpper = normalizedTarget.toUpperCase();
+  const network = getCurrentNetwork();
+  const target = (targetCoinType || '').trim();
 
-  const usdcCoinType = coinTypes.USDC || tokens.USDC || normalizedTarget;
-  // Optional: testnet configures no USDT. Defaulting it to the target would
-  // make every non-USDC target match the USDT branch below.
-  const usdtCoinType = tokens.USDT || '';
-  const suiUsdeCoinType = coinTypes.SUI_USDE || tokens.SUI_USDE || normalizedTarget;
-
-  if (
-    !normalizedTarget ||
-    normalizedUpper === 'USDC' ||
-    normalizedTarget === usdcCoinType ||
-    normalizedTarget === tokens.USDC
-  ) {
-    return { label: 'USDC', coinType: usdcCoinType, decimals: 6 };
+  // Unnamed, or named by symbol: the network's USDC.
+  if (!target || target.toUpperCase() === 'USDC') {
+    const usdc = supportedCoinBySymbol('USDC', network);
+    return usdc
+      ? { label: 'USDC', coinType: usdc.coinType, decimals: usdc.decimals }
+      : { label: 'USDC', coinType: '', decimals: null };
   }
 
-  if (normalizedUpper === 'USDT' || (usdtCoinType && normalizedTarget === usdtCoinType)) {
-    return { label: 'USDT', coinType: usdtCoinType || normalizedTarget, decimals: 6 };
+  const coin = resolveSupportedCoin(target, network);
+  if (coin?.symbol === 'USDC') {
+    return { label: 'USDC', coinType: coin.coinType, decimals: coin.decimals };
   }
 
-  if (
-    normalizedUpper === 'SUI_USDE' ||
-    normalizedTarget === suiUsdeCoinType ||
-    normalizedTarget === tokens.SUI_USDE
-  ) {
-    return { label: 'SUI_USDE', coinType: suiUsdeCoinType, decimals: 9 };
-  }
-
-  const lowerTarget = normalizedTarget.toLowerCase();
-  if (lowerTarget.includes('usdt')) {
-    return { label: 'USDT', coinType: normalizedTarget, decimals: 6 };
-  }
-
-  if (lowerTarget.includes('sui_usde') || lowerTarget.includes('usde')) {
-    return { label: 'SUI_USDE', coinType: normalizedTarget, decimals: 9 };
-  }
-
-  return { label: normalizedTarget || 'USDC', coinType: normalizedTarget, decimals: 6 };
+  // Anything else, USDT and suiUSDe included, is not supported here.
+  const normalized = normalizeCoinType(target);
+  return {
+    label: normalized ? normalized.split('::').pop() || target : target.toUpperCase(),
+    coinType: normalized ? target : '',
+    decimals: null,
+  };
 }

@@ -34,6 +34,7 @@ import {
 } from '@/lib/recovery-execution';
 import { getRecoveryProposalUiState } from '@/lib/recovery-ui';
 import { resolveStablecoinMetadata } from '@/lib/stablecoin-metadata';
+import { UNSUPPORTED_COIN_LABEL } from '@/lib/supported-coins';
 import GoalPotProgress from '@/components/goals/GoalPotProgress';
 import { goalDisplayFont } from '@/lib/fonts';
 import { useMilestones } from '@/hooks/useMilestones';
@@ -1231,11 +1232,14 @@ export default function CircleDetails() {
     : recoveryStatus?.rawState === 3
       ? 100
       : 0;
-  const formatRecoveryAssetAmount = (rawAmount: bigint, decimals: number, label: string) =>
-    `${(Number(rawAmount) / 10 ** decimals).toLocaleString(undefined, {
-      minimumFractionDigits: 0,
-      maximumFractionDigits: decimals === 9 ? 4 : 2,
-    })} ${label}`;
+  // Null decimals: a coin the app does not support, named but never scaled.
+  const formatRecoveryAssetAmount = (rawAmount: bigint, decimals: number | null, label: string) =>
+    decimals === null
+      ? `${label} (${UNSUPPORTED_COIN_LABEL})`
+      : `${(Number(rawAmount) / 10 ** decimals).toLocaleString(undefined, {
+          minimumFractionDigits: 0,
+          maximumFractionDigits: decimals === 9 ? 4 : 2,
+        })} ${label}`;
   const shouldShowRecoverySection = Boolean(
     recoveryProposal
       || recoveryExecution
