@@ -33,6 +33,8 @@ import { getRecoveryProposalUiState, getRecoveryDelegateCardCopy } from '@/lib/r
 import { resolveCustodyWalletId } from '@/lib/custody-wallet-discovery';
 import { recoveryCoinTypeErrorMessage, resolveRecoveryCoinType } from '@/lib/recovery-coin-type';
 import { resolveStablecoinMetadata } from '@/lib/stablecoin-metadata';
+import { readCustodyBalances, type CustodyBalances } from '@/lib/custody-wallet-balance';
+import { supportedCoinBySymbol, UNSUPPORTED_COIN_LABEL } from '@/lib/supported-coins';
 import { priceService } from '../../../../services/price-service';
 import { JoinRequest } from '../../../../services/database-service';
 import { getCirclePackageId, getSuiClientFromPool } from '../../../../services/circle-service';
@@ -130,15 +132,6 @@ const shortenAddress = (address: string) => {
 const normalizeAddress = (value: string | null | undefined): string | null =>
   typeof value === 'string' && value.length > 0 ? value.toLowerCase() : null;
 
-type DynamicFieldRef = {
-  objectId: string;
-  objectType?: string;
-  name?: {
-    type?: string;
-    value?: unknown;
-  };
-};
-
 const parseU64Like = (value: unknown): bigint => {
   if (typeof value === 'bigint') return value;
   if (typeof value === 'number' && Number.isFinite(value)) return BigInt(Math.max(0, Math.trunc(value)));
@@ -154,28 +147,6 @@ const asRecord = (value: unknown): Record<string, unknown> | null => {
   return value as Record<string, unknown>;
 };
 
-const extractNestedBalance = (value: unknown): bigint => {
-  if (value === null || typeof value === 'undefined') return 0n;
-  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'bigint') {
-    return parseU64Like(value);
-  }
-
-  if (typeof value === 'object') {
-    const record = value as Record<string, unknown>;
-    if ('fields' in record && record.fields && typeof record.fields === 'object') {
-      const fields = record.fields as Record<string, unknown>;
-      if ('value' in fields) {
-        return extractNestedBalance(fields.value);
-      }
-    }
-    if ('value' in record) {
-      return extractNestedBalance(record.value);
-    }
-  }
-
-  return 0n;
-};
-
 const toDisplayAmount = (value: bigint, decimals: number): number => {
   if (value <= 0n) return 0;
   return Number(value) / 10 ** decimals;
@@ -185,69 +156,6 @@ const formatTokenAmount = (value: number, maxFractionDigits: number): string => 
   if (!Number.isFinite(value)) return '0';
   const fixed = value.toFixed(maxFractionDigits);
   return fixed.replace(/\.?0+$/, '');
-};
-
-const normalizeMoveTypeKey = (value: string): string => value.trim().toLowerCase().replace(/^0x/, '');
-
-const readCustodyCoinBalance = async (
-  client: SuiClient,
-  walletDynamicFields: DynamicFieldRef[],
-  coinType: string
-): Promise<bigint> => {
-  if (!coinType) return 0n;
-
-  const normalizedCoinType = normalizeMoveTypeKey(coinType);
-  let total = 0n;
-
-  const typedField = walletDynamicFields.find((field) => {
-    const nameValue = field.name?.value;
-    return typeof nameValue === 'string' && normalizeMoveTypeKey(nameValue) === normalizedCoinType;
-  });
-
-  if (typedField?.objectId) {
-    try {
-      const fieldObject = await client.getObject({
-        id: typedField.objectId,
-        options: { showContent: true }
-      });
-
-      if (fieldObject.data?.content && 'fields' in fieldObject.data.content) {
-        const fieldContent = fieldObject.data.content.fields as Record<string, unknown>;
-        total += extractNestedBalance(fieldContent.value);
-      }
-    } catch (error) {
-      debugLog('Failed to read typed custody balance field', { coinType, error });
-    }
-  }
-
-  const legacyCoinFields = walletDynamicFields.filter(
-    (field) =>
-      typeof field.objectType === 'string' &&
-      (
-        field.objectType.toLowerCase().includes(`::coin::coin<0x${normalizedCoinType}>`) ||
-        field.objectType.toLowerCase().includes(`::coin::coin<${normalizedCoinType}>`)
-      )
-  );
-
-  if (legacyCoinFields.length > 0) {
-    const legacyCoinObjects = await Promise.all(
-      legacyCoinFields.map((field) =>
-        client.getObject({
-          id: field.objectId,
-          options: { showContent: true }
-        })
-      )
-    );
-
-    for (const coinObject of legacyCoinObjects) {
-      if (coinObject.data?.content && 'fields' in coinObject.data.content) {
-        const coinFields = coinObject.data.content.fields as Record<string, unknown>;
-        total += parseU64Like(coinFields.balance);
-      }
-    }
-  }
-
-  return total;
 };
 
 // Utility function to extract configuration from transaction inputs
@@ -731,6 +639,52 @@ export default function ManageCircle() {
   // round keeps running in its own coin, so the switch waits for it. Null
   // until checked; see src/lib/settlement-mode-lock.ts.
   const [settlementRound, setSettlementRound] = useState<RoundOpenRead | null>(null);
+
+  // The network's USDC: the only stablecoin a custody wallet settles in.
+  // (CustodyWallet has no `stablecoin_config` field to name another one.)
+  const manageUsdcCoinType = (): string =>
+    supportedCoinBySymbol('USDC', getCurrentNetwork() as NetworkType)?.coinType ?? '';
+
+  // Both the first load and the refresh buttons read the wallet with
+  // readCustodyBalances and show it through here, so they cannot disagree.
+  // USDC deposits are the paid members' recorded deposits, capped at what the
+  // wallet holds; the rest of the USDC is contributions.
+  const applyCustodyBalances = (
+    walletId: string,
+    balances: CustodyBalances,
+    outstandingDepositRaw: bigint,
+  ) => {
+    const suiDeposits = toDisplayAmount(balances.suiDeposits, 9);
+    const suiContributions = toDisplayAmount(balances.suiMain, 9);
+    const usdcTotal = toDisplayAmount(balances.usdc, 6);
+    const usdcDeposits = Math.min(toDisplayAmount(outstandingDepositRaw, 6), usdcTotal);
+    const usdcContributions = Math.max(0, usdcTotal - usdcDeposits);
+
+    setSuiSecurityDepositBalance(suiDeposits);
+    setSuiContributionBalance(suiContributions);
+    setUsdcSecurityDepositBalance(usdcDeposits);
+    setUsdcContributionBalance(usdcContributions);
+    setCircle(prev => prev ? {
+      ...prev,
+      custody: {
+        walletId,
+        stablecoinEnabled: false,
+        stablecoinType: 'USDC',
+        stablecoinCoinType: manageUsdcCoinType(),
+        stablecoinBalance: usdcTotal,
+        suiBalance: suiContributions + suiDeposits,
+        securityDeposits: suiDeposits > 0 ? suiDeposits : usdcDeposits,
+      },
+    } : prev);
+    debugLog('Custody wallet balances', {
+      walletId: shortenAddress(walletId),
+      suiContributions,
+      suiDeposits,
+      usdcTotal,
+      usdcDeposits,
+      usdcContributions,
+    });
+  };
   const [paidOutInCurrentSessionMembers, setPaidOutInCurrentSessionMembers] = useState<Set<string>>(new Set());
 
   // State for local currency display of custody USDC balances in manage page
@@ -1373,104 +1327,12 @@ export default function ManageCircle() {
           }
 
           if (walletId) {
-              // Parallel fetch: wallet data and dynamic fields
-              const [walletData, walletDynamicFields] = await Promise.all([
-                client.getObject({ id: walletId, options: { showContent: true } }),
-                client.getDynamicFields({ parentId: walletId })
-              ]);
-            if (walletData.data?.content && 'fields' in walletData.data.content) {
-                  const wf = walletData.data.content.fields as Record<string, SuiFieldValue>; 
-                  // Access nested fields safely
-                  const stablecoinConfigFields = wf.stablecoin_config && typeof wf.stablecoin_config === 'object' && wf.stablecoin_config !== null && 'fields' in wf.stablecoin_config ? wf.stablecoin_config.fields as Record<string, unknown> : null;
-                  const balanceFields = wf.balance && typeof wf.balance === 'object' && wf.balance !== null && 'fields' in wf.balance ? wf.balance.fields as Record<string, unknown> : null;
-                  const dynamicFields = walletDynamicFields.data as unknown as DynamicFieldRef[];
-                  const stablecoinMeta = resolveStablecoinMetadata(
-                    typeof stablecoinConfigFields?.target_coin_type === 'string'
-                      ? stablecoinConfigFields.target_coin_type
-                      : null
-                  );
-                  
-                  // Get the main balance - this represents contributions
-                  const contributionsBalance = balanceFields?.value ? Number(balanceFields.value) / 1e9 : 0;
-                  
-                  // Look for security deposits in dynamic fields (coin_objects)
-                  let securityDeposits = 0;
-                  
-                  // Process security deposits from dynamic fields (using pre-fetched data)
-                  try {
-                    debugLog('Custody wallet dynamic fields', { count: dynamicFields.length });
-                    
-                    // Look for coin objects in the dynamic fields
-                    for (const field of dynamicFields) {
-                      if (field.objectType && typeof field.objectType === 'string' && 
-                          field.objectType.includes('::coin::Coin<0x2::sui::SUI>')) {
-                        
-                        // Found a potential SUI coin object, get its balance
-                        const coinData = await client.getObject({
-                          id: field.objectId,
-                          options: { showContent: true }
-                        });
-                        
-                        if (coinData.data?.content && 'fields' in coinData.data.content) {
-                          const coinFields = coinData.data.content.fields as Record<string, unknown>;
-                          // For Coin objects, the balance is in the 'balance' field
-                          if (coinFields.balance) {
-                            securityDeposits += Number(coinFields.balance) / 1e9;
-                          }
-                        }
-                      }
-                    }
-                  } catch (error) {
-                    debugLog('Dynamic fields error, using fallback', error);
-                    securityDeposits = 0;
-                  }
-
-                  const stablecoinBalanceRaw = await readCustodyCoinBalance(
-                    client,
-                    dynamicFields,
-                    stablecoinMeta.coinType
-                  );
-                  const stablecoinBalance = toDisplayAmount(
-                    stablecoinBalanceRaw,
-                    stablecoinMeta.decimals
-                  );
-                  const stablecoinSecurityDeposits = Math.min(
-                    toDisplayAmount(outstandingSecurityDepositRaw, stablecoinMeta.decimals),
-                    stablecoinBalance
-                  );
-                  const stablecoinContributionBalance = Math.max(
-                    0,
-                    stablecoinBalance - stablecoinSecurityDeposits
-                  );
-
-                  debugLog('Custody wallet info', {
-                    walletId: shortenAddress(walletId),
-                    contributionsBalance,
-                    securityDeposits,
-                    stablecoinBalance,
-                    stablecoinSecurityDeposits,
-                    stablecoinContributionBalance,
-                    hasMainBalance: !!balanceFields?.value
-                  });
-
-                  setSuiSecurityDepositBalance(securityDeposits);
-                  setSuiContributionBalance(contributionsBalance);
-                  setUsdcSecurityDepositBalance(stablecoinSecurityDeposits);
-                  setUsdcContributionBalance(stablecoinContributionBalance);
-                  
-                  setCircle(prev => prev ? {
-                    ...prev,
-                    custody: {
-                      walletId,
-                      stablecoinEnabled: !!(stablecoinConfigFields?.enabled),
-                      stablecoinType: stablecoinMeta.label,
-                      stablecoinCoinType: stablecoinMeta.coinType,
-                      stablecoinBalance,
-                      suiBalance: contributionsBalance, // This is for regular contributions
-                      securityDeposits: securityDeposits > 0 ? securityDeposits : stablecoinSecurityDeposits,
-                    }
-                  } : prev);
-            }
+            // The same reader as the refresh buttons. This path read the main
+            // balance only in its nested form, so it showed 0 whenever the RPC
+            // returned the plain string, and it counted SUI deposits only as
+            // legacy Coin<SUI> objects. A failed read keeps what was shown.
+            const balances = await readCustodyBalances(client, walletId, manageUsdcCoinType());
+            applyCustodyBalances(walletId, balances, outstandingSecurityDepositRaw);
           }
         } catch (error) {
           logSuiReadError('Error fetching custody wallet info:', error);
@@ -2934,169 +2796,33 @@ export default function ManageCircle() {
     }
   };
 
-  // Function to fetch custody wallet SUI balance (separating security deposits and contributions)
-  const fetchCustodyWalletSuiBalance = async () => {
-    if (!circle?.custody?.walletId) return;
-    
+  // The refresh buttons: one read of the whole wallet (SUI and USDC) through
+  // the same reader and applier as the first load.
+  const refreshCustodyBalances = async () => {
+    const walletId = circle?.custody?.walletId;
+    if (!walletId) return;
     setFetchingSuiBalance(true);
-    try {
-      const client = getSuiClientFromPool(getCurrentRpcUrl());
-      
-      let mainSuiBalance = 0;
-      let dynamicFieldSuiBalance = 0;
-
-      // 1. Fetch the CustodyWallet object itself
-      const walletData = await client.getObject({ 
-        id: circle.custody.walletId, 
-        options: { showContent: true } 
-      });
-
-      if (walletData.data?.content && 'fields' in walletData.data.content) {
-        const wf = walletData.data.content.fields as Record<string, unknown>; 
-        // Extract the main balance (contributions)
-        if (wf.balance && typeof wf.balance === 'object' && 'fields' in wf.balance) {
-          mainSuiBalance = Number((wf.balance.fields as Record<string, unknown>)?.value || 0) / 1e9;
-        } else if (wf.balance) {
-           // Handle case where balance might be a direct value
-           mainSuiBalance = Number(wf.balance) / 1e9;
-        }
-        console.log(`[SUI Balance Fetch] Main Balance (Contributions): ${mainSuiBalance}`);
-      } else {
-         console.warn('[SUI Balance] Could not fetch main CustodyWallet object content.');
-      }
-
-      // 2. Fetch dynamic fields to find the SUI Coin object (security deposits)
-      const dynamicFieldsResult = await client.getDynamicFields({ parentId: circle.custody.walletId });
-
-      for (const field of dynamicFieldsResult.data) {
-        if (field.objectType && field.objectType.includes('::coin::Coin<0x2::sui::SUI>')) {
-          console.log(`[SUI Balance] Found SUI Coin dynamic field: ${field.objectId}`);
-          const coinData = await client.getObject({
-            id: field.objectId,
-            options: { showContent: true }
-          });
-          if (coinData.data?.content && 'fields' in coinData.data.content) {
-            const coinFields = coinData.data.content.fields as Record<string, unknown>;
-            if (coinFields.balance) {
-              dynamicFieldSuiBalance = Number(coinFields.balance) / 1e9;
-              console.log(`[SUI Balance Fetch] Dynamic Field Balance (Security Deposits): ${dynamicFieldSuiBalance}`);
-              break; // Assuming only one SUI coin dynamic field for security deposits
-            }
-          }
-        }
-
-      }
-
-      // Calculate final balances
-      const securityDepositSui = dynamicFieldSuiBalance;
-      const contributionSui = mainSuiBalance;
-      const totalSuiBalance = contributionSui + securityDepositSui;
-
-      // Set state
-      setCircle(prev => prev ? {
-        ...prev,
-        custody: {
-          ...prev.custody!,
-          suiBalance: totalSuiBalance,
-          securityDeposits: securityDepositSui
-        }
-      } : prev);
-      
-      setSuiSecurityDepositBalance(securityDepositSui);
-      setSuiContributionBalance(contributionSui);
-      
-      console.log('[SUI Balance] Final breakdown:', {
-        total: totalSuiBalance,
-        securityDeposit: securityDepositSui,
-        contribution: contributionSui
-      });
-
-    } catch (error) {
-      logSuiReadError('Error fetching custody wallet SUI balance:', error);
-    } finally {
-      setFetchingSuiBalance(false);
-    }
-  };
-
-  // Function to fetch custody wallet USDC balance
-  const fetchCustodyWalletUsdcBalance = async () => {
-    if (!circle?.custody?.walletId) return;
-    
     setFetchingUsdcBalance(true);
     try {
       const client = getSuiClientFromPool(getCurrentRpcUrl());
-      const [walletData, walletDynamicFields] = await Promise.all([
-        client.getObject({
-          id: circle.custody.walletId,
-          options: { showContent: true }
-        }),
-        client.getDynamicFields({ parentId: circle.custody.walletId })
-      ]);
-
-      const walletFields = walletData.data?.content && 'fields' in walletData.data.content
-        ? walletData.data.content.fields as Record<string, unknown>
-        : null;
-      const stablecoinConfigFields = walletFields?.stablecoin_config &&
-        typeof walletFields.stablecoin_config === 'object' &&
-        walletFields.stablecoin_config !== null &&
-        'fields' in walletFields.stablecoin_config
-          ? (walletFields.stablecoin_config as { fields: Record<string, unknown> }).fields
-          : null;
-
-      const stablecoinMeta = resolveStablecoinMetadata(
-        typeof stablecoinConfigFields?.target_coin_type === 'string'
-          ? stablecoinConfigFields.target_coin_type
-          : circle.custody.stablecoinCoinType || circle.custody.stablecoinType
-      );
-      const dynamicFields = walletDynamicFields.data as unknown as DynamicFieldRef[];
-      const liveStablecoinBalanceRaw = await readCustodyCoinBalance(
-        client,
-        dynamicFields,
-        stablecoinMeta.coinType
-      );
+      const balances = await readCustodyBalances(client, walletId, manageUsdcCoinType());
       const outstandingDepositRaw = members.reduce((total, member) => {
         if (!member.depositPaid) return total;
         return total + (member.depositBalanceRaw || 0n);
       }, 0n);
-
-      const newBalance = toDisplayAmount(liveStablecoinBalanceRaw, stablecoinMeta.decimals);
-      const newSecurityDepositBalance = Math.min(
-        toDisplayAmount(outstandingDepositRaw, stablecoinMeta.decimals),
-        newBalance
-      );
-      const newContributionBalance = Math.max(0, newBalance - newSecurityDepositBalance);
-
-      setUsdcSecurityDepositBalance(newSecurityDepositBalance);
-      setUsdcContributionBalance(newContributionBalance);
-      
-      setCircle(prev => prev ? {
-        ...prev,
-        custody: {
-          ...prev.custody!,
-          stablecoinType: stablecoinMeta.label,
-          stablecoinCoinType: stablecoinMeta.coinType,
-          stablecoinBalance: newBalance,
-          securityDeposits: newSecurityDepositBalance
-        }
-      } : prev);
-      
-      console.log('Custody stablecoin balances breakdown:', {
-        total: newBalance,
-        securityDeposits: newSecurityDepositBalance,
-        contributionFunds: newContributionBalance,
-        coinType: stablecoinMeta.coinType
-      });
+      applyCustodyBalances(walletId, balances, outstandingDepositRaw);
     } catch (error) {
-      logSuiReadError('Error fetching custody wallet USDC balance:', error);
+      // Keeps the last balances shown: a failed read is not a zero balance.
+      logSuiReadError('Error fetching custody wallet balances:', error);
     } finally {
+      setFetchingSuiBalance(false);
       setFetchingUsdcBalance(false);
     }
   };
 
   useEffect(() => {
     if (circle?.custody?.walletId) {
-      fetchCustodyWalletSuiBalance();
-      fetchCustodyWalletUsdcBalance();
+      void refreshCustodyBalances();
     }
     // Balance fetchers are stable component closures.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -3250,8 +2976,7 @@ export default function ManageCircle() {
 
     // Function to refresh all balances
     const refreshAllBalances = () => {
-      fetchCustodyWalletSuiBalance();
-      fetchCustodyWalletUsdcBalance();
+      void refreshCustodyBalances();
     };
 
     const usdcTotalBalance = circle.custody?.stablecoinBalance && circle.custody.stablecoinBalance > 0
@@ -4931,8 +4656,11 @@ export default function ManageCircle() {
     : recoveryStatus?.rawState === 3
       ? 100
       : 0;
-  const formatRecoveryAssetAmount = (rawAmount: bigint, decimals: number, label: string) =>
-    `${formatTokenAmount(toDisplayAmount(rawAmount, decimals), decimals === 9 ? 4 : 2)} ${label}`;
+  // Null decimals: a coin the app does not support, named but never scaled.
+  const formatRecoveryAssetAmount = (rawAmount: bigint, decimals: number | null, label: string) =>
+    decimals === null
+      ? `${label} (${UNSUPPORTED_COIN_LABEL})`
+      : `${formatTokenAmount(toDisplayAmount(rawAmount, decimals), decimals === 9 ? 4 : 2)} ${label}`;
 
   if (authLoading || !isAuthenticated || !account) {
     return null;
