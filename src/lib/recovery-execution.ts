@@ -1,9 +1,9 @@
 // recovery-execution.ts — what an executed emergency stop / auto-release did,
 // read from the events execute_recovery itself emits.
 //
-// The stablecoin type a recovery unwinds is deliberately not derived here any
-// more: read it from the custody wallet with resolveCustodyStablecoinType
-// (custody-wallet-discovery.ts). The event-derived version scanned
+// The coin type a recovery unwinds is deliberately not derived here any
+// more: read it from the custody wallet with resolveRecoveryCoinType
+// (recovery-coin-type.ts). The event-derived version scanned
 // StablecoinContributionMade (legacy rail only), StablecoinDepositWithPrice
 // (carries the literal "stablecoin", not a type) and StablecoinHoldingUpdated
 // (an unprefixed type name).

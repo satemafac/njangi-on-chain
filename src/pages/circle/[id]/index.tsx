@@ -42,11 +42,12 @@ import type { NetworkType } from '@/services/whatsapp-registry-service';
 import { priceService } from '../../../services/price-service';
 import { getCirclePackageId, getSuiClientFromPool } from '../../../services/circle-service';
 import { readObject, queryEventsCached, invalidateObject, invalidateSuiRead } from '@/lib/sui-read';
-import { resolveCustodyWalletId, resolveCustodyStablecoinType } from '@/lib/custody-wallet-discovery';
+import { resolveCustodyWalletId } from '@/lib/custody-wallet-discovery';
+import { recoveryCoinTypeErrorMessage, resolveRecoveryCoinType } from '@/lib/recovery-coin-type';
 import { getPooledSuiClient } from '@/services/sui-rpc-failover';
 import { logSuiReadError } from '@/services/sui-rpc-failover';
 import { ZkLoginClient, ZkLoginError } from '../../../services/zkLoginClient';
-import { getCurrentNetwork, getCurrentRpcUrl } from '../../../services/network-config';
+import { getCurrentCoinTypes, getCurrentNetwork, getCurrentRpcUrl } from '../../../services/network-config';
 
 // Define a proper Circle type to fix linter errors
 interface Circle {
@@ -66,7 +67,6 @@ interface Circle {
   isActive: boolean;
   custody?: {
     walletId: string;
-    stablecoinCoinType?: string;
   };
 }
 
@@ -192,7 +192,10 @@ export default function CircleDetails() {
   const [loadingRecoveryStatus, setLoadingRecoveryStatus] = useState(false);
   const [recoveryExecution, setRecoveryExecution] = useState<RecoveryExecutionStatus | null>(null);
   const [loadingRecoveryExecution, setLoadingRecoveryExecution] = useState(false);
-  const [recoveryStablecoinType, setRecoveryStablecoinType] = useState<string | null>(null);
+  const [recoveryCoinTypeRead, setRecoveryCoinTypeRead] = useState<{
+    walletId: string;
+    coinType: string;
+  } | null>(null);
   const [viewerCanAutoReleaseFallback, setViewerCanAutoReleaseFallback] = useState(false);
   const [delegateCanAutoReleaseFallback, setDelegateCanAutoReleaseFallback] = useState(false);
   const [loadingRecoveryLiveness, setLoadingRecoveryLiveness] = useState(false);
@@ -588,11 +591,16 @@ export default function CircleDetails() {
         }
 
       let custodyWalletId: string | null = null;
-      let custodyStablecoinCoinType: string | undefined;
       try {
         // Three-tier discovery — see custody-wallet-discovery.ts. Members
         // need this resolved to execute a passed emergency stop; the event-
         // only lookup went dark when RPC retention expired.
+        //
+        // The recovery coin type is NOT read here. This used to take it from
+        // the wallet's `stablecoin_config.target_coin_type`, a field the
+        // CustodyWallet struct does not have (every upgrade keeps the original
+        // package's layout), and a configured coin is not a held one anyway.
+        // resolveRecoveryCoinType reads what the wallet holds.
         const custodyResolution = await resolveCustodyWalletId({
           client: getPooledSuiClient(),
           circleId: id as string,
@@ -601,23 +609,6 @@ export default function CircleDetails() {
           queryEvents: (params) => queryEventsCached(params),
         });
         custodyWalletId = custodyResolution?.walletId ?? null;
-
-        if (custodyWalletId) {
-          const walletData = await readObject(custodyWalletId, { showContent: true });
-
-          if (walletData.data?.content && 'fields' in walletData.data.content) {
-            const walletFields = walletData.data.content.fields as Record<string, SuiFieldValue>;
-            const stablecoinConfigFields = walletFields.stablecoin_config
-              && typeof walletFields.stablecoin_config === 'object'
-              && walletFields.stablecoin_config !== null
-              && 'fields' in walletFields.stablecoin_config
-              ? walletFields.stablecoin_config.fields as Record<string, unknown>
-              : null;
-            if (typeof stablecoinConfigFields?.target_coin_type === 'string') {
-              custodyStablecoinCoinType = stablecoinConfigFields.target_coin_type;
-            }
-          }
-        }
       } catch (error) {
         logSuiReadError('Details - Error fetching custody wallet info:', error);
       }
@@ -638,12 +629,7 @@ export default function CircleDetails() {
           currentMembers: actualMemberCount,
         nextPayoutTime: Number(fields.next_payout_time || 0),
           isActive: isActive,
-        custody: custodyWalletId
-          ? {
-              walletId: custodyWalletId,
-              stablecoinCoinType: custodyStablecoinCoinType,
-            }
-          : undefined,
+        custody: custodyWalletId ? { walletId: custodyWalletId } : undefined,
         });
 
     } catch (error) {
@@ -710,10 +696,12 @@ export default function CircleDetails() {
     }
   }, [circlePackageId, id, userAddress]);
 
-  // The stablecoin a recovery unwinds — the type argument execute_recovery /
+  // The coin type a recovery unwinds — the type argument execute_recovery /
   // trigger_auto_release take, and the decimals the refund totals below are
-  // formatted with — read from the custody wallet itself (object reads, once
-  // per wallet). It used to come from three event scans every poll, and none
+  // formatted with — read from what the custody wallet holds (object reads,
+  // once per wallet; the rule is in recovery-coin-type.ts). A wallet that
+  // holds no stablecoin, as when every member paid in SUI, gets the network's
+  // USDC type. It used to come from three event scans every poll, and none
   // of them describes an escrow-era wallet: StablecoinContributionMade is the
   // retired legacy rail, StablecoinDepositWithPrice carries the literal
   // "stablecoin" rather than a type, and StablecoinHoldingUpdated an
@@ -722,12 +710,25 @@ export default function CircleDetails() {
   // read keeps the last known type; the handlers re-read the wallet before
   // signing when none is known.
   const custodyWalletIdForRecovery = circle?.custody?.walletId ?? null;
+  // Keyed by wallet: Next reuses this page across circles, and another
+  // circle's coin type must never reach this circle's transaction.
+  const recoveryStablecoinType =
+    recoveryCoinTypeRead && recoveryCoinTypeRead.walletId === custodyWalletIdForRecovery
+      ? recoveryCoinTypeRead.coinType
+      : null;
   useEffect(() => {
     if (!custodyWalletIdForRecovery) return;
     let cancelled = false;
-    void resolveCustodyStablecoinType(getPooledSuiClient(), custodyWalletIdForRecovery).then(
-      (coinType) => {
-        if (!cancelled && coinType) setRecoveryStablecoinType(coinType);
+    resolveRecoveryCoinType(
+      getPooledSuiClient(),
+      custodyWalletIdForRecovery,
+      getCurrentCoinTypes().USDC,
+    ).then(
+      ({ coinType }) => {
+        if (!cancelled) setRecoveryCoinTypeRead({ walletId: custodyWalletIdForRecovery, coinType });
+      },
+      (error) => {
+        console.warn('[recovery] could not resolve the recovery coin type; the handlers re-read before signing', error);
       },
     );
     return () => {
@@ -1221,9 +1222,7 @@ export default function CircleDetails() {
     viewerIsEligibleActiveMember: viewerCanAutoReleaseFallback,
     delegateIsEligibleActiveMember: delegateCanAutoReleaseFallback,
   });
-  const recoveryStablecoinMeta = resolveStablecoinMetadata(
-    recoveryStablecoinType || circle?.custody?.stablecoinCoinType || null,
-  );
+  const recoveryStablecoinMeta = resolveStablecoinMetadata(recoveryStablecoinType);
   const canTriggerAutoRelease = autoReleaseUi.viewerCanTrigger;
   const recoveryExecutionStarted = Boolean(recoveryExecution?.startedAt);
   const recoveryExecutionCompleted = Boolean(recoveryExecution?.completedAt) || recoveryStatus?.rawState === 3;
@@ -1305,6 +1304,30 @@ export default function CircleDetails() {
     });
   };
 
+  // The type argument execute_recovery / trigger_auto_release are signed
+  // with, or null after telling the member why there is none. The rule lives
+  // in recovery-coin-type.ts: the coin the wallet holds; the network's USDC
+  // when every read succeeded and the wallet holds no stablecoin (a circle
+  // whose members all paid in SUI); an error, never a guess, when the wallet
+  // could not be read. The read behind recoveryStablecoinType may not have
+  // answered yet, or may have failed, so a missing type is read again here.
+  const recoveryCoinTypeForSigning = async (walletId: string): Promise<string | null> => {
+    if (recoveryCoinTypeRead?.walletId === walletId) return recoveryCoinTypeRead.coinType;
+    try {
+      const { coinType } = await resolveRecoveryCoinType(
+        getPooledSuiClient(),
+        walletId,
+        getCurrentCoinTypes().USDC,
+      );
+      setRecoveryCoinTypeRead({ walletId, coinType });
+      return coinType;
+    } catch (error) {
+      console.error('Details - Recovery coin type unavailable:', error);
+      toast.error(recoveryCoinTypeErrorMessage(error));
+      return null;
+    }
+  };
+
   const handleTriggerAutoRelease = async () => {
     if (!circle || !circle.custody?.walletId || !account) {
       toast.error('Recovery wallet information is unavailable.');
@@ -1313,20 +1336,8 @@ export default function CircleDetails() {
     if (recoveryInFlightRef.current.autoRelease) return;
     const walletId = circle.custody.walletId;
 
-    let stablecoinType: string | null =
-      recoveryStablecoinType || circle.custody.stablecoinCoinType || null;
-    if (!stablecoinType) {
-      // Same retention-proof fallback as the emergency-stop handler.
-      stablecoinType = await resolveCustodyStablecoinType(
-        getPooledSuiClient(),
-        walletId,
-      );
-    }
-    if (!stablecoinType) {
-      toast.error('Stablecoin type is unavailable for this custody wallet.');
-      return;
-    }
-    const resolvedStablecoinType = stablecoinType;
+    const resolvedStablecoinType = await recoveryCoinTypeForSigning(walletId);
+    if (!resolvedStablecoinType) return;
     // Checked again after the lookup: an earlier click's dialog may have been
     // confirmed while it ran.
     if (recoveryInFlightRef.current.autoRelease) return;
@@ -1388,23 +1399,8 @@ export default function CircleDetails() {
     if (recoveryInFlightRef.current.execute) return;
     const walletId = circle.custody.walletId;
 
-    // The wallet read behind recoveryStablecoinType may not have answered
-    // yet (or failed), and stablecoin_config was never set on some wallets.
-    // Re-read the wallet's own balance fields, which cannot forget what it
-    // holds.
-    let stablecoinType: string | null =
-      recoveryStablecoinType || circle.custody.stablecoinCoinType || null;
-    if (!stablecoinType) {
-      stablecoinType = await resolveCustodyStablecoinType(
-        getPooledSuiClient(),
-        walletId,
-      );
-    }
-    if (!stablecoinType) {
-      toast.error('Stablecoin type is unavailable for this custody wallet.');
-      return;
-    }
-    const resolvedStablecoinType = stablecoinType;
+    const resolvedStablecoinType = await recoveryCoinTypeForSigning(walletId);
+    if (!resolvedStablecoinType) return;
     // Checked again after the lookup: an earlier click's dialog may have been
     // confirmed while it ran.
     if (recoveryInFlightRef.current.execute) return;
