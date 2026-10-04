@@ -576,7 +576,7 @@ describe('buildTemplate (Meta-approved business-initiated sends)', () => {
       USDC_ESCROW,
     )!;
     expect(t.name).toBe('payout_processed');
-    expect(t.language).toBe('en_US');
+    expect(t.language).toBe('en');
     const params = bodyParams(t);
     expect(params).toHaveLength(5);
     expect(params[0]).toBe('Bamenda Savers');

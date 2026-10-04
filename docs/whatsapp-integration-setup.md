@@ -181,10 +181,10 @@ the window. To switch to templates (the header comment of
    [`WHATSAPP_TEMPLATES.md`](../WHATSAPP_TEMPLATES.md). It no longer sends
    `circle_link`, whose approved body promises updates nothing sends; that
    file proposes a replacement.
-2. Create them in English (US), `en_US`: the crons send every template as
-   `en_US`, the language they were approved under in WhatsApp Manager. Meta
-   treats `en` and `en_US` as different languages and fails a send whose
-   language has no approved version (error 132001).
+2. Create them in English, `en` (not English (US)): the crons send every
+   template as `en`, the language all existing templates were approved under
+   in WhatsApp Manager. Meta treats `en` and `en_US` as different languages and
+   fails a send whose language has no approved version (error 132001).
 3. Match each template's placeholders to the parameters the code passes (see
    `src/lib/whatsapp-bot/circle-events.ts`). A mismatch fails with error
    132000.
