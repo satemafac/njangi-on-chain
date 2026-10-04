@@ -3,6 +3,7 @@ import {
   getPublicEnvForNetwork,
   type NetworkType,
 } from '@/config/public-env';
+import { SUI_COIN_TYPE, usdcCoinTypeForNetwork } from '@/config/coin-types';
 
 export type { NetworkType } from '@/config/public-env';
 
@@ -59,9 +60,11 @@ function buildNetworkConfig(network: NetworkType): NetworkConfig {
         apiKey: env.enokiApiKey,
         network: 'testnet' as const,
       },
+      // `coinTypes` and `tokens` name USDC through one resolver
+      // (src/config/coin-types.ts), so they cannot disagree again.
       coinTypes: {
-        SUI: '0x2::sui::SUI',
-        USDC: process.env.NEXT_PUBLIC_TESTNET_USDC || '0x26b3bc67befc214058ca78ea9a2690298d731a2d4309485ec3d40198063c4abc::usdc::USDC',
+        SUI: SUI_COIN_TYPE,
+        USDC: usdcCoinTypeForNetwork('testnet'),
         SUI_USDE: process.env.NEXT_PUBLIC_TESTNET_SUI_USDE || '',
       },
       cetus: {
@@ -79,8 +82,10 @@ function buildNetworkConfig(network: NetworkType): NetworkConfig {
         cert_id: '0x6f1a1ccc1c8bfc4a5612fbea2d62c531832e99cbf46582410ec92d938cd1c66a',
       },
       tokens: {
-        SUI: '0x2::sui::SUI',
-        USDC: '0x9e89965f542887a8f0383451ba553fedf62c04e4dc68f60dec5b8d7ad1436bd6::usdc::USDC',
+        SUI: SUI_COIN_TYPE,
+        // Was a literal 0x9e89…::usdc::USDC, a package that does not exist on
+        // testnet, while `coinTypes.USDC` named the live one.
+        USDC: usdcCoinTypeForNetwork('testnet'),
         // No USDT on testnet. The old entry's package address had 63 hex
         // digits, and no testnet object exists at it or at any one-digit
         // repair of it (checked 2026-10); neither does the old SUI_USDT pool.
@@ -104,10 +109,10 @@ function buildNetworkConfig(network: NetworkType): NetworkConfig {
       network: 'mainnet' as const,
     },
     coinTypes: {
-      SUI: '0x2::sui::SUI',
+      SUI: SUI_COIN_TYPE,
       // Native Circle-issued USDC — the asset CEX withdrawals (Binance, Coinbase, …)
       // deliver on Sui. NOT the Wormhole-bridged ::coin::COIN.
-      USDC: process.env.NEXT_PUBLIC_MAINNET_USDC || '0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC',
+      USDC: usdcCoinTypeForNetwork('mainnet'),
       SUI_USDE: process.env.NEXT_PUBLIC_MAINNET_SUI_USDE || '0x41d587e5336f1c86cad50d38a7136db99333bb9bda91cea4ba69115defeb1402::sui_usde::SUI_USDE',
     },
     cetus: {
@@ -127,8 +132,8 @@ function buildNetworkConfig(network: NetworkType): NetworkConfig {
       launchpad_pools_id: '0x1098fac992eab3a0ab7acf15bb654fc1cf29b5a6142c4ef1058e6c408dd15115',
     },
     tokens: {
-      SUI: '0x2::sui::SUI',
-      USDC: process.env.NEXT_PUBLIC_MAINNET_USDC || '0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC',
+      SUI: SUI_COIN_TYPE,
+      USDC: usdcCoinTypeForNetwork('mainnet'),
       // Native suiUSDT (Sui Bridge Tether) — what CEXes deliver for USDT on Sui
       USDT: process.env.NEXT_PUBLIC_MAINNET_USDT || '0x375f70cf2ae4c00bf37117d0c85a2c71545e6ee05c4a5c7d282cd66a4504b068::usdt::USDT',
       SUI_USDE: process.env.NEXT_PUBLIC_MAINNET_SUI_USDE || '0x41d587e5336f1c86cad50d38a7136db99333bb9bda91cea4ba69115defeb1402::sui_usde::SUI_USDE',

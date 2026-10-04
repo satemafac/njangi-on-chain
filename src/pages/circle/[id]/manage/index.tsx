@@ -33,6 +33,8 @@ import { getRecoveryProposalUiState, getRecoveryDelegateCardCopy } from '@/lib/r
 import { resolveCustodyWalletId } from '@/lib/custody-wallet-discovery';
 import { recoveryCoinTypeErrorMessage, resolveRecoveryCoinType } from '@/lib/recovery-coin-type';
 import { resolveStablecoinMetadata } from '@/lib/stablecoin-metadata';
+import { readCustodyBalances, type CustodyBalances } from '@/lib/custody-wallet-balance';
+import { supportedCoinBySymbol, UNSUPPORTED_COIN_LABEL } from '@/lib/supported-coins';
 import { priceService } from '../../../../services/price-service';
 import { JoinRequest } from '../../../../services/database-service';
 import { getCirclePackageId, getSuiClientFromPool } from '../../../../services/circle-service';
@@ -58,6 +60,12 @@ import WhatsAppCircleIntegration from '../../../../components/WhatsAppCircleInte
 import CycleEscrowPanel from '@/components/CycleEscrowPanel';
 import MilestonesManageCard from '@/components/milestones/MilestonesManageCard';
 import { resolveCircleSettlementCoin } from '@/lib/circle-settlement';
+import {
+  readRoundOpen,
+  settlementModeLock,
+  settlementModeLockMessage,
+  type RoundOpenRead,
+} from '@/lib/settlement-mode-lock';
 import { readObject, queryEventsCached, invalidateObject, invalidateSuiRead } from '@/lib/sui-read';
 import { allDepositsHeldForRounds, depositsHeldButFlagsCleared } from '@/lib/deposit-status';
 import { getPooledSuiClient, logSuiReadError } from '@/services/sui-rpc-failover';
@@ -124,15 +132,6 @@ const shortenAddress = (address: string) => {
 const normalizeAddress = (value: string | null | undefined): string | null =>
   typeof value === 'string' && value.length > 0 ? value.toLowerCase() : null;
 
-type DynamicFieldRef = {
-  objectId: string;
-  objectType?: string;
-  name?: {
-    type?: string;
-    value?: unknown;
-  };
-};
-
 const parseU64Like = (value: unknown): bigint => {
   if (typeof value === 'bigint') return value;
   if (typeof value === 'number' && Number.isFinite(value)) return BigInt(Math.max(0, Math.trunc(value)));
@@ -148,28 +147,6 @@ const asRecord = (value: unknown): Record<string, unknown> | null => {
   return value as Record<string, unknown>;
 };
 
-const extractNestedBalance = (value: unknown): bigint => {
-  if (value === null || typeof value === 'undefined') return 0n;
-  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'bigint') {
-    return parseU64Like(value);
-  }
-
-  if (typeof value === 'object') {
-    const record = value as Record<string, unknown>;
-    if ('fields' in record && record.fields && typeof record.fields === 'object') {
-      const fields = record.fields as Record<string, unknown>;
-      if ('value' in fields) {
-        return extractNestedBalance(fields.value);
-      }
-    }
-    if ('value' in record) {
-      return extractNestedBalance(record.value);
-    }
-  }
-
-  return 0n;
-};
-
 const toDisplayAmount = (value: bigint, decimals: number): number => {
   if (value <= 0n) return 0;
   return Number(value) / 10 ** decimals;
@@ -179,69 +156,6 @@ const formatTokenAmount = (value: number, maxFractionDigits: number): string => 
   if (!Number.isFinite(value)) return '0';
   const fixed = value.toFixed(maxFractionDigits);
   return fixed.replace(/\.?0+$/, '');
-};
-
-const normalizeMoveTypeKey = (value: string): string => value.trim().toLowerCase().replace(/^0x/, '');
-
-const readCustodyCoinBalance = async (
-  client: SuiClient,
-  walletDynamicFields: DynamicFieldRef[],
-  coinType: string
-): Promise<bigint> => {
-  if (!coinType) return 0n;
-
-  const normalizedCoinType = normalizeMoveTypeKey(coinType);
-  let total = 0n;
-
-  const typedField = walletDynamicFields.find((field) => {
-    const nameValue = field.name?.value;
-    return typeof nameValue === 'string' && normalizeMoveTypeKey(nameValue) === normalizedCoinType;
-  });
-
-  if (typedField?.objectId) {
-    try {
-      const fieldObject = await client.getObject({
-        id: typedField.objectId,
-        options: { showContent: true }
-      });
-
-      if (fieldObject.data?.content && 'fields' in fieldObject.data.content) {
-        const fieldContent = fieldObject.data.content.fields as Record<string, unknown>;
-        total += extractNestedBalance(fieldContent.value);
-      }
-    } catch (error) {
-      debugLog('Failed to read typed custody balance field', { coinType, error });
-    }
-  }
-
-  const legacyCoinFields = walletDynamicFields.filter(
-    (field) =>
-      typeof field.objectType === 'string' &&
-      (
-        field.objectType.toLowerCase().includes(`::coin::coin<0x${normalizedCoinType}>`) ||
-        field.objectType.toLowerCase().includes(`::coin::coin<${normalizedCoinType}>`)
-      )
-  );
-
-  if (legacyCoinFields.length > 0) {
-    const legacyCoinObjects = await Promise.all(
-      legacyCoinFields.map((field) =>
-        client.getObject({
-          id: field.objectId,
-          options: { showContent: true }
-        })
-      )
-    );
-
-    for (const coinObject of legacyCoinObjects) {
-      if (coinObject.data?.content && 'fields' in coinObject.data.content) {
-        const coinFields = coinObject.data.content.fields as Record<string, unknown>;
-        total += parseU64Like(coinFields.balance);
-      }
-    }
-  }
-
-  return total;
 };
 
 // Utility function to extract configuration from transaction inputs
@@ -721,6 +635,66 @@ export default function ManageCircle() {
   const [usdcContributionBalance, setUsdcContributionBalance] = useState<number | null>(null);
   const [fetchingUsdcBalance, setFetchingUsdcBalance] = useState(false);
   const [fetchingSuiBalance, setFetchingSuiBalance] = useState(false);
+  // Whether a round is still open, for the SUI/USDC mode switch: an open
+  // round keeps running in its own coin, so the switch waits for it. Null
+  // until checked; see src/lib/settlement-mode-lock.ts.
+  const [settlementRound, setSettlementRound] = useState<RoundOpenRead | null>(null);
+  // The last custody balance read failed: the card says so instead of
+  // "No balances available".
+  const [custodyBalancesUnreadable, setCustodyBalancesUnreadable] = useState(false);
+
+  // The network's USDC: the only stablecoin a custody wallet settles in.
+  // (CustodyWallet has no `stablecoin_config` field to name another one.)
+  // Throws when USDC is not configured: both callers keep the balances they
+  // showed, rather than reading a wallet without its USDC as holding none.
+  const manageUsdcCoinType = (): string => {
+    const usdc = supportedCoinBySymbol('USDC', getCurrentNetwork() as NetworkType);
+    if (!usdc) throw new Error('USDC is not configured for this network');
+    return usdc.coinType;
+  };
+
+  // Both the first load and the refresh buttons read the wallet with
+  // readCustodyBalances and show it through here, so they cannot disagree.
+  // USDC deposits are the paid members' recorded deposits, capped at what the
+  // wallet holds; the rest of the USDC is contributions.
+  const applyCustodyBalances = (
+    walletId: string,
+    balances: CustodyBalances,
+    outstandingDepositRaw: bigint,
+    usdcCoinType: string,
+  ) => {
+    const suiDeposits = toDisplayAmount(balances.suiDeposits, 9);
+    const suiContributions = toDisplayAmount(balances.suiMain, 9);
+    const usdcTotal = toDisplayAmount(balances.usdc, 6);
+    const usdcDeposits = Math.min(toDisplayAmount(outstandingDepositRaw, 6), usdcTotal);
+    const usdcContributions = Math.max(0, usdcTotal - usdcDeposits);
+
+    setCustodyBalancesUnreadable(false);
+    setSuiSecurityDepositBalance(suiDeposits);
+    setSuiContributionBalance(suiContributions);
+    setUsdcSecurityDepositBalance(usdcDeposits);
+    setUsdcContributionBalance(usdcContributions);
+    setCircle(prev => prev ? {
+      ...prev,
+      custody: {
+        walletId,
+        stablecoinEnabled: false,
+        stablecoinType: 'USDC',
+        stablecoinCoinType: usdcCoinType,
+        stablecoinBalance: usdcTotal,
+        suiBalance: suiContributions + suiDeposits,
+        securityDeposits: suiDeposits > 0 ? suiDeposits : usdcDeposits,
+      },
+    } : prev);
+    debugLog('Custody wallet balances', {
+      walletId: shortenAddress(walletId),
+      suiContributions,
+      suiDeposits,
+      usdcTotal,
+      usdcDeposits,
+      usdcContributions,
+    });
+  };
   const [paidOutInCurrentSessionMembers, setPaidOutInCurrentSessionMembers] = useState<Set<string>>(new Set());
 
   // State for local currency display of custody USDC balances in manage page
@@ -1363,106 +1337,16 @@ export default function ManageCircle() {
           }
 
           if (walletId) {
-              // Parallel fetch: wallet data and dynamic fields
-              const [walletData, walletDynamicFields] = await Promise.all([
-                client.getObject({ id: walletId, options: { showContent: true } }),
-                client.getDynamicFields({ parentId: walletId })
-              ]);
-            if (walletData.data?.content && 'fields' in walletData.data.content) {
-                  const wf = walletData.data.content.fields as Record<string, SuiFieldValue>; 
-                  // Access nested fields safely
-                  const stablecoinConfigFields = wf.stablecoin_config && typeof wf.stablecoin_config === 'object' && wf.stablecoin_config !== null && 'fields' in wf.stablecoin_config ? wf.stablecoin_config.fields as Record<string, unknown> : null;
-                  const balanceFields = wf.balance && typeof wf.balance === 'object' && wf.balance !== null && 'fields' in wf.balance ? wf.balance.fields as Record<string, unknown> : null;
-                  const dynamicFields = walletDynamicFields.data as unknown as DynamicFieldRef[];
-                  const stablecoinMeta = resolveStablecoinMetadata(
-                    typeof stablecoinConfigFields?.target_coin_type === 'string'
-                      ? stablecoinConfigFields.target_coin_type
-                      : null
-                  );
-                  
-                  // Get the main balance - this represents contributions
-                  const contributionsBalance = balanceFields?.value ? Number(balanceFields.value) / 1e9 : 0;
-                  
-                  // Look for security deposits in dynamic fields (coin_objects)
-                  let securityDeposits = 0;
-                  
-                  // Process security deposits from dynamic fields (using pre-fetched data)
-                  try {
-                    debugLog('Custody wallet dynamic fields', { count: dynamicFields.length });
-                    
-                    // Look for coin objects in the dynamic fields
-                    for (const field of dynamicFields) {
-                      if (field.objectType && typeof field.objectType === 'string' && 
-                          field.objectType.includes('::coin::Coin<0x2::sui::SUI>')) {
-                        
-                        // Found a potential SUI coin object, get its balance
-                        const coinData = await client.getObject({
-                          id: field.objectId,
-                          options: { showContent: true }
-                        });
-                        
-                        if (coinData.data?.content && 'fields' in coinData.data.content) {
-                          const coinFields = coinData.data.content.fields as Record<string, unknown>;
-                          // For Coin objects, the balance is in the 'balance' field
-                          if (coinFields.balance) {
-                            securityDeposits += Number(coinFields.balance) / 1e9;
-                          }
-                        }
-                      }
-                    }
-                  } catch (error) {
-                    debugLog('Dynamic fields error, using fallback', error);
-                    securityDeposits = 0;
-                  }
-
-                  const stablecoinBalanceRaw = await readCustodyCoinBalance(
-                    client,
-                    dynamicFields,
-                    stablecoinMeta.coinType
-                  );
-                  const stablecoinBalance = toDisplayAmount(
-                    stablecoinBalanceRaw,
-                    stablecoinMeta.decimals
-                  );
-                  const stablecoinSecurityDeposits = Math.min(
-                    toDisplayAmount(outstandingSecurityDepositRaw, stablecoinMeta.decimals),
-                    stablecoinBalance
-                  );
-                  const stablecoinContributionBalance = Math.max(
-                    0,
-                    stablecoinBalance - stablecoinSecurityDeposits
-                  );
-
-                  debugLog('Custody wallet info', {
-                    walletId: shortenAddress(walletId),
-                    contributionsBalance,
-                    securityDeposits,
-                    stablecoinBalance,
-                    stablecoinSecurityDeposits,
-                    stablecoinContributionBalance,
-                    hasMainBalance: !!balanceFields?.value
-                  });
-
-                  setSuiSecurityDepositBalance(securityDeposits);
-                  setSuiContributionBalance(contributionsBalance);
-                  setUsdcSecurityDepositBalance(stablecoinSecurityDeposits);
-                  setUsdcContributionBalance(stablecoinContributionBalance);
-                  
-                  setCircle(prev => prev ? {
-                    ...prev,
-                    custody: {
-                      walletId,
-                      stablecoinEnabled: !!(stablecoinConfigFields?.enabled),
-                      stablecoinType: stablecoinMeta.label,
-                      stablecoinCoinType: stablecoinMeta.coinType,
-                      stablecoinBalance,
-                      suiBalance: contributionsBalance, // This is for regular contributions
-                      securityDeposits: securityDeposits > 0 ? securityDeposits : stablecoinSecurityDeposits,
-                    }
-                  } : prev);
-            }
+            // The same reader as the refresh buttons. This path read the main
+            // balance only in its nested form, so it showed 0 whenever the RPC
+            // returned the plain string, and it counted SUI deposits only as
+            // legacy Coin<SUI> objects. A failed read keeps what was shown.
+            const usdcCoinType = manageUsdcCoinType();
+            const balances = await readCustodyBalances(client, walletId, usdcCoinType);
+            applyCustodyBalances(walletId, balances, outstandingSecurityDepositRaw, usdcCoinType);
           }
         } catch (error) {
+          setCustodyBalancesUnreadable(true);
           logSuiReadError('Error fetching custody wallet info:', error);
         }
 
@@ -2839,6 +2723,28 @@ export default function ManageCircle() {
     });
   }, []);
 
+  // Reads whether one of this circle's rounds is still open and records it
+  // for the mode switch's lock notice.
+  const checkSettlementRound = useCallback(async (): Promise<RoundOpenRead | null> => {
+    if (!circle?.id) return null;
+    const read = await readRoundOpen(
+      getCurrentNetwork() as NetworkType,
+      circle.id,
+      getSuiClientFromPool(getCurrentRpcUrl()),
+    );
+    setSettlementRound(read);
+    return read;
+  }, [circle?.id]);
+
+  // Checked once the switch could be available: before the circle starts, or
+  // while it is paused between laps.
+  const settlementModeSwitchable = Boolean(circle && (!circle.isActive || circle.paused));
+  useEffect(() => {
+    setSettlementRound(null);
+    if (!settlementModeSwitchable) return;
+    void checkSettlementRound();
+  }, [settlementModeSwitchable, checkSettlementRound]);
+
   // Circle-level routing policy toggle persisted on-chain.
   // We currently reuse the existing `toggleAutoSwap` endpoint for this flag.
   const toggleNativeSuiOptIn = async (enabled: boolean) => {
@@ -2848,9 +2754,17 @@ export default function ManageCircle() {
         return false;
       }
 
-      // Lock token mode changes while the current cycle is active.
+      // The contract only allows the switch while the circle is inactive or
+      // paused between laps; the app also waits for any open round, which
+      // keeps running in its own coin. Re-read right before signing.
       if (circle.isActive && !circle.paused) {
-        toast.error('Token mode is locked during an active cycle. Wait until the cycle is completed and payouts are finished.');
+        toast.error(settlementModeLockMessage('lap-running'));
+        return false;
+      }
+      const round = await checkSettlementRound();
+      const lock = settlementModeLock({ isActive: circle.isActive, paused: circle.paused, round });
+      if (lock) {
+        toast.error(settlementModeLockMessage(lock));
         return false;
       }
       
@@ -2894,169 +2808,35 @@ export default function ManageCircle() {
     }
   };
 
-  // Function to fetch custody wallet SUI balance (separating security deposits and contributions)
-  const fetchCustodyWalletSuiBalance = async () => {
-    if (!circle?.custody?.walletId) return;
-    
+  // The refresh buttons: one read of the whole wallet (SUI and USDC) through
+  // the same reader and applier as the first load.
+  const refreshCustodyBalances = async () => {
+    const walletId = circle?.custody?.walletId;
+    if (!walletId) return;
     setFetchingSuiBalance(true);
-    try {
-      const client = getSuiClientFromPool(getCurrentRpcUrl());
-      
-      let mainSuiBalance = 0;
-      let dynamicFieldSuiBalance = 0;
-
-      // 1. Fetch the CustodyWallet object itself
-      const walletData = await client.getObject({ 
-        id: circle.custody.walletId, 
-        options: { showContent: true } 
-      });
-
-      if (walletData.data?.content && 'fields' in walletData.data.content) {
-        const wf = walletData.data.content.fields as Record<string, unknown>; 
-        // Extract the main balance (contributions)
-        if (wf.balance && typeof wf.balance === 'object' && 'fields' in wf.balance) {
-          mainSuiBalance = Number((wf.balance.fields as Record<string, unknown>)?.value || 0) / 1e9;
-        } else if (wf.balance) {
-           // Handle case where balance might be a direct value
-           mainSuiBalance = Number(wf.balance) / 1e9;
-        }
-        console.log(`[SUI Balance Fetch] Main Balance (Contributions): ${mainSuiBalance}`);
-      } else {
-         console.warn('[SUI Balance] Could not fetch main CustodyWallet object content.');
-      }
-
-      // 2. Fetch dynamic fields to find the SUI Coin object (security deposits)
-      const dynamicFieldsResult = await client.getDynamicFields({ parentId: circle.custody.walletId });
-
-      for (const field of dynamicFieldsResult.data) {
-        if (field.objectType && field.objectType.includes('::coin::Coin<0x2::sui::SUI>')) {
-          console.log(`[SUI Balance] Found SUI Coin dynamic field: ${field.objectId}`);
-          const coinData = await client.getObject({
-            id: field.objectId,
-            options: { showContent: true }
-          });
-          if (coinData.data?.content && 'fields' in coinData.data.content) {
-            const coinFields = coinData.data.content.fields as Record<string, unknown>;
-            if (coinFields.balance) {
-              dynamicFieldSuiBalance = Number(coinFields.balance) / 1e9;
-              console.log(`[SUI Balance Fetch] Dynamic Field Balance (Security Deposits): ${dynamicFieldSuiBalance}`);
-              break; // Assuming only one SUI coin dynamic field for security deposits
-            }
-          }
-        }
-
-      }
-
-      // Calculate final balances
-      const securityDepositSui = dynamicFieldSuiBalance;
-      const contributionSui = mainSuiBalance;
-      const totalSuiBalance = contributionSui + securityDepositSui;
-
-      // Set state
-      setCircle(prev => prev ? {
-        ...prev,
-        custody: {
-          ...prev.custody!,
-          suiBalance: totalSuiBalance,
-          securityDeposits: securityDepositSui
-        }
-      } : prev);
-      
-      setSuiSecurityDepositBalance(securityDepositSui);
-      setSuiContributionBalance(contributionSui);
-      
-      console.log('[SUI Balance] Final breakdown:', {
-        total: totalSuiBalance,
-        securityDeposit: securityDepositSui,
-        contribution: contributionSui
-      });
-
-    } catch (error) {
-      logSuiReadError('Error fetching custody wallet SUI balance:', error);
-    } finally {
-      setFetchingSuiBalance(false);
-    }
-  };
-
-  // Function to fetch custody wallet USDC balance
-  const fetchCustodyWalletUsdcBalance = async () => {
-    if (!circle?.custody?.walletId) return;
-    
     setFetchingUsdcBalance(true);
     try {
       const client = getSuiClientFromPool(getCurrentRpcUrl());
-      const [walletData, walletDynamicFields] = await Promise.all([
-        client.getObject({
-          id: circle.custody.walletId,
-          options: { showContent: true }
-        }),
-        client.getDynamicFields({ parentId: circle.custody.walletId })
-      ]);
-
-      const walletFields = walletData.data?.content && 'fields' in walletData.data.content
-        ? walletData.data.content.fields as Record<string, unknown>
-        : null;
-      const stablecoinConfigFields = walletFields?.stablecoin_config &&
-        typeof walletFields.stablecoin_config === 'object' &&
-        walletFields.stablecoin_config !== null &&
-        'fields' in walletFields.stablecoin_config
-          ? (walletFields.stablecoin_config as { fields: Record<string, unknown> }).fields
-          : null;
-
-      const stablecoinMeta = resolveStablecoinMetadata(
-        typeof stablecoinConfigFields?.target_coin_type === 'string'
-          ? stablecoinConfigFields.target_coin_type
-          : circle.custody.stablecoinCoinType || circle.custody.stablecoinType
-      );
-      const dynamicFields = walletDynamicFields.data as unknown as DynamicFieldRef[];
-      const liveStablecoinBalanceRaw = await readCustodyCoinBalance(
-        client,
-        dynamicFields,
-        stablecoinMeta.coinType
-      );
+      const usdcCoinType = manageUsdcCoinType();
+      const balances = await readCustodyBalances(client, walletId, usdcCoinType);
       const outstandingDepositRaw = members.reduce((total, member) => {
         if (!member.depositPaid) return total;
         return total + (member.depositBalanceRaw || 0n);
       }, 0n);
-
-      const newBalance = toDisplayAmount(liveStablecoinBalanceRaw, stablecoinMeta.decimals);
-      const newSecurityDepositBalance = Math.min(
-        toDisplayAmount(outstandingDepositRaw, stablecoinMeta.decimals),
-        newBalance
-      );
-      const newContributionBalance = Math.max(0, newBalance - newSecurityDepositBalance);
-
-      setUsdcSecurityDepositBalance(newSecurityDepositBalance);
-      setUsdcContributionBalance(newContributionBalance);
-      
-      setCircle(prev => prev ? {
-        ...prev,
-        custody: {
-          ...prev.custody!,
-          stablecoinType: stablecoinMeta.label,
-          stablecoinCoinType: stablecoinMeta.coinType,
-          stablecoinBalance: newBalance,
-          securityDeposits: newSecurityDepositBalance
-        }
-      } : prev);
-      
-      console.log('Custody stablecoin balances breakdown:', {
-        total: newBalance,
-        securityDeposits: newSecurityDepositBalance,
-        contributionFunds: newContributionBalance,
-        coinType: stablecoinMeta.coinType
-      });
+      applyCustodyBalances(walletId, balances, outstandingDepositRaw, usdcCoinType);
     } catch (error) {
-      logSuiReadError('Error fetching custody wallet USDC balance:', error);
+      // Keeps the last balances shown: a failed read is not a zero balance.
+      setCustodyBalancesUnreadable(true);
+      logSuiReadError('Error fetching custody wallet balances:', error);
     } finally {
+      setFetchingSuiBalance(false);
       setFetchingUsdcBalance(false);
     }
   };
 
   useEffect(() => {
     if (circle?.custody?.walletId) {
-      fetchCustodyWalletSuiBalance();
-      fetchCustodyWalletUsdcBalance();
+      void refreshCustodyBalances();
     }
     // Balance fetchers are stable component closures.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -3131,7 +2911,15 @@ export default function ManageCircle() {
   }) => {
     const [allowNativeSui, setAllowNativeSui] = useState(circle.autoSwapEnabled);
     const [isConfiguring, setIsConfiguring] = useState(false);
-    const isTokenModeLockedForActiveCycle = circle.isActive && !circle.paused;
+    // Locked while a lap runs (the contract refuses) and while a round is
+    // open. A check that failed or has not answered leaves the switch
+    // clickable: a click checks again before anything is signed.
+    const tokenModeLock = settlementModeLock({
+      isActive: circle.isActive,
+      paused: circle.paused,
+      round: settlementRound,
+    });
+    const isTokenModeLocked = tokenModeLock === 'lap-running' || tokenModeLock === 'round-open';
     
     // Keep local toggle state synchronized with on-chain circle config.
     useEffect(() => {
@@ -3142,8 +2930,14 @@ export default function ManageCircle() {
     }, [circle.autoSwapEnabled, allowNativeSui]);
     
     const handleToggleNativeSuiOptIn = async () => {
-      if (isTokenModeLockedForActiveCycle) {
-        toast.error('Token mode is locked during an active cycle. Wait until the cycle is completed and payouts are finished.');
+      if (circle.isActive && !circle.paused) {
+        toast.error(settlementModeLockMessage('lap-running'));
+        return;
+      }
+      const round = await checkSettlementRound();
+      const lock = settlementModeLock({ isActive: circle.isActive, paused: circle.paused, round });
+      if (lock) {
+        toast.error(settlementModeLockMessage(lock));
         return;
       }
 
@@ -3196,8 +2990,7 @@ export default function ManageCircle() {
 
     // Function to refresh all balances
     const refreshAllBalances = () => {
-      fetchCustodyWalletSuiBalance();
-      fetchCustodyWalletUsdcBalance();
+      void refreshCustodyBalances();
     };
 
     const usdcTotalBalance = circle.custody?.stablecoinBalance && circle.custody.stablecoinBalance > 0
@@ -3252,8 +3045,8 @@ export default function ManageCircle() {
                     <button
                       type="button"
                       onClick={handleToggleNativeSuiOptIn}
-                      disabled={isConfiguring || isTokenModeLockedForActiveCycle}
-                      className={`relative inline-flex h-6 w-11 items-center rounded-full ${allowNativeSui ? 'bg-blue-600' : 'bg-gray-200'} ${(isConfiguring || isTokenModeLockedForActiveCycle) ? 'opacity-50 cursor-not-allowed' : ''}`}
+                      disabled={isConfiguring || isTokenModeLocked}
+                      className={`relative inline-flex h-6 w-11 items-center rounded-full ${allowNativeSui ? 'bg-blue-600' : 'bg-gray-200'} ${(isConfiguring || isTokenModeLocked) ? 'opacity-50 cursor-not-allowed' : ''}`}
                     >
                       <span className="sr-only">Enable SUI circle mode</span>
                       <span 
@@ -3263,10 +3056,11 @@ export default function ManageCircle() {
                   </div>
                 </div>
 
-                {isTokenModeLockedForActiveCycle && (
+                {tokenModeLock && (
                   <div className="rounded-[18px] border border-amber-200 bg-amber-50 p-3">
-                    <p className="text-sm text-amber-700">
-                      <strong>Locked:</strong> Token mode cannot be changed while cycle {circle.currentCycle} is active. Update it after the cycle completes and payouts are done.
+                    <p role="status" className="text-sm text-amber-700">
+                      {isTokenModeLocked ? <strong>Locked: </strong> : null}
+                      {settlementModeLockMessage(tokenModeLock)}
                     </p>
                   </div>
                 )}
@@ -3305,6 +3099,13 @@ export default function ManageCircle() {
                         )}
                       </button>
                     </div>
+
+                    {custodyBalancesUnreadable && (
+                      <p role="status" className="mb-3 rounded-[14px] border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                        We couldn&rsquo;t read the circle wallet&rsquo;s balances just now. The figures below are the
+                        last ones read, if any. Refresh to try again.
+                      </p>
+                    )}
 
                     <div className="space-y-3">
                       <div className="grid grid-cols-1 gap-2 sm:gap-3 md:grid-cols-2">
@@ -3379,7 +3180,7 @@ export default function ManageCircle() {
                           </div>
                         )}
 
-                        {!fetchingUsdcBalance && (usdcContributionBalance === null || usdcContributionBalance === 0) &&
+                        {!fetchingUsdcBalance && !custodyBalancesUnreadable && (usdcContributionBalance === null || usdcContributionBalance === 0) &&
                           (usdcSecurityDepositBalance === null || usdcSecurityDepositBalance === 0) && (
                           <p className="text-sm text-gray-500 mt-1">No USDC balances available</p>
                         )}
@@ -3453,7 +3254,7 @@ export default function ManageCircle() {
                           </div>
                         )}
 
-                        {!fetchingSuiBalance && (suiContributionBalance === null || suiContributionBalance === 0) &&
+                        {!fetchingSuiBalance && !custodyBalancesUnreadable && (suiContributionBalance === null || suiContributionBalance === 0) &&
                           (suiSecurityDepositBalance === null || suiSecurityDepositBalance === 0) && (
                           <div>
                             <p className="text-sm text-gray-500 mt-1">No SUI balances available</p>
@@ -4876,8 +4677,11 @@ export default function ManageCircle() {
     : recoveryStatus?.rawState === 3
       ? 100
       : 0;
-  const formatRecoveryAssetAmount = (rawAmount: bigint, decimals: number, label: string) =>
-    `${formatTokenAmount(toDisplayAmount(rawAmount, decimals), decimals === 9 ? 4 : 2)} ${label}`;
+  // Null decimals: a coin the app does not support, named but never scaled.
+  const formatRecoveryAssetAmount = (rawAmount: bigint, decimals: number | null, label: string) =>
+    decimals === null
+      ? `${label} (${UNSUPPORTED_COIN_LABEL})`
+      : `${formatTokenAmount(toDisplayAmount(rawAmount, decimals), decimals === 9 ? 4 : 2)} ${label}`;
 
   if (authLoading || !isAuthenticated || !account) {
     return null;
@@ -7442,7 +7246,7 @@ export default function ManageCircle() {
                       circleIsActive={circle.isActive && depositsHeldForRounds}
                       autoOpenWhenReady={autoOpenFirstRound}
                       onAutoOpenFired={() => setAutoOpenFirstRound(false)}
-                      {...resolveCircleSettlementCoin(circle.autoSwapEnabled)}
+                      openCoin={resolveCircleSettlementCoin(circle.autoSwapEnabled)}
                     />
                   </div>
                 ) : null}

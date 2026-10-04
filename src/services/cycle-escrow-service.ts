@@ -44,7 +44,13 @@ function packageIdFor(network: NetworkType): string {
 
 export interface CycleEscrowCallBase {
   network: NetworkType;
-  /** Canonical Move type argument, e.g. `0x2::sui::SUI` or a USDC type. */
+  /**
+   * Canonical Move type argument, e.g. `0x2::sui::SUI` or a USDC type. For
+   * every call on an existing escrow this is THAT escrow's coin (its
+   * snapshot `asset_type`), never the circle's current SUI/USDC mode: the
+   * mode can change between laps, and a call built with another type
+   * argument does not match the escrow. Only an open takes the mode.
+   */
   coinType: string;
 }
 
@@ -79,6 +85,13 @@ export interface OpenCycleParams extends CycleEscrowCallBase {
    * package carries the function; dropped silently otherwise.
    */
   releaseEscrowId?: string;
+  /**
+   * The coin of the escrow being released (its snapshot `asset_type`).
+   * `release_open_round<T>` takes `&CycleEscrow<T>`, and the released round
+   * may have run in the other coin before the circle's mode changed, so it
+   * is never the open's `coinType`. Required with `releaseEscrowId`.
+   */
+  releaseCoinType?: string;
 }
 
 export interface ContributeParams extends CycleEscrowCallBase {
@@ -153,9 +166,14 @@ export function buildOpenCycleTx(params: OpenCycleParams): BuildTransactionFn {
   // the indexed targets above.
   const releaseEscrowId =
     params.releaseEscrowId && isEscrowRoundGuardEnabled() ? params.releaseEscrowId : null;
+  // No fallback to the open's coin: a release built with another type
+  // argument does not match the escrow it names.
+  const releaseCoinType = releaseEscrowId
+    ? requireAddr(params.releaseCoinType ?? '', 'releaseCoinType')
+    : null;
   return (txb: Transaction) => {
-    if (releaseEscrowId) {
-      appendReleaseOpenRound(txb, packageId, params.coinType, circleId, releaseEscrowId);
+    if (releaseEscrowId && releaseCoinType) {
+      appendReleaseOpenRound(txb, packageId, releaseCoinType, circleId, releaseEscrowId);
     }
     const gateArgs = complianceConfigId ? [txb.object(complianceConfigId)] : [];
     txb.moveCall({

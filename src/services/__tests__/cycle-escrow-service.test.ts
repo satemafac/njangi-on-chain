@@ -219,7 +219,12 @@ describe('buildOpenCycleTx release chaining (Circle Record v1.2)', () => {
   it('chains release_open_round ahead of the open when the guard flag is on', () => {
     process.env[FLAG] = 'true';
     const { txb, calls } = makeFakeTxb();
-    buildOpenCycleTx({ ...BASE, stableDecimals: 6, releaseEscrowId: '0xrefunded' })(txb);
+    buildOpenCycleTx({
+      ...BASE,
+      stableDecimals: 6,
+      releaseEscrowId: '0xrefunded',
+      releaseCoinType: BASE.coinType,
+    })(txb);
 
     expect(calls.map((c) => c.target)).toEqual([
       '0xpkg::njangi_cycle_escrow::release_open_round',
@@ -231,6 +236,29 @@ describe('buildOpenCycleTx release chaining (Circle Record v1.2)', () => {
       { kind: 'object', id: '0xrefunded' },
       { kind: 'object', id: '0x6' },
     ]);
+  });
+
+  it("releases with the released escrow's own coin when the circle's mode changed since", () => {
+    // The refunded round ran in SUI; the circle now opens rounds in USDC.
+    process.env[FLAG] = 'true';
+    const { txb, calls } = makeFakeTxb();
+    buildOpenCycleTx({
+      ...BASE,
+      stableDecimals: 6,
+      releaseEscrowId: '0xrefunded',
+      releaseCoinType: '0x2::sui::SUI',
+    })(txb);
+
+    expect(calls[0].target).toBe('0xpkg::njangi_cycle_escrow::release_open_round');
+    expect(calls[0].typeArguments).toEqual(['0x2::sui::SUI']);
+    expect(calls[1].typeArguments).toEqual([BASE.coinType]);
+  });
+
+  it('refuses to build a release without the released escrow coin, rather than borrow the open coin', () => {
+    process.env[FLAG] = 'true';
+    expect(() =>
+      buildOpenCycleTx({ ...BASE, stableDecimals: 6, releaseEscrowId: '0xrefunded' }),
+    ).toThrow('Missing required argument: releaseCoinType');
   });
 
   it('drops the release while the flag is off: the published package may not carry it', () => {

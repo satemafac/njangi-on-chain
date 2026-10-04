@@ -21,12 +21,13 @@ import React, { useEffect, useRef, useState } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import { toast } from 'react-hot-toast';
 import { copyToClipboard, manualCopyMessage } from '@/lib/copy-to-clipboard';
+import { detectFundsArrival, type FundingBalances, type FundsArrival } from '@/lib/funds-arrival';
 
 const STRINGS = {
   title: 'Add funds',
-  subtitle: 'Transfer USDC from your exchange to this wallet',
+  subtitle: 'Transfer USDC or SUI from your exchange to this wallet',
   networkWarning:
-    'Send only USDC over the Sui network. Sending a different asset or network can permanently lose your funds.',
+    'Send only USDC or SUI, over the Sui network. Sending a different asset or network can permanently lose your funds.',
   yourAddress: 'Your Sui wallet address',
   copy: 'Copy address',
   copied: 'Address copied',
@@ -40,7 +41,7 @@ const STRINGS = {
     'Check your exchange’s minimum withdrawal and network fee before sending — fund monthly in one transfer to keep fees small.',
   watching: 'Watching for your transfer…',
   arrivedPrefix: 'Received ',
-  arrivedSuffix: ' USDC — you’re funded!',
+  arrivedSuffix: ' — you’re funded!',
   done: 'Done',
   close: 'Close',
 } as const;
@@ -138,11 +139,13 @@ export interface ReceiveFundsModalProps {
   onClose: () => void;
   walletAddress: string;
   /**
-   * Optional live balance getter (USDC, in whole units). When provided, the
-   * modal polls it while open and celebrates when the balance increases.
+   * Optional live balance getter: SUI and USDC in base units. When provided,
+   * the modal polls it while open and celebrates when either balance rises,
+   * in that coin's own decimals (src/lib/funds-arrival.ts). It used to poll
+   * one "USDC in whole units" number, so a SUI transfer was never noticed.
    */
-  pollBalance?: () => Promise<number>;
-  onArrived?: (newBalanceUsdc: number) => void;
+  pollBalance?: () => Promise<FundingBalances>;
+  onArrived?: (arrival: FundsArrival) => void;
 }
 
 export function ReceiveFundsModal({
@@ -156,8 +159,8 @@ export function ReceiveFundsModal({
   // can still be copied by hand after the toast is gone.
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
   const [exchange, setExchange] = useState<ExchangeId>('binance');
-  const [arrivedAmount, setArrivedAmount] = useState<number | null>(null);
-  const baselineRef = useRef<number | null>(null);
+  const [arrival, setArrival] = useState<FundsArrival | null>(null);
+  const baselineRef = useRef<FundingBalances | null>(null);
   const mountedRef = useRef(true);
 
   useEffect(() => {
@@ -175,15 +178,17 @@ export function ReceiveFundsModal({
 
     const tick = async () => {
       try {
-        const balance = await pollBalance();
+        const balances = await pollBalance();
         if (cancelled || !mountedRef.current) return;
         if (baselineRef.current === null) {
-          baselineRef.current = balance;
-        } else if (balance > baselineRef.current) {
-          const delta = balance - baselineRef.current;
-          setArrivedAmount(delta);
-          onArrived?.(balance);
-          return; // stop polling once funds land
+          baselineRef.current = balances;
+        } else {
+          const landed = detectFundsArrival(baselineRef.current, balances);
+          if (landed) {
+            setArrival(landed);
+            onArrived?.(landed);
+            return; // stop polling once funds land
+          }
         }
       } catch {
         // transient RPC error — keep polling
@@ -201,7 +206,7 @@ export function ReceiveFundsModal({
   // Reset arrival and copy state each time the modal is reopened.
   useEffect(() => {
     if (isOpen) {
-      setArrivedAmount(null);
+      setArrival(null);
       baselineRef.current = null;
       setCopyState('idle');
     }
@@ -256,12 +261,12 @@ export function ReceiveFundsModal({
         </div>
 
         {/* Arrival success state */}
-        {arrivedAmount !== null && (
+        {arrival !== null && (
           <div className="mb-4 rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-center">
             <div className="text-2xl">🎉</div>
             <p className="mt-1 text-sm font-semibold text-emerald-800">
               {STRINGS.arrivedPrefix}
-              {arrivedAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+              {arrival.label}
               {STRINGS.arrivedSuffix}
             </p>
             <button
@@ -353,7 +358,7 @@ export function ReceiveFundsModal({
         <p className="mt-1 text-xs text-slate-500">{STRINGS.minFee}</p>
 
         {/* Live watcher hint */}
-        {pollBalance && arrivedAmount === null && (
+        {pollBalance && arrival === null && (
           <div className="mt-4 flex items-center justify-center gap-2 text-sm text-slate-500">
             <span className="inline-block h-3 w-3 animate-pulse rounded-full bg-emerald-500" />
             {STRINGS.watching}

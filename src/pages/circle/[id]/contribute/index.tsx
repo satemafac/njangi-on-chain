@@ -12,9 +12,9 @@ import { getCoinType } from '../../../../config/constants';
 import {
   getCurrentRpcUrl,
   getCurrentNetwork,
-  getCurrentCoinTypes,
-  getCurrentTokens,
 } from '../../../../services/network-config';
+import { readCustodyBalances } from '@/lib/custody-wallet-balance';
+import { supportedCoinBySymbol } from '@/lib/supported-coins';
 import { cetusService } from '../../../../lib/cetus-service';
 import { ZkLoginClient } from '@/services/zkLoginClient';
 import { resolveCustodyWalletId } from '@/lib/custody-wallet-discovery';
@@ -208,15 +208,6 @@ interface CircleCreatedEvent {
 // Define types for SUI object field values
 type SuiFieldValue = string | number | boolean | null | undefined | SuiFieldValue[] | Record<string, unknown>;
 
-type DynamicFieldRef = {
-  objectId: string;
-  objectType?: string;
-  name?: {
-    type?: string;
-    value?: unknown;
-  };
-};
-
 const parseU64Like = (value: unknown): bigint => {
   if (typeof value === 'bigint') return value;
   if (typeof value === 'number' && Number.isFinite(value)) return BigInt(Math.max(0, Math.trunc(value)));
@@ -224,131 +215,9 @@ const parseU64Like = (value: unknown): bigint => {
   return 0n;
 };
 
-const normalizeMoveTypeKey = (value: string): string => value.trim().toLowerCase().replace(/^0x/, '');
-
-const extractNestedBalance = (value: unknown): bigint => {
-  if (value === null || typeof value === 'undefined') return 0n;
-  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'bigint') {
-    return parseU64Like(value);
-  }
-
-  if (typeof value === 'object') {
-    const record = value as Record<string, unknown>;
-    if ('fields' in record && record.fields && typeof record.fields === 'object') {
-      const fields = record.fields as Record<string, unknown>;
-      if ('value' in fields) {
-        return extractNestedBalance(fields.value);
-      }
-    }
-    if ('value' in record) {
-      return extractNestedBalance(record.value);
-    }
-  }
-
-  return 0n;
-};
-
 const toDisplayAmount = (value: bigint, decimals: number): number => {
   if (value <= 0n) return 0;
   return Number(value) / 10 ** decimals;
-};
-
-const readCustodyCoinBalance = async (
-  client: SuiClient,
-  walletDynamicFields: DynamicFieldRef[],
-  coinType: string
-): Promise<bigint> => {
-  if (!coinType) return 0n;
-
-  const normalizedCoinType = normalizeMoveTypeKey(coinType);
-  let total = 0n;
-
-  const typedField = walletDynamicFields.find((field) => {
-    const nameValue = field.name?.value;
-    return typeof nameValue === 'string' && normalizeMoveTypeKey(nameValue) === normalizedCoinType;
-  });
-
-  if (typedField?.objectId) {
-    try {
-      const fieldObject = await client.getObject({
-        id: typedField.objectId,
-        options: { showContent: true }
-      });
-
-      if (fieldObject.data?.content && 'fields' in fieldObject.data.content) {
-        const fieldContent = fieldObject.data.content.fields as Record<string, unknown>;
-        total += extractNestedBalance(fieldContent.value);
-      }
-    } catch (error) {
-      console.warn('[Contribute] Failed to read typed custody balance field:', { coinType, error });
-    }
-  }
-
-  const legacyCoinFields = walletDynamicFields.filter(
-    (field) =>
-      typeof field.objectType === 'string' &&
-      (
-        field.objectType.toLowerCase().includes(`::coin::coin<0x${normalizedCoinType}>`) ||
-        field.objectType.toLowerCase().includes(`::coin::coin<${normalizedCoinType}>`)
-      )
-  );
-
-  if (legacyCoinFields.length > 0) {
-    const legacyCoinObjects = await Promise.all(
-      legacyCoinFields.map((field) =>
-        client.getObject({
-          id: field.objectId,
-          options: { showContent: true }
-        })
-      )
-    );
-
-    for (const coinObject of legacyCoinObjects) {
-      if (coinObject.data?.content && 'fields' in coinObject.data.content) {
-        const coinFields = coinObject.data.content.fields as Record<string, unknown>;
-        total += parseU64Like(coinFields.balance);
-      }
-    }
-  }
-
-  return total;
-};
-
-const resolveStablecoinMetadata = (
-  targetCoinType?: string | null
-): { coinType: string; decimals: number } => {
-  const coinTypes = getCurrentCoinTypes();
-  const tokens = getCurrentTokens();
-  const normalizedTarget = (targetCoinType || '').trim();
-  const normalizedUpper = normalizedTarget.toUpperCase();
-
-  const usdcCoinType = coinTypes.USDC || tokens.USDC || normalizedTarget;
-  // Optional (testnet has none); see src/lib/stablecoin-metadata.ts.
-  const usdtCoinType = tokens.USDT || '';
-  const suiUsdeCoinType = coinTypes.SUI_USDE || tokens.SUI_USDE || normalizedTarget;
-
-  if (!normalizedTarget || normalizedUpper === 'USDC' || normalizedTarget === usdcCoinType || normalizedTarget === tokens.USDC) {
-    return { coinType: usdcCoinType, decimals: 6 };
-  }
-
-  if (normalizedUpper === 'USDT' || (usdtCoinType && normalizedTarget === usdtCoinType)) {
-    return { coinType: usdtCoinType || normalizedTarget, decimals: 6 };
-  }
-
-  if (normalizedUpper === 'SUI_USDE' || normalizedTarget === suiUsdeCoinType || normalizedTarget === tokens.SUI_USDE) {
-    return { coinType: suiUsdeCoinType, decimals: 9 };
-  }
-
-  const lowerTarget = normalizedTarget.toLowerCase();
-  if (lowerTarget.includes('usdt')) {
-    return { coinType: normalizedTarget, decimals: 6 };
-  }
-
-  if (lowerTarget.includes('sui_usde') || lowerTarget.includes('usde')) {
-    return { coinType: normalizedTarget, decimals: 9 };
-  }
-
-  return { coinType: normalizedTarget || usdcCoinType, decimals: 6 };
 };
 
 const readOutstandingSecurityDepositRaw = async (
@@ -2847,36 +2716,19 @@ export default function ContributeToCircle() {
     try {
       const client = getSuiClientFromPool(getCurrentRpcUrl());
       const previousBalance = custodyStablecoinBalance;
-      const [walletData, walletDynamicFields, outstandingDepositRaw] = await Promise.all([
-        client.getObject({
-          id: circle.walletId,
-          options: { showContent: true }
-        }),
-        client.getDynamicFields({ parentId: circle.walletId }),
+      // The network's USDC, by exact type: the only stablecoin a custody
+      // wallet settles in. This read a `stablecoin_config` field CustodyWallet
+      // does not have, then guessed decimals from the coin's name; the shared
+      // reader also throws on a failed read instead of reading zero.
+      const stablecoinMeta = supportedCoinBySymbol('USDC', getCurrentNetwork() as NetworkType);
+      if (!stablecoinMeta) {
+        throw new Error('USDC is not configured for this network');
+      }
+      const [custodyBalances, outstandingDepositRaw] = await Promise.all([
+        readCustodyBalances(client, circle.walletId, stablecoinMeta.coinType),
         readOutstandingSecurityDepositRaw(client, circle.id)
       ]);
-
-      const walletFields = walletData.data?.content && 'fields' in walletData.data.content
-        ? walletData.data.content.fields as Record<string, unknown>
-        : null;
-      const stablecoinConfigFields = walletFields?.stablecoin_config &&
-        typeof walletFields.stablecoin_config === 'object' &&
-        walletFields.stablecoin_config !== null &&
-        'fields' in walletFields.stablecoin_config
-          ? (walletFields.stablecoin_config as { fields: Record<string, unknown> }).fields
-          : null;
-
-      const stablecoinMeta = resolveStablecoinMetadata(
-        typeof stablecoinConfigFields?.target_coin_type === 'string'
-          ? stablecoinConfigFields.target_coin_type
-          : USDC_COIN_TYPE
-      );
-      const dynamicFields = walletDynamicFields.data as unknown as DynamicFieldRef[];
-      const liveStablecoinBalanceRaw = await readCustodyCoinBalance(
-        client,
-        dynamicFields,
-        stablecoinMeta.coinType
-      );
+      const liveStablecoinBalanceRaw = custodyBalances.usdc;
 
       const newBalance = toDisplayAmount(liveStablecoinBalanceRaw, stablecoinMeta.decimals);
       const newSecurityDepositBalance = Math.min(
@@ -4254,7 +4106,7 @@ export default function ContributeToCircle() {
                   circleName={circle.name}
                   isAdmin={!!userAddress && circle.admin === userAddress}
                   memberNames={memberNameMap}
-                  {...resolveCircleSettlementCoin(circle.autoSwapEnabled)}
+                  openCoin={resolveCircleSettlementCoin(circle.autoSwapEnabled)}
                 />
               ) : null}
 

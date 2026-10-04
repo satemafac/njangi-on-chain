@@ -11,6 +11,7 @@ import {
   type GoalPoolSummary,
   type GoalPoolState,
 } from '@/lib/goal-pool-discovery';
+import { resolveSupportedCoin, UNSUPPORTED_COIN_LABEL, type SupportedCoin } from '@/lib/supported-coins';
 
 interface Props {
   userAddress: string | null;
@@ -64,12 +65,6 @@ function writeCache(
   }
 }
 
-function resolveCoin(coinType: string): { symbol: string; decimals: number } {
-  return coinType.toLowerCase().endsWith('::sui::sui')
-    ? { symbol: 'SUI', decimals: 9 }
-    : { symbol: 'USDC', decimals: 6 };
-}
-
 function fmt(base: string | bigint, decimals: number): string {
   try {
     const n = Number(BigInt(base)) / 10 ** decimals;
@@ -77,6 +72,11 @@ function fmt(base: string | bigint, decimals: number): string {
   } catch {
     return '0';
   }
+}
+
+// By exact type; any other coin used to read as "USDC, 6 decimals".
+function amountIn(coin: SupportedCoin | null, base: string | bigint): string {
+  return coin ? `${fmt(base, coin.decimals)} ${coin.symbol}` : UNSUPPORTED_COIN_LABEL;
 }
 
 function safeBig(value: string | undefined): bigint {
@@ -98,8 +98,12 @@ interface PoolView {
   status: 'released' | 'cancelled' | 'verify' | 'active';
 }
 
-function buildView(summary: GoalPoolSummary, state: GoalPoolState | null): PoolView {
-  const coin = resolveCoin(summary.assetType || state?.coinType || '');
+function buildView(
+  summary: GoalPoolSummary,
+  state: GoalPoolState | null,
+  network: NetworkType,
+): PoolView {
+  const coin = resolveSupportedCoin(summary.assetType || state?.coinType || '', network);
   const now = Date.now();
   const target = safeBig(summary.targetAmount);
   const total = safeBig(state?.totalRaised);
@@ -133,10 +137,10 @@ function buildView(summary: GoalPoolSummary, state: GoalPoolState | null): PoolV
         ? 'verify'
         : 'active';
 
-  const pooledLabel = state ? `${fmt(total, coin.decimals)} ${coin.symbol} pooled` : 'Loading…';
+  const pooledLabel = state ? `${amountIn(coin, total)} pooled` : 'Loading…';
   const dateShort = hasReleaseDate ? new Date(targetMs).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '';
   const primaryLabel = hasAmount
-    ? `Goal ${fmt(target, coin.decimals)} ${coin.symbol}`
+    ? `Goal ${amountIn(coin, target)}`
     : `By ${new Date(targetMs).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`;
   const secondaryLabel = released
     ? 'Released to the beneficiary'
@@ -263,7 +267,7 @@ export default function GoalPoolsSection({ userAddress, network }: Props) {
   // avoids an empty-flash for the (common) zero-pool case.
   if (!known || !userAddress || summaries.length === 0) return null;
 
-  const views = summaries.map((s) => buildView(s, states[s.poolId] ?? null));
+  const views = summaries.map((s) => buildView(s, states[s.poolId] ?? null, network));
   const counts: Record<PoolFilter, number> = {
     all: views.length,
     active: views.filter((v) => matchesFilter(v, 'active')).length,

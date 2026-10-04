@@ -79,6 +79,39 @@ describe('validate-env object ids', () => {
   });
 });
 
+// The active network's coin types must be coin types. A set USDC value
+// replaces the native default everywhere (src/config/coin-types.ts), and the
+// template once shipped a `0xyour_…` placeholder that passed every check.
+describe('validate-env coin types', () => {
+  const coinTypeErrors = (stderr: string) => stderr.split('\n').filter((line) => line.includes('not a coin type'));
+  const USDC = '0x26b3bc67befc214058ca78ea9a2690298d731a2d4309485ec3d40198063c4abc::usdc::USDC';
+
+  it('accepts the template, whose coin types are real', () => {
+    expect(coinTypeErrors(validate(template))).toEqual([]);
+    expect(coinTypeErrors(validate(setVar(template, 'NEXT_PUBLIC_SUI_NETWORK', 'mainnet')))).toEqual([]);
+  });
+
+  it('accepts an empty USDC, which means the native default', () => {
+    expect(coinTypeErrors(validate(setVar(template, 'NEXT_PUBLIC_TESTNET_USDC', '')))).toEqual([]);
+  });
+
+  it('rejects a USDC value that is not a coin type on the active network', () => {
+    for (const bad of ['0xyour_testnet_usdc_type', USDC.replace('::usdc::USDC', ''), `${USDC}<u8>`, 'USDC']) {
+      expect(coinTypeErrors(validate(setVar(template, 'NEXT_PUBLIC_TESTNET_USDC', bad)))).toEqual([
+        expect.stringContaining(`NEXT_PUBLIC_TESTNET_USDC is "${bad}", not a coin type`),
+      ]);
+    }
+  });
+
+  it("leaves the other network's coin types alone", () => {
+    const env = setVar(template, 'NEXT_PUBLIC_MAINNET_SUI_USDE', '0xyour_mainnet_sui_usde_type');
+    expect(coinTypeErrors(validate(env))).toEqual([]);
+    expect(coinTypeErrors(validate(setVar(env, 'NEXT_PUBLIC_SUI_NETWORK', 'mainnet')))).toEqual([
+      expect.stringContaining('NEXT_PUBLIC_MAINNET_SUI_USDE is "0xyour_mainnet_sui_usde_type", not a coin type'),
+    ]);
+  });
+});
+
 // WALRUS_PII_PREVIOUS_MASTER_KEY is set only while WALRUS_PII_MASTER_KEY is
 // being rotated (docs/environment.md). The script must catch the mistakes
 // that would leave stored WhatsApp links unreadable, and never print a key.
