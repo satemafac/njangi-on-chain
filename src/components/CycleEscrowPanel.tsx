@@ -47,6 +47,7 @@ import {
   type OpenRoundLock,
 } from '@/lib/cycle-open-round-lock';
 import { getNetworkConfig, getPackageIdForNetwork } from '@/services/network-config';
+import { moveAbortUserMessage } from '@/lib/user-error-messages';
 import { getPooledSuiClient } from '@/services/sui-rpc-failover';
 import type { NetworkType } from '@/services/whatsapp-registry-service';
 import {
@@ -487,7 +488,7 @@ export function CycleEscrowPanel({
           void refresh();
         }, 1500);
       } catch (err) {
-        toast.error(t('toast.genericError', { error: explain(err) }));
+        toast.error(moveAbortUserMessage(err) ?? t('toast.genericError', { error: explain(err) }));
       } finally {
         setBusy(null);
       }
@@ -607,7 +608,7 @@ export function CycleEscrowPanel({
       toast.error(
         refusal === 'round-already-open'
           ? t('escrow.roundAlreadyOpen')
-          : t('toast.genericError', { error: explain(err) }),
+          : moveAbortUserMessage(err) ?? t('toast.genericError', { error: explain(err) }),
       );
       updateOpenLock(IDLE_OPEN_ROUND_LOCK);
       // The chain refused because a round IS open (or its escrow is still
