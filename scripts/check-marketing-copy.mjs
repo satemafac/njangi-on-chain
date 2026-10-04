@@ -9,18 +9,38 @@
 // several pages once advertised the retired yield module as if it still
 // existed. This script fails the build when banned PHRASES reappear.
 //
-// Phrase-level patterns, not single words: "security deposit" (an
-// on-chain collateral term), "no interest charges", and risk DISCLAIMERS
-// ("not ... a guarantee of returns", "consult ... before making
-// investment decisions") are all legitimate and must not trip the guard.
+// Two kinds of check:
+//   - Phrase patterns (BANNED_PATTERNS below), line by line over the source:
+//     "security deposit" (an on-chain collateral term), "no interest
+//     charges", and risk DISCLAIMERS ("not ... a guarantee of returns",
+//     "consult ... before making investment decisions") are legitimate and
+//     must not trip them.
+//   - Single words the written policy bans outright, "invest(ment)",
+//     "returns" and "earn" (docs/compliance-roadmap-cex-dex-non-kyc.md §A3),
+//     matched in user-facing text only, with their ordinary senses and
+//     denials allowed. See scripts/lib/copy-guard.ts.
+//
+// docs/legal-drafts is served in-app (src/pages/api/legal/doc.ts), so it is
+// scanned too, but REPORT-ONLY: its wording is counsel's to change, so its
+// findings print as warnings and never fail the build.
 //
 // Wired into `npm run preflight` (and therefore .github/workflows/
-// preflight.yml). Run standalone: `npm run check:copy`.
+// preflight.yml). Run standalone: `npm run check:copy`. Needs Node >= 22.18
+// (it imports scripts/lib/copy-guard.ts through Node's type stripping).
 
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
+import {
+  extractMarkdownText,
+  extractUserFacingText,
+  findBareWordViolations,
+  WHITELIST_PATTERNS,
+} from './lib/copy-guard.ts';
 
-const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
+// The repository, or the directory given as the first argument (tests).
+const ROOT = process.argv[2]
+  ? path.resolve(process.argv[2])
+  : path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
 
 const SCAN_DIRS = [
   'src/pages',
@@ -133,13 +153,23 @@ const BANNED_PATTERNS = [
   },
 ];
 
-// Line-level whitelist: disclaimers and denials are the GOOD kind of
-// mention — they negate the claim rather than make it.
-const WHITELIST_PATTERNS = [
-  /not\b[^.\n]{0,80}guarantee of returns/i,
-  /no\s+(?:yield|interest)/i,
-  /pays?\s+no\s+(?:interest|yield)/i,
+// Line-level whitelist (WHITELIST_PATTERNS, from scripts/lib/copy-guard.ts):
+// disclaimers and denials are the GOOD kind of mention — they negate the
+// claim rather than make it.
+
+// Single-word findings reviewed and kept: educational text ABOUT the banned
+// concept, never a description of the product. Each needs a reason.
+const REVIEWED_WORD_USES = [
+  {
+    file: 'src/pages/blog/how-regulators-treat-savings-circles.tsx',
+    phrase: /described as an investment/,
+    why: 'explains when regulators treat a circle as an investment',
+  },
 ];
+
+// The legal documents the app serves (src/pages/api/legal/doc.ts).
+const LEGAL_DRAFTS_DIR = 'docs/legal-drafts';
+const LEGAL_DOCUMENT = /\.(?:en|fr)\.md$/;
 
 function walk(dir, out) {
   for (const entry of readdirSync(dir)) {
@@ -166,29 +196,58 @@ for (const file of SCAN_FILES) {
   files.push(path.join(ROOT, file));
 }
 
-const violations = [];
-for (const file of files) {
+/** Phrase and single-word findings in one file. */
+function scanFile(file) {
+  const found = [];
   let text;
   try {
     text = readFileSync(file, 'utf8');
   } catch {
-    continue;
+    return found;
   }
-  const lines = text.split('\n');
-  lines.forEach((line, idx) => {
+  const rel = path.relative(ROOT, file);
+  text.split('\n').forEach((line, idx) => {
     if (WHITELIST_PATTERNS.some((re) => re.test(line))) return;
     for (const { re, why } of BANNED_PATTERNS) {
       const match = re.exec(line);
       if (match) {
-        violations.push({
-          file: path.relative(ROOT, file),
-          line: idx + 1,
-          phrase: match[0].trim(),
-          why,
-        });
+        found.push({ file: rel, line: idx + 1, phrase: match[0].trim(), why });
       }
     }
   });
+  const segments = file.endsWith('.md') ? extractMarkdownText(text) : extractUserFacingText(file, text);
+  for (const finding of findBareWordViolations(segments)) {
+    const reviewed = REVIEWED_WORD_USES.some(
+      (entry) => entry.file === rel && entry.phrase.test(finding.phrase),
+    );
+    if (!reviewed) found.push({ file: rel, ...finding });
+  }
+  return found;
+}
+
+const violations = files.flatMap(scanFile);
+
+// Report-only: the served legal documents.
+const legalFiles = [];
+try {
+  for (const entry of readdirSync(path.join(ROOT, LEGAL_DRAFTS_DIR))) {
+    if (LEGAL_DOCUMENT.test(entry)) legalFiles.push(path.join(ROOT, LEGAL_DRAFTS_DIR, entry));
+  }
+} catch {
+  // No legal drafts in this checkout.
+}
+const legalFindings = legalFiles.flatMap(scanFile);
+if (legalFindings.length > 0) {
+  console.warn(
+    `[check:copy] report-only: ${legalFindings.length} finding(s) in ${LEGAL_DRAFTS_DIR} ` +
+      '(served in-app; the wording is counsel\'s to change, so this does not fail the build):\n',
+  );
+  for (const v of legalFindings) {
+    console.warn(`  ${v.file}:${v.line}  "${v.phrase}"  (${v.why})`);
+  }
+  console.warn('');
+} else {
+  console.log(`[check:copy] report-only: ${legalFiles.length} legal documents scanned, 0 findings`);
 }
 
 if (violations.length > 0) {

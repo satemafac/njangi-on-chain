@@ -554,19 +554,26 @@ export default function CreateCircle() {
     return await priceService.convertCurrencyToSUI(localAmount, formData.selectedCurrency);
   };
 
-  // Update CurrencyDisplay component to use selected currency
-  const SuiAmountDisplay = ({ sui, local, className = "" }: { sui: number; local: number; className?: string }) => {
+  // USDC a circle charges for a US-dollar value: the contract stores whole
+  // cents (Math.floor below, as in prepareCircleData) and charges them in USDC.
+  const usdcFor = (usd: number) => (Math.floor(usd * 100) / 100).toFixed(2);
+
+  // An amount in the selected currency and in the coin members pay. A new
+  // circle starts in USDC mode (the contract's default), so that coin is
+  // USDC; the admin can switch the circle to SUI on its manage page before
+  // it starts, and then the SUI amount priced here applies. This used to
+  // show every amount "converted to SUI".
+  const CoinAmountDisplay = ({ usd, sui, local, className = "" }: { usd: number; sui: number; local: number; className?: string }) => {
     const currencyInfo = SUPPORTED_CURRENCIES[formData.selectedCurrency];
     const symbol = currencyInfo?.symbol || formData.selectedCurrency;
-    
+
     return (
       <Tooltip.Provider>
         <Tooltip.Root>
           <Tooltip.Trigger asChild>
             <span className={`cursor-help ${className}`}>
-              {symbol} {local.toFixed(2)} {isPriceAvailable ? 
-                <span className="text-[#667085]">({sui.toFixed(2)} SUI)</span> : 
-                <span className="text-yellow-500">(SUI price unavailable)</span>}
+              {symbol} {local.toFixed(2)}{' '}
+              <span className="text-[#667085]">(≈ {usdcFor(usd)} USDC)</span>
             </span>
           </Tooltip.Trigger>
           <Tooltip.Portal>
@@ -575,19 +582,13 @@ export default function CreateCircle() {
               sideOffset={5}
             >
               <div className="space-y-1">
-                {isPriceAvailable ? (
-                  <>
-                    <p>Live Conversion Rate:</p>
-                    <p>1 SUI = {suiPrice ? formatCurrency(suiPrice, 'USD') : 'Loading...'}</p>
-                    <p className="text-xs text-white/70">Updates every minute</p>
-                    <p className="text-xs text-[#b9c8dd]">Currency: {formData.selectedCurrency}</p>
-                  </>
-                ) : (
-                  <>
-                    <p>SUI price currently unavailable</p>
-                    <p className="text-xs text-white/70">SUI conversion will be applied at transaction time</p>
-                  </>
-                )}
+                <p>Members pay in USDC, a US-dollar coin (1 USDC ≈ US$1).</p>
+                <p className="text-xs text-white/70">
+                  {isPriceAvailable
+                    ? `If you switch the circle to SUI before it starts, members pay about ${sui.toFixed(2)} SUI instead, at today's price.`
+                    : 'To run the circle in SUI instead, switch it on the manage page before it starts.'}
+                </p>
+                <p className="text-xs text-[#b9c8dd]">Currency: {formData.selectedCurrency}</p>
               </div>
               <Tooltip.Arrow className="fill-[#1d2533]" />
             </Tooltip.Content>
@@ -2099,12 +2100,13 @@ The Njangi On-Chain Team`;
                     </label>
                     <InfoTooltip>
                       <p>One-time deposit to ensure member commitment</p>
-                      <p className="text-gray-300 text-xs mt-1">Fixed in {formData.selectedCurrency} value, converted to SUI at current price</p>
+                      <p className="text-gray-300 text-xs mt-1">Fixed in {formData.selectedCurrency} value, paid in USDC (1 USDC ≈ US$1)</p>
                       <p className="text-gray-300 text-xs mt-1">Refundable when leaving the circle in good standing</p>
                     </InfoTooltip>
                   </div>
                   <div className="flex items-center space-x-2 flex-wrap">
-                    <SuiAmountDisplay 
+                    <CoinAmountDisplay
+                      usd={formData.securityDepositUSD}
                       sui={formData.securityDeposit}
                       local={formData.securityDepositLocal}
                       className="text-sm text-blue-600 font-medium"
@@ -2185,7 +2187,7 @@ The Njangi On-Chain Team`;
                             <p className="text-gray-300">
                               One-time deposit: {SUPPORTED_CURRENCIES[formData.selectedCurrency]?.symbol || formData.selectedCurrency} {formData.securityDepositLocal.toFixed(2)}
                             </p>
-                            <p className="text-xs text-gray-400">≈ {formData.securityDeposit.toFixed(2)} SUI at current price</p>
+                            <p className="text-xs text-gray-400">≈ {usdcFor(formData.securityDepositUSD)} USDC</p>
                           </div>
                           <Tooltip.Arrow className="fill-gray-900" />
                         </Tooltip.Content>

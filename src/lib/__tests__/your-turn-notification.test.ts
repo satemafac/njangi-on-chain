@@ -1,8 +1,9 @@
 /**
  * The "your turn" nudge body and send shape. The copy says the pot is full
  * and the payout is ready to collect, so it must state the payout exactly
- * or not at all, and it must not ride a template whose approved copy says
- * the payout was already sent (`payout_processed`).
+ * or not at all. Its template is the approved `payout_ready`, never
+ * `payout_processed` (whose approved copy says the payout was already sent),
+ * and it rides only English sends with a known payout.
  */
 
 jest.mock('../whatsapp-notifier', () => ({
@@ -11,6 +12,7 @@ jest.mock('../whatsapp-notifier', () => ({
 
 import {
   buildYourTurnMessage,
+  buildYourTurnTemplate,
   sendYourTurnNotification,
   type SupportedLocale,
 } from '../your-turn-notification';
@@ -45,12 +47,38 @@ describe('buildYourTurnMessage', () => {
   });
 });
 
+describe('buildYourTurnTemplate', () => {
+  it('fills the approved payout_ready layout', () => {
+    expect(buildYourTurnTemplate(CIRCLE, 5, '0.2 USDC')).toEqual({
+      name: 'payout_ready',
+      language: 'en',
+      components: [
+        {
+          type: 'body',
+          parameters: [
+            { type: 'text', text: '0xa3fada…' },
+            { type: 'text', text: '5' },
+            { type: 'text', text: '0.2 USDC' },
+          ],
+        },
+        // The approved button URL is https://njangionchain.com/circle/{{1}}.
+        {
+          type: 'button',
+          sub_type: 'url',
+          index: '0',
+          parameters: [{ type: 'text', text: `${CIRCLE}/contribute` }],
+        },
+      ],
+    });
+  });
+});
+
 describe('sendYourTurnNotification', () => {
   beforeEach(() => {
     sendMemberMock.mockReset().mockResolvedValue({ sent: true });
   });
 
-  it('sends the freeform body with no template, under the round dedupe key', async () => {
+  it('sends the body and the payout_ready template under the round dedupe key', async () => {
     await sendYourTurnNotification({
       circleId: CIRCLE,
       cycleNo: 5,
@@ -61,19 +89,19 @@ describe('sendYourTurnNotification', () => {
     });
 
     expect(sendMemberMock).toHaveBeenCalledTimes(1);
-    const input = sendMemberMock.mock.calls[0][0];
-    expect(input).toMatchObject({
+    expect(sendMemberMock.mock.calls[0][0]).toEqual({
       memberAddress: RECIPIENT,
+      phoneOverride: undefined,
       body: buildYourTurnMessage('en', CIRCLE, 5, '0.2 USDC'),
+      template: buildYourTurnTemplate(CIRCLE, 5, '0.2 USDC'),
       kind: 'cycle_finalized',
       network: 'testnet',
       dedupeKey: '0xescrow:5',
       dedupeWindowMs: 24 * 60 * 60 * 1000,
     });
-    expect(input.template).toBeUndefined();
   });
 
-  it('defaults the dedupe key to circle:round', async () => {
+  it('sends no template when the payout is unknown, and defaults the dedupe key', async () => {
     await sendYourTurnNotification({
       circleId: CIRCLE,
       cycleNo: 5,
@@ -82,6 +110,24 @@ describe('sendYourTurnNotification', () => {
       network: 'testnet',
     });
 
-    expect(sendMemberMock.mock.calls[0][0].dedupeKey).toBe(`${CIRCLE}:5`);
+    const input = sendMemberMock.mock.calls[0][0];
+    expect(input.body).toBe(buildYourTurnMessage('en', CIRCLE, 5, null));
+    expect(input.template).toBeUndefined();
+    expect(input.dedupeKey).toBe(`${CIRCLE}:5`);
+  });
+
+  it('sends no template in a language the template was not approved in', async () => {
+    await sendYourTurnNotification({
+      circleId: CIRCLE,
+      cycleNo: 5,
+      amount: '0.2 USDC',
+      recipient: RECIPIENT,
+      network: 'testnet',
+      locale: 'fr',
+    });
+
+    const input = sendMemberMock.mock.calls[0][0];
+    expect(input.body).toBe(buildYourTurnMessage('fr', CIRCLE, 5, '0.2 USDC'));
+    expect(input.template).toBeUndefined();
   });
 });
