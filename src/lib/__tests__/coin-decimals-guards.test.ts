@@ -31,6 +31,11 @@ describe('no surface scales a coin by a guess', () => {
     expect(dashboard).toContain('buildWalletCoins(chainBalances, activeNetwork)');
     expect(dashboard).toContain('parseCoinAmount(transferForm.amount, selectedCoin.decimals)');
     expect(dashboard).not.toContain('/ 1e6');
+    // Cash-out converts the amount as typed: String(0.0000005) is "5e-7".
+    expect(dashboard).toContain('parseCoinAmount(amountText, sendCoin.decimals)');
+    expect(dashboard).not.toContain('parseCoinAmount(String(amount)');
+    // History keeps 4 decimals and says "< 0.0001" rather than "0".
+    expect(dashboard).toContain('formatBaseUnitsForDisplay(rawAmount, decimals, 4)');
   });
 
   it('cetus-service: SUI and USDC by exact type, anything else refused', () => {
@@ -40,6 +45,9 @@ describe('no surface scales a coin by a guess', () => {
     expect(cetus).toContain('resolveSupportedCoin(coinType, getCurrentNetwork())');
     // The call to a module the package does not have is gone.
     expect(cetus).not.toContain('njangi_circle::');
+    // Swap amounts are exact base units: Math.floor(0.29 * 1e6) is 289999.
+    expect(cetus).toContain('toBaseUnitsTruncated(amount, getCoinDecimals(coinType))');
+    expect(cetus).not.toMatch(/Math\.floor\(parsedAmount/);
   });
 
   it.each(['src/components/goals/GoalPoolPanel.tsx', 'src/components/goals/GoalPoolsSection.tsx'])(
@@ -59,9 +67,16 @@ describe('no surface scales a coin by a guess', () => {
     expect(alerts).toContain('resolveEscrowCoin(state, escrow, network)');
   });
 
-  it('Add funds watcher: both coins in base units', () => {
+  it('Add funds watcher: both coins in base units, and the copy names both', () => {
     const modal = code('src/components/ReceiveFundsModal.tsx');
     expect(modal).toContain('detectFundsArrival(');
     expect(modal).not.toMatch(/Promise<number>/);
+    expect(modal).toContain("subtitle: 'Transfer USDC or SUI from your exchange to this wallet'");
+  });
+
+  it('manage page: an unconfigured USDC is an error, never a blank type that reads as no USDC', () => {
+    const manage = code('src/pages/circle/[id]/manage/index.tsx');
+    expect(manage).not.toContain("?.coinType ?? ''");
+    expect(manage).toContain("throw new Error('USDC is not configured for this network')");
   });
 });

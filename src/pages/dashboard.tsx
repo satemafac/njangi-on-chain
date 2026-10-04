@@ -38,6 +38,7 @@ import {
 } from '@/lib/wallet-coins';
 import {
   formatBaseUnits,
+  formatBaseUnitsForDisplay,
   parseCoinAmount,
   resolveSupportedCoin,
   supportedCoinBySymbol,
@@ -695,9 +696,10 @@ const getHistoryTokenMetadata = (
   return { symbol: `${name} (${UNSUPPORTED_COIN_LABEL})`, decimals: null };
 };
 
+// Up to 4 decimals, exactly; a nonzero amount below that reads "< 0.0001".
 const formatHistoryTokenAmount = (rawAmount: bigint, decimals: number | null): string => {
   if (decimals === null) return '';
-  return formatBaseUnits(rawAmount, decimals, 4) ?? '';
+  return formatBaseUnitsForDisplay(rawAmount, decimals, 4) ?? '';
 };
 
 const getNetGasFeeMist = (tx: any): bigint => {
@@ -8711,15 +8713,18 @@ export default function Dashboard() {
               ) : (
                 <div className="space-y-3">
                   {transactionHistory.map((tx) => {
+                    // "< 0.0001 SUI" carries no sign: the colour gives the direction.
+                    const signFor = (amount: { formattedAmount: string }, sign: string) =>
+                      amount.formattedAmount.startsWith('<') ? '' : sign;
                     const amountLines = [
                       ...tx.receivedAmounts.map((amount) => ({
                         ...amount,
-                        prefix: '+',
+                        prefix: signFor(amount, '+'),
                         className: 'text-green-600',
                       })),
                       ...tx.sentAmounts.map((amount) => ({
                         ...amount,
-                        prefix: '-',
+                        prefix: signFor(amount, '-'),
                         className: 'text-red-600',
                       })),
                     ];
@@ -8896,13 +8901,14 @@ export default function Dashboard() {
         onClose={() => setIsCashOutOpen(false)}
         availableUsdc={walletCoinAmount(findSupportedWalletCoin(allCoins, 'USDC')) ?? 0}
         availableSui={walletCoinAmount(findSupportedWalletCoin(allCoins, 'SUI')) ?? 0}
-        onSend={async ({ toAddress, amount, coin }) => {
+        onSend={async ({ toAddress, amountText, coin }) => {
           const sendCoin = supportedCoinBySymbol(coin, getCurrentNetwork());
           if (!sendCoin) {
             throw new Error(`${coin} is not configured for this network.`);
           }
-          // Exact: Math.floor(0.29 * 1e6) is 289999, not 290000.
-          const smallestUnit = parseCoinAmount(String(amount), sendCoin.decimals);
+          // Exact, from the amount as typed: Math.floor(0.29 * 1e6) is 289999,
+          // not 290000.
+          const smallestUnit = parseCoinAmount(amountText, sendCoin.decimals);
           if (smallestUnit === null || smallestUnit <= BigInt(0)) {
             throw new Error(`Enter an amount with at most ${sendCoin.decimals} decimal places.`);
           }

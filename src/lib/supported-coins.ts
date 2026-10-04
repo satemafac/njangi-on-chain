@@ -114,6 +114,22 @@ export function formatCoinAmount(
 }
 
 /**
+ * formatBaseUnits cut to `maxFractionDigits`, except that a nonzero amount
+ * below that precision reads "< 0.0001" (for 4 digits) rather than "0".
+ */
+export function formatBaseUnitsForDisplay(
+  base: bigint | string,
+  decimals: number,
+  maxFractionDigits: number,
+): string | null {
+  const shown = formatBaseUnits(base, decimals, maxFractionDigits);
+  if (shown !== '0') return shown;
+  const value = typeof base === 'bigint' ? base : BigInt(base.trim());
+  if (value === 0n) return '0';
+  return maxFractionDigits > 0 ? `< 0.${'0'.repeat(maxFractionDigits - 1)}1` : '< 1';
+}
+
+/**
  * A typed amount in base units, exactly: `parseCoinAmount('0.29', 6)` is
  * 290000n, where `Math.floor(0.29 * 1e6)` is 289999. Null for anything that
  * is not a plain non-negative decimal, and for more fraction digits than the
@@ -127,4 +143,29 @@ export function parseCoinAmount(text: string, decimals: number): bigint | null {
   if (whole === '' && fraction === '') return null;
   if (fraction.length > decimals) return null;
   return BigInt(whole || '0') * 10n ** BigInt(decimals) + BigInt((fraction || '').padEnd(decimals, '0') || '0');
+}
+
+/**
+ * A computed amount (a number, or a numeric string) in base units, exact for
+ * every digit the coin has and cut, never rounded up, beyond them. For
+ * amounts the app derives rather than ones a member typed: a swap sized as
+ * "share plus buffer" can carry more digits than the coin, and the old
+ * `Math.floor(amount * 10 ** decimals)` lost a unit even on 0.29.
+ * Null for anything that is not a finite non-negative amount.
+ */
+export function toBaseUnitsTruncated(amount: number | string, decimals: number): bigint | null {
+  let text: string;
+  if (typeof amount === 'number') {
+    if (!Number.isFinite(amount) || amount < 0) return null;
+    // String() switches to exponent notation below 1e-6; toFixed does not
+    // (below 1e21), and its extra binary digits are cut off below.
+    text = /e/i.test(String(amount)) ? amount.toFixed(20) : String(amount);
+  } else {
+    text = amount.trim();
+  }
+  const match = /^(\d*)(?:\.(\d*))?$/.exec(text);
+  if (!match) return null;
+  const [, whole = '', fraction = ''] = match;
+  if (whole === '' && fraction === '') return null;
+  return parseCoinAmount(`${whole || '0'}.${fraction.slice(0, decimals)}`, decimals);
 }

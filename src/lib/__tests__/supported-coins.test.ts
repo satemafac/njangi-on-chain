@@ -6,12 +6,14 @@
 import {
   classifyCoinType,
   formatBaseUnits,
+  formatBaseUnitsForDisplay,
   formatCoinAmount,
   normalizeCoinType,
   parseCoinAmount,
   resolveSupportedCoin,
   supportedCoinBySymbol,
   supportedCoins,
+  toBaseUnitsTruncated,
 } from '@/lib/supported-coins';
 
 const USDC = '0x26b3bc67befc214058ca78ea9a2690298d731a2d4309485ec3d40198063c4abc::usdc::USDC';
@@ -127,6 +129,46 @@ describe('parseCoinAmount', () => {
   it('refuses anything that is not a plain non-negative decimal', () => {
     for (const bad of ['', '.', '-1', '1e3', 'abc', '1,000', '1.2.3', '+1']) {
       expect(parseCoinAmount(bad, 6)).toBeNull();
+    }
+  });
+});
+
+describe('formatBaseUnitsForDisplay', () => {
+  it('shows a nonzero amount below the display precision as "< 0.0001", never "0"', () => {
+    expect(formatBaseUnitsForDisplay('50000', 9, 4)).toBe('< 0.0001');
+    expect(formatBaseUnitsForDisplay(1n, 6, 2)).toBe('< 0.01');
+    expect(formatBaseUnitsForDisplay('1', 6, 0)).toBe('< 1');
+  });
+
+  it('formats everything else as formatBaseUnits does', () => {
+    expect(formatBaseUnitsForDisplay('0', 9, 4)).toBe('0');
+    expect(formatBaseUnitsForDisplay('150000000', 9, 4)).toBe('0.15');
+    expect(formatBaseUnitsForDisplay('100000', 9, 4)).toBe('0.0001');
+    expect(formatBaseUnitsForDisplay('x', 9, 4)).toBeNull();
+  });
+});
+
+describe('toBaseUnitsTruncated', () => {
+  it('converts computed amounts exactly: a 0.29 share is 290000 units, not 289999', () => {
+    expect(toBaseUnitsTruncated(0.29, 6)).toBe(290_000n);
+    expect(toBaseUnitsTruncated('0.29', 6)).toBe(290_000n);
+    expect(toBaseUnitsTruncated(1.5, 9)).toBe(1_500_000_000n);
+  });
+
+  it('cuts digits beyond the coin, never rounding up', () => {
+    expect(toBaseUnitsTruncated('0.1234567891234', 9)).toBe(123_456_789n);
+    expect(toBaseUnitsTruncated(0.1234567899, 9)).toBe(123_456_789n);
+    expect(toBaseUnitsTruncated('1.9999999', 6)).toBe(1_999_999n);
+  });
+
+  it('reads numbers that print in exponent notation', () => {
+    expect(toBaseUnitsTruncated(1e-7, 9)).toBe(100n);
+    expect(toBaseUnitsTruncated(5e-7, 6)).toBe(0n);
+  });
+
+  it('is null for anything that is not a finite non-negative amount', () => {
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, -1, '-1', 'abc', '', '1e-7', '1.2.3']) {
+      expect(toBaseUnitsTruncated(bad, 9)).toBeNull();
     }
   });
 });

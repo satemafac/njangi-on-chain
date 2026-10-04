@@ -1,7 +1,7 @@
 import { initCetusSDK } from '@cetusprotocol/cetus-sui-clmm-sdk';
 import { Transaction } from '@mysten/sui/transactions';
 import { getPooledSuiClient, getRpcCandidateUrls } from './sui-rpc-failover';
-import { normalizeCoinType, resolveSupportedCoin } from '@/lib/supported-coins';
+import { normalizeCoinType, resolveSupportedCoin, toBaseUnitsTruncated } from '@/lib/supported-coins';
 import { 
   CetusErrorCode, 
   createCetusError, 
@@ -57,15 +57,15 @@ function normalizeSlippageToBps(slippage: number): number {
   return slippage <= 10 ? Math.floor(slippage * 100) : Math.floor(slippage);
 }
 
+// Exact base units, cut (never rounded up) past the coin's decimals.
+// Math.floor(amount * 10 ** decimals) asked a by-amount-out swap for a 0.29
+// USDC share for 289,999 units.
 function toAtomicAmount(amount: number | string, coinType: string): bigint {
-  const parsedAmount =
-    typeof amount === 'string' ? Number.parseFloat(amount) : Number(amount);
-
-  if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+  const atomic = toBaseUnitsTruncated(amount, getCoinDecimals(coinType));
+  if (atomic === null || atomic <= 0n) {
     throw new Error('Invalid swap amount');
   }
-
-  return BigInt(Math.floor(parsedAmount * Math.pow(10, getCoinDecimals(coinType))));
+  return atomic;
 }
 
 function fromAtomicAmount(amount: bigint | string, coinType: string): number {

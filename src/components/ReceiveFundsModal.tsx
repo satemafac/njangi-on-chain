@@ -25,7 +25,7 @@ import { detectFundsArrival, type FundingBalances, type FundsArrival } from '@/l
 
 const STRINGS = {
   title: 'Add funds',
-  subtitle: 'Transfer USDC from your exchange to this wallet',
+  subtitle: 'Transfer USDC or SUI from your exchange to this wallet',
   networkWarning:
     'Send only USDC or SUI, over the Sui network. Sending a different asset or network can permanently lose your funds.',
   yourAddress: 'Your Sui wallet address',

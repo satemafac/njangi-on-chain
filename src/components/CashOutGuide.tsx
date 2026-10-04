@@ -53,6 +53,12 @@ export interface CashOutGuideProps {
   onSend: (args: {
     toAddress: string;
     amount: number;
+    /**
+     * The amount exactly as typed, for converting to base units. Printing
+     * `amount` back out gives "5e-7" below 0.000001, which no exact parser
+     * reads as an amount.
+     */
+    amountText: string;
     coin: Coin;
   }) => Promise<{ digest?: string } | void>;
 }
@@ -115,7 +121,7 @@ export function CashOutGuide({
     setSending(true);
     setError(null);
     try {
-      const res = await onSend({ toAddress: trimmed, amount: amountNum, coin });
+      const res = await onSend({ toAddress: trimmed, amount: amountNum, amountText: amount.trim(), coin });
       const digest = res && 'digest' in res ? res.digest : undefined;
       setResult(digest || 'submitted');
     } catch (err) {
