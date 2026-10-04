@@ -27,7 +27,6 @@ module njangi::njangi_circles {
     const EInsufficientDeposit: u64 = 6;
     const ENotAdmin: u64 = 7;
     const EWalletCircleMismatch: u64 = 46;
-    const ECircleNotActive: u64 = 54;
     const ECircleIsActive: u64 = 55;
     const EInvalidMaxMembersLimit: u64 = 56;
     const ECircleNotPausedForConfigChange: u64 = 58;
@@ -35,9 +34,7 @@ module njangi::njangi_circles {
     const EInvalidContributionAmount: u64 = 1; // From core
     const ENotMember: u64 = 8;                 // From core
     const EMemberNotActive: u64 = 14;          // From members
-    const EMemberSuspended: u64 = 13;          // From members
     const EIncorrectDepositAmount: u64 = 2;    // From core
-    const ENoValidOraclePrice: u64 = 61;
     const ENoRecoveryEligibleVoters: u64 = 62;
     const ERecoveryVoteNotEligible: u64 = 63;
     const ERecoveryVoteAlreadyCast: u64 = 64;
@@ -45,14 +42,10 @@ module njangi::njangi_circles {
     const ERecoveryVotingClosed: u64 = 66;
     const ERecoveryProposalMissing: u64 = 67;
     const ERecoveryExecutionNotReady: u64 = 68;
-    const ERecoveryInsufficientWalletBalance: u64 = 69;
-    const ERecoveryMemberSnapshotMismatch: u64 = 70;
     const EInvalidRecoveryDelegate: u64 = 71;
     const ERecoveryDelegateUpdateLocked: u64 = 72;
     const ERecoveryAutoReleaseUnauthorized: u64 = 73;
-    // Legacy custody path: a member may contribute at most once per payout
-    // round (mirrors the per-cycle escrow's `contributed` table guarantee).
-    const E_ALREADY_CONTRIBUTED_THIS_CYCLE: u64 = 74;
+    // 74 belonged to the legacy custody contribution rail (retired in v11).
     // Compliance gate: once members beyond the admin have joined a circle
     // that requires attestations, the requirement can never be switched
     // off (bait-and-switch guard — members joined under the KYC promise).
@@ -66,10 +59,25 @@ module njangi::njangi_circles {
     const EIncompleteRotationOrder: u64 = 80;
     const ENothingToMigrate: u64 = 81;
     const EMigrationRotationChanged: u64 = 82;
-    // Mirrors njangi_cycle_escrow::E_COMPLIANCE_ATTESTATION_REQUIRED (216)
-    // so the frontend maps a single abort code for "this circle requires a
-    // compliance attestation" across both money rails.
-    const E_COMPLIANCE_ATTESTATION_REQUIRED: u64 = 216;
+
+    // v11: pinned asset terms, per-member deposit records, per-asset refunds.
+    const E_POLICY_MISSING: u64 = 83;
+    const E_ASSET_NOT_ALLOWED: u64 = 84;
+    const E_POLICY_LOCKED: u64 = 85;
+    const E_DEPOSIT_ALREADY_POSTED: u64 = 86;
+    const E_CIRCLE_NOT_STOPPED: u64 = 87;
+    const E_LEGACY_NOT_MIGRATABLE: u64 = 88;
+    // Every entrypoint v11 retires aborts with this one code; the
+    // replacement is named in each function's comment.
+    const E_DEPRECATED_ENTRYPOINT: u64 = 89;
+    const E_TERMS_INVALID: u64 = 90;
+    const E_POLICY_EXISTS: u64 = 91;
+    const E_CIRCLE_NOT_CONVERTED: u64 = 92;
+    const E_CIRCLE_STOPPED: u64 = 93;
+
+    // MemberDepositKey.kind values. Only security deposits are recorded
+    // today; a new kind is a new key value, never a new struct field.
+    const DEPOSIT_KIND_SECURITY: u8 = 0;
 
     // Time constants (in milliseconds)
     const THIRTY_DAYS_MS: u64 = 2_592_000_000; // 30 days in milliseconds
@@ -82,16 +90,8 @@ module njangi::njangi_circles {
     const RECOVERY_TRIGGER_ROLE_MEMBER_FALLBACK: u8 = 2;
 
     // Oracle safety constants.
-    const ORACLE_MAX_STALE_SECONDS: u64 = 3_600; // 1 hour
-    const ORACLE_LOOKBACK_SECONDS: u64 = 31_536_000; // 1 year
-    const PRICE_FALLBACK_NONE: u8 = 0;
-    const PRICE_FALLBACK_STALE: u8 = 1;
-    const PRICE_FALLBACK_VOLATILITY: u8 = 2;
-    const PRICE_FALLBACK_INVALID: u8 = 3;
 
     // Dynamic-field keys for cached oracle fallback price.
-    const FIELD_LAST_VALID_SUI_PRICE_USD_CENTS: vector<u8> = b"last_valid_sui_price_usd_cents";
-    const FIELD_LAST_VALID_SUI_PRICE_TS_SEC: vector<u8> = b"last_valid_sui_price_ts_sec";
 
     // Dynamic-field key recording which members contributed in the current
     // payout round (legacy custody path de-duplication). Stored as a
@@ -533,17 +533,164 @@ module njangi::njangi_circles {
     }
 
     // ----------------------------------------------------------
+    // v11 — pinned asset terms, per-member deposit records, per-asset
+    // refunds
+    //
+    // Every v11 fact is a dynamic field on the circle's UID under a key type
+    // introduced in v11 (struct layouts cannot change in an upgrade, and no
+    // earlier package version can construct these keys):
+    //
+    //   AssetPolicyKey            -> CircleAssetPolicy  (the pinned terms,
+    //                                      the bound custody wallet, and the
+    //                                      ledger entries the conversion
+    //                                      covered — 0 for circles created
+    //                                      on v11)
+    //   MemberDepositKey{member,asset,kind} -> u64 (the member's deposit
+    //                                      recorded in the custody wallet)
+    //   DepositorsKey{asset}      -> vector<address> (append-only)
+    //   DepositMarkerKey{member}  -> vector<u8> (asset the deposit is in)
+    //   RefundRecordKey{asset}    -> u64  (last completed refund run, ms)
+    //
+    // The coins themselves sit in the circle's custody wallet as typed
+    // deposit records (njangi_custody::DepositBalanceKey), moved only by the
+    // contract rules below.
+    //
+    // A circle is CONVERTED once its policy exists — at creation for
+    // circles created with `create_circle_with_asset`, or by
+    // `adopt_asset_policy` for circles created earlier.
+    //
+    // Custody posture (invariant, enforced by construction and by tests):
+    // a member's deposit leaves the custody wallet only as a refund of that
+    // member's own recorded amount, to that member — when the circle is
+    // stopped by its members' vote or auto-release rule, when the member is
+    // removed from an inactive circle, or when the member, no longer in the
+    // circle, collects it. No admin, operator, registry admin, AttestorCap
+    // or UpgradeCap holder can choose an amount or a destination. The
+    // AssetRegistry decides which coins a circle may take on; it never
+    // touches balances. Round money stays in the per-round CycleEscrow,
+    // whose exits are unchanged: the round recipient's payout and refunds
+    // to the recorded contributors.
+    // ----------------------------------------------------------
+    public struct AssetPolicyKey has copy, drop, store {}
+    public struct MemberDepositKey has copy, drop, store { member: address, asset: vector<u8>, kind: u8 }
+    public struct DepositorsKey has copy, drop, store { asset: vector<u8> }
+    public struct DepositMarkerKey has copy, drop, store { member: address }
+    public struct RefundRecordKey has copy, drop, store { asset: vector<u8> }
+
+    /// Native terms of one asset, in that asset's base units.
+    public struct AssetTerms has store, copy, drop {
+        asset: vector<u8>,
+        decimals: u8,
+        contribution_amount: u64,
+        security_deposit: u64,
+    }
+
+    /// A circle's asset terms, fixed for the life of the circle.
+    /// `settlement_asset` is the coin rounds are paid in; `assets` lists
+    /// every asset the circle accepts (today: exactly the settlement asset,
+    /// which is also its collateral).
+    public struct CircleAssetPolicy has store, copy, drop {
+        settlement_asset: vector<u8>,
+        assets: vector<AssetTerms>,
+        set_at_ms: u64,
+        // The custody wallet every v11 money path of this circle must be
+        // given (bound once, here).
+        wallet_id: ID,
+        // Wallet ledger entries the conversion covered (0 for circles created
+        // on v11); entries appended later describe legacy storage only.
+        legacy_ledger_entries: u64,
+    }
+
+    /// Terms pinned — at creation, or by converting a pre-v11 circle, in
+    /// which case `migrated_members` deposits totalling `migrated_total`
+    /// moved from legacy storage into the v11 records of the same wallet.
+    public struct CircleAssetPolicySet has copy, drop {
+        circle_id: ID,
+        wallet_id: ID,
+        settlement_asset: String,
+        decimals: u8,
+        contribution_amount: u64,
+        security_deposit: u64,
+        converted_from_legacy: bool,
+        migrated_members: u64,
+        migrated_total: u64,
+        legacy_ledger_entries: u64,
+        set_at_ms: u64,
+    }
+
+    public struct SecurityDepositPosted has copy, drop {
+        circle_id: ID,
+        member: address,
+        coin_type: String,
+        decimals: u8,
+        amount: u64,
+    }
+
+    public struct AssetRefundCompleted has copy, drop {
+        circle_id: ID,
+        coin_type: String,
+        total_amount: u64,
+        members: u64,
+        timestamp: u64,
+    }
+
+    // ----------------------------------------------------------
     // Create Circle
+    //
+    // RETIRED in v11: every new circle pins its asset terms at creation
+    // (`create_circle_with_asset<T>`), so no circle is ever created without
+    // a settlement asset. The signature stays because an upgrade cannot
+    // change or remove a public function.
     // ----------------------------------------------------------
     public fun create_circle(
+        _name: vector<u8>,
+        _contribution_amount: u64,
+        _currency_type: vector<u8>,
+        _contribution_amount_local: u64,
+        _contribution_amount_usd: u64,
+        _security_deposit: u64,
+        _security_deposit_local: u64,
+        _security_deposit_usd: u64,
+        _cycle_length: u64,
+        _cycle_day: u64,
+        _circle_type: u8,
+        _max_members: u64,
+        _rotation_style: u8,
+        _penalty_rules: vector<bool>,
+        _goal_type: Option<u8>,
+        _target_amount: Option<u64>,
+        _target_amount_local: Option<u64>,
+        _target_date: Option<u64>,
+        _verification_required: bool,
+        _auto_release_enabled: bool,
+        _auto_release_delay_ms: u64,
+        _next_in_command: Option<address>,
+        _clock: &Clock,
+        _ctx: &mut TxContext
+    ) {
+        abort E_DEPRECATED_ENTRYPOINT
+    }
+
+    // ----------------------------------------------------------
+    // Create a circle that settles in coin `T` (v11)
+    //
+    // `T` must be a canonical-registry asset with the settlement role; its
+    // decimals are read from the registry, never from the caller. The
+    // native amounts are `T` base units and are pinned for the life of the
+    // circle (`CircleAssetPolicy`). For a USD-pegged `T` they must equal
+    // the USD cents at the peg (`cents * 10^(decimals - 2)`), so the USD
+    // fields stay truthful. The circle's custody wallet is created and
+    // bound in the same call.
+    // ----------------------------------------------------------
+    public fun create_circle_with_asset<T>(
         name: vector<u8>,
-        contribution_amount: u64,
-        currency_type: vector<u8>,        // Currency code (e.g., "USD", "XAF", "NGN")
-        contribution_amount_local: u64,   // Amount in local currency
-        contribution_amount_usd: u64,     // USD equivalent amount (in cents)
-        security_deposit: u64,
-        security_deposit_local: u64,      // Amount in local currency
-        security_deposit_usd: u64,        // USD equivalent amount (in cents)
+        currency_type: vector<u8>,        // Fiat display code (e.g., "USD", "XAF", "NGN")
+        contribution_amount_local: u64,
+        contribution_amount_usd: u64,     // cents
+        security_deposit_local: u64,
+        security_deposit_usd: u64,        // cents
+        contribution_native: u64,         // T base units per contribution
+        deposit_native: u64,              // T base units per security deposit
         cycle_length: u64,
         cycle_day: u64,
         circle_type: u8,
@@ -552,44 +699,50 @@ module njangi::njangi_circles {
         penalty_rules: vector<bool>,
         goal_type: Option<u8>,
         target_amount: Option<u64>,
-        target_amount_local: Option<u64>, // Amount in local currency
+        target_amount_local: Option<u64>,
         target_date: Option<u64>,
         verification_required: bool,
         auto_release_enabled: bool,
         auto_release_delay_ms: u64,
         next_in_command: Option<address>,
+        registry: &price_validator::AssetRegistry,
         clock: &Clock,
         ctx: &mut TxContext
     ) {
-        // The frontend now sends properly formatted values with 9 decimals
-        // No need for additional scaling, values are already in MIST format
-        let contribution_amount_scaled = contribution_amount;
-        let security_deposit_scaled = security_deposit;
-        let target_amount_scaled = if (option::is_some(&target_amount)) {
-            // Still need to extract the value from the option but no need to scale
-            let amt_ref = option::borrow(&target_amount);
-            option::some(*amt_ref)
-        } else {
-            option::none()
-        };
+        let decimals = price_validator::assert_usable<T>(registry, price_validator::flag_settlement());
+        let asset = core::coin_type_bytes<T>();
+        let settles_in_sui = core::is_sui<T>();
 
-        // Basic validations
+        // Same schedule / size / USD validations as the legacy create path.
         assert!(max_members >= core::get_min_members() && max_members <= core::get_max_members(), 0);
         assert!(contribution_amount_usd > 0, 1);
         assert!(security_deposit_usd >= core::min_security_deposit(contribution_amount_usd), 2);
-        assert!(contribution_amount_scaled > 0, 1);
-        assert!(security_deposit_scaled > 0, 2);
         assert!(cycle_length <= 3, 3); // Allow up to 3 (bi-weekly)
         assert!(is_valid_cycle_schedule(cycle_length, cycle_day), 4); // EInvalidCycleDay
 
-        // Get admin address
+        // Native terms.
+        assert!(contribution_native > 0, E_TERMS_INVALID);
+        assert!(
+            deposit_native > 0 && deposit_native >= core::min_security_deposit(contribution_native),
+            E_TERMS_INVALID
+        );
+        if (price_validator::is_usd_pegged<T>(registry)) {
+            assert!(
+                contribution_native == core::usd_cents_to_pegged_units(contribution_amount_usd, decimals),
+                E_TERMS_INVALID
+            );
+            assert!(
+                deposit_native == core::usd_cents_to_pegged_units(security_deposit_usd, decimals),
+                E_TERMS_INVALID
+            );
+        };
+
         let admin = tx_context::sender(ctx);
         let current_time = clock::timestamp_ms(clock);
         if (option::is_some(&next_in_command)) {
             assert!(*option::borrow(&next_in_command) != admin, EInvalidRecoveryDelegate);
         };
 
-        // Create the circle with minimal fields
         let mut circle = Circle {
             id: object::new(ctx),
             name: string::utf8(name),
@@ -600,21 +753,30 @@ module njangi::njangi_circles {
             deposits: balance::zero<SUI>(),
             penalties: balance::zero<SUI>(),
             current_cycle: 0,
-            next_payout_time: core::calculate_next_payout_time(cycle_length, cycle_day, clock::timestamp_ms(clock)),
+            next_payout_time: core::calculate_next_payout_time(cycle_length, cycle_day, current_time),
             created_at: current_time,
             rotation_order: vector::empty(),
             rotation_history: vector::empty(),
             current_position: 0,
             active_auction: option::none(),
             is_active: false,
-            contributions_this_cycle: 0, // Initialize to 0 USD cents
+            contributions_this_cycle: 0,
             paused_after_cycle: false,
         };
-        
-        // Create and attach configurations using the new module
+
+        // The config's native fields are SUI-mist fields. A SUI circle stores
+        // its pinned terms there, so every config reader agrees with the
+        // policy; any other asset keeps its terms in the policy only and the
+        // SUI fields stay zero. `auto_swap_enabled` mirrors the settlement
+        // asset for readers that predate the policy.
+        let (config_contribution, config_deposit) = if (settles_in_sui) {
+            (contribution_native, deposit_native)
+        } else {
+            (0, 0)
+        };
         let circle_config = config::create_circle_config(
-            contribution_amount_scaled,
-            security_deposit_scaled,
+            config_contribution,
+            config_deposit,
             string::utf8(currency_type),
             contribution_amount_local,
             security_deposit_local,
@@ -625,74 +787,60 @@ module njangi::njangi_circles {
             circle_type,
             rotation_style,
             max_members,
-            false, // auto_swap_enabled starts as false
+            settles_in_sui,
             auto_release_enabled,
             auto_release_delay_ms,
             if (auto_release_enabled) { next_in_command } else { option::none() },
             clock
         );
-        
-        let milestone_config = config::create_milestone_config(
+        config::attach_circle_config(&mut circle.id, circle_config);
+        config::attach_milestone_config(&mut circle.id, config::create_milestone_config(
             goal_type,
-            target_amount_scaled,
+            target_amount,
             target_amount_local,
             target_date,
             verification_required
-        );
-        
-        let penalty_config = config::create_penalty_rules(penalty_rules);
-        
-        // Attach configurations as dynamic fields
-        config::attach_circle_config(&mut circle.id, circle_config);
-        config::attach_milestone_config(&mut circle.id, milestone_config);
-        config::attach_penalty_rules(&mut circle.id, penalty_config);
-        
-        // Create the circle's custody wallet and record its REAL id on the
-        // circle.
-        //
-        // This field used to be seeded with the circle's own id as a
-        // placeholder, on the assumption that `update_wallet_id` would
-        // overwrite it later. Nothing in the create flow ever called it, so
-        // the field permanently answered "the circle" when asked "which wallet
-        // holds this circle's money", and every client was pushed onto an
-        // event scan to find the wallet instead. That scan is not durable —
-        // it needs an RPC that still serves event history, and it returns an
-        // empty list rather than an error when the event-type filter carries a
-        // post-upgrade package id. A circle that lost the scan lost its
-        // recovery path, with the funds still sitting in custody.
+        ));
+        config::attach_penalty_rules(&mut circle.id, config::create_penalty_rules(penalty_rules));
+
+        // Custody wallet: created with T's legacy slot already migrated, its
+        // id recorded both where existing readers look (`wallet_id`) and in
+        // the v11 binding that every v11 money path checks.
         let circle_id = object::uid_to_inner(&circle.id);
-        let wallet_id = custody::create_custody_wallet_returning_id(circle_id, current_time, ctx);
+        let wallet_id = custody::create_custody_wallet_for_asset<T>(circle_id, current_time, ctx);
         dynamic_field::add(&mut circle.id, string::utf8(b"wallet_id"), wallet_id);
 
-        // Automatically add the admin as a member
+        let terms = AssetTerms {
+            asset,
+            decimals,
+            contribution_amount: contribution_native,
+            security_deposit: deposit_native,
+        };
+        pin_asset_policy(&mut circle, terms, wallet_id, 0, current_time);
+
+        // Admin joins at rotation position 0, as on the legacy path.
         let admin_member = members::create_member(
-            current_time,           // joined_at 
-            option::some(0),        // payout_position - put admin in position 0
-            0,                      // deposit_balance
-            core::member_status_active() // status - use core definition consistently
+            current_time,
+            option::some(0),
+            0,
+            core::member_status_active()
         );
-        
-        // Add the admin to the circle members
         add_member(&mut circle, admin, admin_member);
-        
-        // Also add admin to rotation_order in position 0
         vector::push_back(&mut circle.rotation_order, admin);
 
         event::emit(CircleCreated {
-            circle_id: object::uid_to_inner(&circle.id),
+            circle_id,
             admin,
             name: string::utf8(name),
-            contribution_amount: contribution_amount_scaled,
+            contribution_amount: contribution_native,
             currency_type: string::utf8(currency_type),
             contribution_amount_local,
             security_deposit_local,
             max_members,
             cycle_length,
         });
-        
-        // Emit enhanced MemberJoined event for admin with full member details
         event::emit(MemberJoined {
-            circle_id: object::uid_to_inner(&circle.id),
+            circle_id,
             member: admin,
             position: option::some(0),
             member_status: core::member_status_active(),
@@ -702,11 +850,21 @@ module njangi::njangi_circles {
             deposit_paid: false,
             joined_at: current_time,
         });
+        event::emit(CircleAssetPolicySet {
+            circle_id,
+            wallet_id,
+            settlement_asset: string::utf8(asset),
+            decimals,
+            contribution_amount: contribution_native,
+            security_deposit: deposit_native,
+            converted_from_legacy: false,
+            migrated_members: 0,
+            migrated_total: 0,
+            legacy_ledger_entries: 0,
+            set_at_ms: current_time,
+        });
 
-        // Mint the admin's soulbound membership receipt for scalable discovery.
-        issue_membership(object::uid_to_inner(&circle.id), admin, current_time, ctx);
-
-        // Make the newly created `Circle` object shared
+        issue_membership(circle_id, admin, current_time, ctx);
         transfer::share_object(circle);
     }
     
@@ -757,7 +915,25 @@ module njangi::njangi_circles {
             };
             i = i + 1;
         };
-        // --- End of deposit check --- 
+        // --- End of deposit check ---
+
+        // v11: on a circle with pinned asset terms, every seat (and the
+        // admin) must also hold collateral in the circle's v11 deposit
+        // records. The flag alone is not enough there: only a recorded
+        // deposit is collateral.
+        if (has_asset_policy(circle)) {
+            if (table::contains(&circle.members, circle.admin)) {
+                assert!(collateral_held(circle, circle.admin) > 0, 21);
+            };
+            let mut j = 0;
+            while (j < len) {
+                let seat = *vector::borrow(&circle.rotation_order, j);
+                if (seat != @0x0) {
+                    assert!(collateral_held(circle, seat) > 0, 21);
+                };
+                j = j + 1;
+            };
+        };
 
         if (config::is_auto_release_enabled(&circle.id)) {
             let next_in_command = config::get_next_in_command(&circle.id);
@@ -818,7 +994,13 @@ module njangi::njangi_circles {
             !circle.is_active || circle.paused_after_cycle,
             ECircleNotPausedForConfigChange
         );
-        
+
+        // v11: the settlement asset is pinned; the flag may only restate it.
+        if (has_asset_policy(circle)) {
+            let settles_in_sui = policy_ref(circle).settlement_asset == core::coin_type_bytes<SUI>();
+            assert!(enabled == settles_in_sui, E_POLICY_LOCKED);
+        };
+
         // Update config using the config module
         config::toggle_auto_swap(&mut circle.id, enabled);
         touch_admin_heartbeat(circle, clock);
@@ -841,11 +1023,10 @@ module njangi::njangi_circles {
     // truth: njangi_cycle_escrow reads it at open time (together with
     // the pinned ComplianceConfig id, see FIELD_COMPLIANCE_CONFIG_ID)
     // and forces every
-    // escrow of a gated circle onto the attestation-checked paths, and
-    // the legacy custody rail (contribute_stablecoin here;
-    // njangi_payments::contribute / trigger_payout / claim_payout)
-    // refuses gated circles outright with the same abort code (216),
-    // forcing them onto the escrow rail. Security deposits and all
+    // escrow of a gated circle onto the attestation-checked paths. The
+    // legacy custody rail (contribute_stablecoin here;
+    // njangi_payments::contribute / trigger_payout / claim_payout) is
+    // retired in v11 for every circle. Security deposits and all
     // refund/recovery paths stay ungated — they only return a member's
     // own funds, so no funds can ever be stranded behind the gate.
     // ----------------------------------------------------------
@@ -952,55 +1133,29 @@ module njangi::njangi_circles {
     }
 
     // ----------------------------------------------------------
-    // Treasury (payout scheduling, tracking balances)
+    // Circle SUI-balance report — RETIRED in v11 (the circle's own SUI
+    // balances are vestigial; member deposits are v11 deposit records in the
+    // custody wallet, readable without a transaction).
     // ----------------------------------------------------------
     public fun manage_treasury_balances(
-        circle: &mut Circle,
-        clock: &Clock,
-        ctx: &mut TxContext
+        _circle: &mut Circle,
+        _clock: &Clock,
+        _ctx: &mut TxContext
     ) {
-        assert!(tx_context::sender(ctx) == circle.admin, 7);
-        
-        // Circle must be active to manage treasury
-        assert!(circle.is_active, ECircleNotActive);
-        
-        let contributions = balance::value(&circle.contributions);
-        let deposits = balance::value(&circle.deposits);
-        let penalties = balance::value(&circle.penalties);
-        touch_admin_heartbeat(circle, clock);
-        
-        event::emit(TreasuryUpdated {
-            circle_id: object::uid_to_inner(&circle.id),
-            contributions_balance: contributions,
-            deposits_balance: deposits,
-            penalties_balance: penalties,
-            cycle: circle.current_cycle,
-        });
+        abort E_DEPRECATED_ENTRYPOINT
     }
     
     // ----------------------------------------------------------
-    // Admin function: update cycle if we passed payout time
+    // Manual cycle bump — RETIRED in v11. The lap number moves only through
+    // resume_cycle (end of lap); a manual bump could leave the round pointer
+    // and the lap number disagreeing.
     // ----------------------------------------------------------
     public fun update_cycle(
-        circle: &mut Circle,
-        clock: &Clock,
-        ctx: &mut TxContext
+        _circle: &mut Circle,
+        _clock: &Clock,
+        _ctx: &mut TxContext
     ) {
-        assert!(tx_context::sender(ctx) == circle.admin, 7);
-        
-        // Circle must be active to update cycle
-        assert!(circle.is_active, ECircleNotActive);
-        
-        let current_time = clock::timestamp_ms(clock);
-        if (current_time >= circle.next_payout_time) {
-            circle.current_cycle = circle.current_cycle + 1;
-            circle.next_payout_time = core::calculate_next_payout_time(
-                config::get_cycle_length(&circle.id),
-                config::get_cycle_day(&circle.id),
-                current_time
-            );
-        };
-        touch_admin_heartbeat(circle, clock);
+        abort E_DEPRECATED_ENTRYPOINT
     }
     
     // ----------------------------------------------------------
@@ -1048,7 +1203,14 @@ module njangi::njangi_circles {
         if (custody::has_any_stablecoin_balance(wallet)) {
             return false
         };
-        
+
+        // v11: the bound wallet, holding no member deposit.
+        if (has_asset_policy(circle)) {
+            if (!is_bound_wallet(circle, wallet) || any_member_deposit_held(circle)) {
+                return false
+            };
+        };
+
         true
     }
     
@@ -1081,24 +1243,19 @@ module njangi::njangi_circles {
         
         // Check for any stablecoin balances in the wallet
         assert!(!custody::has_any_stablecoin_balance(wallet), EInsufficientDeposit);
-        
+
+        // v11: a circle with pinned terms is deleted only against its bound
+        // wallet and only once no member deposit is recorded.
+        if (has_asset_policy(&circle)) {
+            assert!(is_bound_wallet(&circle, wallet), EWalletCircleMismatch);
+            assert!(!any_member_deposit_held(&circle), EInsufficientDeposit);
+        };
+
         // Get the wallet_id link in the circle dynamic fields - we'll clean this up
         let wallet_id_key = string::utf8(b"wallet_id");
         if (dynamic_field::exists_(&circle.id, wallet_id_key)) {
             // If the wallet ID field exists, remove it to clean up
             let _: ID = dynamic_field::remove(&mut circle.id, wallet_id_key);
-        };
-        
-        // Return any deposits to the admin if they joined as a member
-        if (circle.current_members == 1 && table::contains(&circle.members, circle.admin)) {
-            let deposit_balance = balance::value(&circle.deposits);
-            if (deposit_balance > 0) {
-                let deposit_coin = coin::from_balance(
-                    balance::withdraw_all(&mut circle.deposits),
-                    ctx
-                );
-                transfer::public_transfer(deposit_coin, circle.admin);
-            };
         };
         
         // Get circle ID for milestone cleanup
@@ -1582,17 +1739,6 @@ module njangi::njangi_circles {
     }
     
     // ----------------------------------------------------------
-    // Get the members table - accessor for other modules
-    // ----------------------------------------------------------
-    public(package) fun get_members_table(circle: &Circle): &Table<address, Member> {
-        &circle.members
-    }
-    
-    public(package) fun get_members_table_mut(circle: &mut Circle): &mut Table<address, Member> {
-        &mut circle.members
-    }
-    
-    // ----------------------------------------------------------
     // Get member - accessor for other modules
     // ----------------------------------------------------------
     public fun get_member(circle: &Circle, addr: address): &Member {
@@ -1627,27 +1773,6 @@ module njangi::njangi_circles {
         object::uid_to_inner(&circle.id)
     }
     
-    // ----------------------------------------------------------
-    // Join penalty amount to penalties Balance
-    // ----------------------------------------------------------
-    public(package) fun add_to_penalties(circle: &mut Circle, amount: Balance<SUI>) {
-        balance::join(&mut circle.penalties, amount);
-    }
-    
-    // ----------------------------------------------------------
-    // Join deposit amount to deposits Balance
-    // ----------------------------------------------------------
-    public(package) fun add_to_deposits(circle: &mut Circle, amount: Balance<SUI>) {
-        balance::join(&mut circle.deposits, amount);
-    }
-    
-    // ----------------------------------------------------------
-    // Join contribution amount to contributions Balance
-    // ----------------------------------------------------------
-    public(package) fun add_to_contributions(circle: &mut Circle, amount: Balance<SUI>) {
-        balance::join(&mut circle.contributions, amount);
-    }
-    
     // NOTE: `split_from_deposits` was removed in the June 2026 GTM audit
     // cleanup. Its only caller was the admin-pushed
     // `njangi_payments::process_security_deposit_return`, which violated
@@ -1656,13 +1781,6 @@ module njangi::njangi_circles {
     // (security deposits are held in the CustodyWallet and returned via
     // the member-initiated recovery flow).
 
-    // ----------------------------------------------------------
-    // Split from contributions Balance
-    // ----------------------------------------------------------
-    public(package) fun split_from_contributions(circle: &mut Circle, amount: u64): Balance<SUI> {
-        balance::split(&mut circle.contributions, amount)
-    }
-    
     // ----------------------------------------------------------
     // Get circle name
     // ----------------------------------------------------------
@@ -1877,25 +1995,18 @@ module njangi::njangi_circles {
         option::is_some(&circle.active_auction)
     }
 
+    // Position auctions — RETIRED in v11 (no bids enter a circle; see
+    // njangi_payments::place_bid). The unauthenticated state writers below
+    // keep their signatures and abort.
     public fun start_auction(
-        circle: &mut Circle,
-        position: u64,
-        minimum_bid: u64,
-        duration_days: u64,
-        discount_rate: u64,
-        start_time: u64
+        _circle: &mut Circle,
+        _position: u64,
+        _minimum_bid: u64,
+        _duration_days: u64,
+        _discount_rate: u64,
+        _start_time: u64
     ) {
-        let end_time = start_time + (duration_days * core::ms_per_day());
-        
-        circle.active_auction = option::some(Auction {
-            position,
-            minimum_bid: core::to_decimals(minimum_bid),
-            highest_bid: 0,
-            highest_bidder: option::none(),
-            start_time,
-            end_time,
-            discount_rate,
-        });
+        abort E_DEPRECATED_ENTRYPOINT
     }
 
     public fun get_auction_info(circle: &Circle): (u64, u64, Option<address>, u64) {
@@ -1910,16 +2021,12 @@ module njangi::njangi_circles {
         )
     }
 
-    public fun update_auction_bid(circle: &mut Circle, bid_amount: u64, bidder: address) {
-        assert!(option::is_some(&circle.active_auction), 27); // EAuctionNotActive
-        
-        let auction = option::borrow_mut(&mut circle.active_auction);
-        auction.highest_bid = bid_amount;
-        auction.highest_bidder = option::some(bidder);
+    public fun update_auction_bid(_circle: &mut Circle, _bid_amount: u64, _bidder: address) {
+        abort E_DEPRECATED_ENTRYPOINT
     }
 
-    public fun end_auction(circle: &mut Circle) {
-        circle.active_auction = option::none();
+    public fun end_auction(_circle: &mut Circle) {
+        abort E_DEPRECATED_ENTRYPOINT
     }
 
     // Add functions for milestone management
@@ -1942,26 +2049,15 @@ module njangi::njangi_circles {
     }
 
     // ----------------------------------------------------------
-    // Member exit
+    // Member exit — RETIRED in v11 (it could never complete: nothing can set
+    // a member's exit request). Removal is admin_remove_member*.
     // ----------------------------------------------------------
     public fun process_member_exit(
-        circle: &mut Circle,
-        member_addr: address,
-        ctx: &mut TxContext
+        _circle: &mut Circle,
+        _member_addr: address,
+        _ctx: &mut TxContext
     ): bool {
-        // Only admin can process member exits
-        assert!(tx_context::sender(ctx) == circle.admin, 7);
-        
-        // Check if member exists and is active
-        assert!(is_member(circle, member_addr), 8);
-        
-        // In Move, we need to calculate the result differently
-        if (table::contains(&circle.members, member_addr)) {
-            let member = table::borrow_mut(&mut circle.members, member_addr);
-            members::process_member_exit(member, config::get_contribution_amount(&circle.id))
-        } else {
-            false
-        }
+        abort E_DEPRECATED_ENTRYPOINT
     }
 
     // ----------------------------------------------------------
@@ -2144,6 +2240,15 @@ module njangi::njangi_circles {
 
     // ----------------------------------------------------------
     // Admin remove member from inactive circle and return security deposit
+    //
+    // v11: on a circle with pinned asset terms the deposit is a recorded
+    // member deposit in coin `T`, which this non-generic entrypoint cannot
+    // name. It removes the member and leaves the deposit recorded for them:
+    // `admin_remove_member_asset<T>` removes AND returns it in one call, and
+    // a removed member can always collect it with `claim_own_refund<T>`.
+    // On a circle without pinned terms the legacy refund runs as before,
+    // except that a deposit recorded as a stablecoin is never paid back in
+    // SUI (convert the circle, then remove).
     // ----------------------------------------------------------
     public fun admin_remove_member(
         circle: &mut Circle,
@@ -2155,84 +2260,100 @@ module njangi::njangi_circles {
         // Ensure that only the admin can remove members
         let sender = tx_context::sender(ctx);
         assert!(sender == circle.admin, ENotAdmin);
-        
+
         // Ensure the circle is not active - only allow removal from inactive circles
         assert!(!circle.is_active, ECircleIsActive);
-        
+
         // Ensure the member exists in the circle
         assert!(is_member(circle, member_addr), ENotMember);
-        
+
         // Verify wallet belongs to this circle
         assert!(custody::get_circle_id(wallet) == get_id(circle), EWalletCircleMismatch);
-        
-        // Get member data before removal
-        let member = table::borrow(&circle.members, member_addr);
-        let deposit_amount = members::get_deposit_balance(member);
-        let has_deposit = members::has_paid_deposit(member);
-        
-        // Remove member from the circle's members table
-        table::remove(&mut circle.members, member_addr);
-        
-        // Update current members count
-        circle.current_members = circle.current_members - 1;
-        
-        // Remove from rotation order if present
-        let rotation_len = vector::length(&circle.rotation_order);
-        let mut i = 0;
-        let mut found_position = option::none<u64>();
-        
-        while (i < rotation_len) {
-            if (*vector::borrow(&circle.rotation_order, i) == member_addr) {
-                found_position = option::some(i);
-                break
-            };
-            i = i + 1;
-        };
-        
-        // If member was in rotation order, replace with placeholder
-        if (option::is_some(&found_position)) {
-            let pos = *option::borrow(&found_position);
-            *vector::borrow_mut(&mut circle.rotation_order, pos) = @0x0;
-        };
-        
-        // If member had paid a security deposit, return it from custody wallet.
-        // The release helper pulls from both the main balance and dynamic-field
-        // storage transparently, so we no longer have to branch on storage shape.
-        if (has_deposit && deposit_amount > 0) {
-            let deposit_coin = custody::release_sui_to_member(
-                wallet,
-                deposit_amount,
-                member_addr,
-                clock,
-                ctx
-            );
-            transfer::public_transfer(deposit_coin, member_addr);
 
-            // Re-emit the legacy event shape so the WhatsApp bot listener in
-            // whatsapp-bot-backend keeps notifying members without a refactor.
-            event::emit(SecurityDepositReturned {
+        if (has_asset_policy(circle)) {
+            assert_bound_wallet(circle, wallet);
+            remove_member_record(circle, member_addr);
+            event::emit(MemberRemoved {
                 circle_id: object::uid_to_inner(&circle.id),
-                wallet_id: custody::get_circle_id(wallet),
                 member: member_addr,
-                amount: deposit_amount,
-                coin_type: std::string::utf8(b"sui"),
+                removed_by: sender,
+                deposit_returned: false,
+                deposit_amount: 0,
                 timestamp: clock::timestamp_ms(clock),
             });
+            touch_admin_heartbeat(circle, clock);
+            return
         };
-        
-        // Clean up the removed member object (automatic in Move)
-        
-        // Emit MemberRemoved event
+
+        // A circle without pinned terms: a member holding a legacy deposit
+        // is removed only after conversion, which moves that deposit into
+        // the v11 records (refunded to them on removal); v11 never pays
+        // from legacy storage.
+        let member = table::borrow(&circle.members, member_addr);
+        assert!(
+            !(members::has_paid_deposit(member) && members::get_deposit_balance(member) > 0),
+            E_CIRCLE_NOT_CONVERTED
+        );
+        remove_member_record(circle, member_addr);
         event::emit(MemberRemoved {
             circle_id: object::uid_to_inner(&circle.id),
             member: member_addr,
             removed_by: sender,
-            deposit_returned: has_deposit && deposit_amount > 0,
-            deposit_amount: if (has_deposit && deposit_amount > 0) { deposit_amount } else { 0 },
+            deposit_returned: false,
+            deposit_amount: 0,
             timestamp: clock::timestamp_ms(clock),
         });
-
         touch_admin_heartbeat(circle, clock);
+    }
+
+    /// v11: removes a member from an inactive circle with pinned asset terms
+    /// and returns their recorded deposit in the coin it was paid in (`T`),
+    /// to them, in the same call. The amount and the destination are the
+    /// member's own record; the admin chooses neither. Aborts with
+    /// E_ASSET_NOT_ALLOWED if the member's deposit is in another coin.
+    public fun admin_remove_member_asset<T>(
+        circle: &mut Circle,
+        member_addr: address,
+        wallet: &mut custody::CustodyWallet,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        let sender = tx_context::sender(ctx);
+        assert!(sender == circle.admin, ENotAdmin);
+        assert!(!circle.is_active, ECircleIsActive);
+        assert!(is_member(circle, member_addr), ENotMember);
+        assert_bound_wallet(circle, wallet);
+
+        let asset = core::coin_type_bytes<T>();
+        let marker = deposit_marker_of(circle, member_addr);
+        if (option::is_some(&marker)) {
+            assert!(*option::borrow(&marker) == asset, E_ASSET_NOT_ALLOWED);
+        };
+
+        remove_member_record(circle, member_addr);
+        let returned = refund_member_deposit<T>(circle, wallet, member_addr, clock, ctx);
+
+        event::emit(MemberRemoved {
+            circle_id: object::uid_to_inner(&circle.id),
+            member: member_addr,
+            removed_by: sender,
+            deposit_returned: returned > 0,
+            deposit_amount: returned,
+            timestamp: clock::timestamp_ms(clock),
+        });
+        touch_admin_heartbeat(circle, clock);
+    }
+
+    // Drops the member's table entry and frees their rotation seat (the
+    // shared part of both removal paths).
+    fun remove_member_record(circle: &mut Circle, member_addr: address) {
+        table::remove(&mut circle.members, member_addr);
+        circle.current_members = circle.current_members - 1;
+
+        let (found, pos) = vector::index_of(&circle.rotation_order, &member_addr);
+        if (found) {
+            *vector::borrow_mut(&mut circle.rotation_order, pos) = @0x0;
+        };
     }
 
     // ----------------------------------------------------------
@@ -2243,195 +2364,72 @@ module njangi::njangi_circles {
     }
 
     // ----------------------------------------------------------
-    // Member Entry function to deposit security deposit
-    // Performs checks and updates Member state, then calls custody to store the coin.
+    // Member security deposit — RETIRED in v11.
+    //
+    // Replaced by `post_security_deposit<T>`, which accepts only the coin
+    // the circle's pinned terms name, at exactly the pinned amount, and
+    // records it as the member's deposit in the circle's custody wallet.
+    // The signature stays because an upgrade cannot change or remove a
+    // public function.
     // ----------------------------------------------------------
     public fun member_deposit_security_deposit<CoinType>(
-        circle: &mut Circle,
-        wallet: &mut custody::CustodyWallet,
-        deposit_coin: Coin<CoinType>,
-        clock: &Clock,
-        ctx: &mut TxContext
+        _circle: &mut Circle,
+        _wallet: &mut custody::CustodyWallet,
+        _deposit_coin: Coin<CoinType>,
+        _clock: &Clock,
+        _ctx: &mut TxContext
     ) {
-        let sender = tx_context::sender(ctx);
-        let amount = coin::value(&deposit_coin);
-
-        // Read immutable values before getting mutable member reference
-        let circle_id = get_id(circle);
-        // Store admin address before mutable borrow
-        let admin = circle.admin;
-        
-        // Get security deposit requirement for both SUI and USD
-        let required_sui_amount = config::get_security_deposit(&circle.id);
-        let required_usd_cents = config::get_security_deposit_usd(&circle.id);
-
-        // --- Verification Steps (Now done in circles module) --- 
-        // Verify wallet belongs to this circle
-        assert!(custody::get_circle_id(wallet) == circle_id, EWalletCircleMismatch); 
-
-        // Verify caller is a member
-        assert!(is_member(circle, sender), 8); // Use existing error code for MemberNotFound
-
-        // Get member data mutably to update deposit status
-        let member = get_member_mut(circle, sender);
-
-        // Verify member is active - use core constants only
-        let member_status = members::get_status(member);
-        assert!(
-            member_status == core::member_status_active() ||
-            sender == admin, // Special case: admin can always deposit
-            14
-        ); // EMemberNotActive
-
-        // Verify security deposit hasn't already been paid
-        assert!(members::get_deposit_balance(member) == 0, 21); // Reuse error code EDepositAlreadyPaid
-
-        // --- Simplified Validation Logic ---
-        // For USDC (6 decimals): Convert USD cents (2dp) to microUSDC (6dp) via custody helper.
-        // For SUI (9 decimals): Use the raw security_deposit amount.
-        let is_sui_deposit = std::type_name::get<CoinType>() == std::type_name::get<SUI>();
-        
-        // Check if it's SUI or stablecoin by comparing with SUI type
-        if (is_sui_deposit) {
-            // For SUI, validate against the SUI amount
-            assert!(amount == required_sui_amount, 2); // EIncorrectDepositAmount
-        } else {
-            // For stablecoins like USDC, validate against USD amount
-            // Convert USD cents (2dp) into USDC micro-units (6dp).
-            let expected_stablecoin_amount = custody::usd_cents_to_usdc_amount(required_usd_cents);
-            assert!(amount == expected_stablecoin_amount, 2); // EIncorrectDepositAmount
-        };
-
-        // --- Update Member State --- 
-        members::set_deposit_balance(member, amount);
-        members::set_deposit_paid(member, true);
-        if (is_sui_deposit) {
-            members::set_recovery_sui_deposit(member, amount);
-            members::clear_recovery_stablecoin_deposit(member);
-        } else {
-            members::set_recovery_stablecoin_deposit(member, amount);
-            members::clear_recovery_sui_deposit(member);
-        };
-
-        // --- Call Custody to Store Coin --- 
-        custody::internal_store_security_deposit_without_validation<CoinType>(
-            wallet,
-            deposit_coin,
-            sender, // Pass sender as the member address
-            clock,
-            ctx
-        );
+        abort E_DEPRECATED_ENTRYPOINT
     }
 
     // ----------------------------------------------------------
-    // Deposit stablecoin to circle with price validation
+    // Oracle-priced stablecoin deposit — RETIRED in v11 (use
+    // `post_security_deposit<T>`).
     // ----------------------------------------------------------
     public fun deposit_stablecoin_with_price_validation<CoinType>(
-        circle: &mut Circle,
-        wallet: &mut custody::CustodyWallet,
-        stablecoin: coin::Coin<CoinType>,
-        mut required_amount: u64,
-        price_info_object: &PriceInfoObject,
-        clock: &clock::Clock,
-        ctx: &mut tx_context::TxContext
+        _circle: &mut Circle,
+        _wallet: &mut custody::CustodyWallet,
+        _stablecoin: coin::Coin<CoinType>,
+        _required_amount: u64,
+        _price_info_object: &PriceInfoObject,
+        _clock: &clock::Clock,
+        _ctx: &mut tx_context::TxContext
     ) {
-        let sender = tx_context::sender(ctx);
-        let deposit_amount = coin::value(&stablecoin);
-        
-        // Circle must be active
-        assert!(circle.is_active, ECircleNotActive);
-        
-        // Verify the sender is a member of the circle
-        assert!(table::contains(&circle.members, sender), ENotMember);
-        
-        // If we're using custom validation requirements
-        if (required_amount == 0) {
-            required_amount = config::get_security_deposit_usd(&circle.id);
-        };
-        
-        // Process the deposit with price validation
-        custody::internal_store_security_deposit<CoinType>(
-            wallet,
-            stablecoin,
-            sender,
-            required_amount,
-            price_info_object,
-            clock,
-            ctx
-        );
-        
-        // Update member status (deposit amount already oracle-validated in custody module).
-        update_member_status_after_deposit<CoinType>(circle, sender, deposit_amount, ctx);
-    }
-    
-    // ----------------------------------------------------------
-    // Update member status after deposit
-    // ----------------------------------------------------------
-    fun update_member_status_after_deposit<CoinType>(
-        circle: &mut Circle,
-        member_addr: address,
-        deposit_amount: u64,
-        ctx: &tx_context::TxContext
-    ) {
-        let current_time = tx_context::epoch_timestamp_ms(ctx);
-        
-        // Get the member record
-        let member = table::borrow_mut(&mut circle.members, member_addr);
-        let is_sui_deposit = std::type_name::get<CoinType>() == std::type_name::get<SUI>();
-
-        members::set_deposit_balance(member, deposit_amount);
-        members::set_deposit_paid(member, true);
-        if (is_sui_deposit) {
-            members::set_recovery_sui_deposit(member, deposit_amount);
-            members::clear_recovery_stablecoin_deposit(member);
-        } else {
-            members::set_recovery_stablecoin_deposit(member, deposit_amount);
-            members::clear_recovery_sui_deposit(member);
-        };
-
-        // If the member is pending, activate them.
-        let member_status = members::get_status(member);
-        if (member_status == core::member_status_pending()) {
-            // Change status to active - use core values consistently
-            members::set_status(member, core::member_status_active());
-            members::set_activated_at(member, current_time);
-            
-            // Emit member activated event
-            event::emit(MemberActivated {
-                circle_id: object::uid_to_inner(&circle.id),
-                member: member_addr,
-                deposit_amount
-            });
-        };
+        abort E_DEPRECATED_ENTRYPOINT
     }
 
     // ----------------------------------------------------------
-    // Deposit stablecoin to circle with price validation
+    // Legacy deposit bookkeeping entrypoint — RETIRED in v11: deposit
+    // accounting lives in v11 deposit records, which change only together
+    // with coins. `process_member_deposit_internal` keeps the legacy
+    // bookkeeping available to package code.
     // ----------------------------------------------------------
     public fun process_member_deposit(
-        circle: &mut Circle, 
-        deposit_amount: u64,
-        member_addr: address,
+        _circle: &mut Circle,
+        _deposit_amount: u64,
+        _member_addr: address,
         _ctx: &mut TxContext
     ): bool {
-        // Make sure member exists in the circle
+        abort E_DEPRECATED_ENTRYPOINT
+    }
+
+    /// Package-internal legacy deposit bookkeeping (the pre-v11 body of
+    /// `process_member_deposit`). It writes only the legacy per-member
+    /// fields, which v11 money paths never read.
+    public(package) fun process_member_deposit_internal(
+        circle: &mut Circle,
+        deposit_amount: u64,
+        member_addr: address
+    ): bool {
         assert!(is_member(circle, member_addr), 8);
-        
-        // Get security deposit requirement and USD value before getting mutable references
         let security_deposit = config::get_security_deposit(&circle.id);
-        // Now get the member object (after the immutable borrow is done)
         let member = get_member_mut(circle, member_addr);
-        
-        // --- Validate deposit amount directly ---
-        // Check if deposit is sufficient
         assert!(deposit_amount >= security_deposit, 2); // EIncorrectDepositAmount
 
-        // --- Update Member State --- 
         members::set_deposit_balance(member, deposit_amount);
         members::set_recovery_sui_deposit(member, deposit_amount);
         members::clear_recovery_stablecoin_deposit(member);
 
-        // Emit member activated event
         event::emit(MemberActivated {
             circle_id: object::uid_to_inner(&circle.id),
             member: member_addr,
@@ -2451,7 +2449,10 @@ module njangi::njangi_circles {
     ) {
         // Only the admin can update the wallet ID
         assert!(tx_context::sender(ctx) == circle.admin, ENotAdmin);
-        
+        // v11: a circle with pinned terms is bound to its custody wallet for
+        // good (CustodyBindingKey); the recorded id may not drift from it.
+        assert!(!has_asset_policy(circle), E_POLICY_LOCKED);
+
         // Update or create the wallet_id dynamic field
         let key = string::utf8(b"wallet_id");
         if (dynamic_field::exists_(&circle.id, key)) {
@@ -2476,88 +2477,20 @@ module njangi::njangi_circles {
     }
 
     // ----------------------------------------------------------
-    // Member Entry function to deposit stablecoin contribution
+    // Legacy custody-rail stablecoin contribution — RETIRED in v11.
+    //
+    // Rounds are paid through the per-round escrow
+    // (njangi_cycle_escrow::contribute_round / contribute*). The signature
+    // stays because an upgrade cannot change or remove a public function.
     // ----------------------------------------------------------
     public fun contribute_stablecoin<CoinType>(
-        circle: &mut Circle,
-        wallet: &mut custody::CustodyWallet,
-        payment: Coin<CoinType>,
-        clock: &Clock,
-        ctx: &mut TxContext
+        _circle: &mut Circle,
+        _wallet: &mut custody::CustodyWallet,
+        _payment: Coin<CoinType>,
+        _clock: &Clock,
+        _ctx: &mut TxContext
     ) {
-        let sender = tx_context::sender(ctx);
-        let amount = coin::value(&payment);
-
-        // --- Basic Assertions ---
-        // Compliance-gated circles must use the per-cycle escrow rail
-        // (njangi_cycle_escrow::contribute_with_attestation). This legacy
-        // custody rail performs no attestation checks, so allowing it here
-        // would let members bypass the KYC gate with a hand-rolled PTB
-        // (June 2026 audit). Security deposits
-        // (member_deposit_security_deposit) and all refund/recovery paths
-        // stay ungated — they only return a member's own funds.
-        assert!(!requires_attestation(circle), E_COMPLIANCE_ATTESTATION_REQUIRED);
-        // Must be a circle member
-        assert!(is_member(circle, sender), ENotMember); // Use local error code
-        // Circle must be active to accept contributions
-        assert!(is_circle_active(circle), ECircleNotActive);
-        // Verify custody wallet belongs to this circle
-        assert!(custody::get_circle_id(wallet) == get_id(circle), EWalletCircleMismatch);
-        // Get member and assert status is active and not suspended
-        let member = get_member(circle, sender);
-        // Use local error codes
-        assert!(members::get_status(member) == core::member_status_active(), EMemberNotActive);
-        assert!(option::is_none(&members::get_suspension_end_time(member)), EMemberSuspended);
-
-        // One contribution per member per payout round (shared across the
-        // SUI and stablecoin rails). Aborts E_ALREADY_CONTRIBUTED_THIS_CYCLE.
-        record_cycle_contributor(circle, sender);
-
-        // --- Amount Validation ---
-        // Get required contribution amount in USD from config
-        let required_contribution_usd_cents = config::get_contribution_amount_usd(&circle.id);
-        // Convert required USD cents (2dp) to USDC micro-units (6dp).
-        let required_stablecoin_amount = custody::usd_cents_to_usdc_amount(required_contribution_usd_cents);
-
-        // Validate the payment amount against the required stablecoin amount
-        // Allow slightly more for potential rounding, but not less
-        assert!(amount >= required_stablecoin_amount, EInvalidContributionAmount); // Use local error code
-
-        // --- Process Contribution --- 
-        // IMPORTANT: First deposit the payment into the custody wallet BEFORE updating counters
-        // This ensures the funds are available before any potential withdrawal attempt
-        custody::deposit_contribution_coin<CoinType>(
-            wallet,
-            payment,
-            sender,
-            clock,
-            ctx
-        );
-
-        // Record the contribution for the member AFTER the deposit
-        let member_mut = get_member_mut(circle, sender);
-        // Use the *required* amount for recording, not the potentially larger payment amount
-        members::record_contribution(member_mut, required_stablecoin_amount, clock::timestamp_ms(clock));
-        members::add_recovery_stablecoin_contributions(member_mut, amount);
-
-        // Update cycle tracking in USD cents (definitive accounting unit).
-        add_to_contributions_this_cycle(circle, required_contribution_usd_cents);
-
-        // Emit the locally defined StablecoinContributionMade event
-        event::emit(StablecoinContributionMade {
-            circle_id: get_id(circle),
-            member: sender,
-            // Report the required amount, consistent with member stats
-            amount: required_stablecoin_amount, 
-            cycle: get_current_cycle(circle),
-            // Add coin type info using imported type_name and String
-            // Convert ascii::String to string::String
-            coin_type: string::utf8(ascii::into_bytes(type_name::into_string(type_name::get<CoinType>())))
-        });
-
-        // NOTE: We do NOT trigger automatic payout after stablecoin contribution
-        // This avoids the race condition between contribution and withdrawal
-        // Admin must explicitly trigger payouts with admin_trigger_payout
+        abort E_DEPRECATED_ENTRYPOINT
     }
 
     // ----------------------------------------------------------
@@ -2616,6 +2549,8 @@ module njangi::njangi_circles {
         let sender = tx_context::sender(ctx);
         assert!(sender == circle.admin, ENotAdmin);
         assert!(!circle.is_active, ECircleIsActive);
+        // v11: a circle's amounts are pinned in its asset terms for life.
+        assert!(!has_asset_policy(circle), E_POLICY_LOCKED);
 
         assert!(contribution_amount_usd > 0, EInvalidContributionAmount);
         assert!(
@@ -2714,92 +2649,43 @@ module njangi::njangi_circles {
         touch_admin_heartbeat(circle, clock);
     }
 
-    // Same as update_cycle_limits, but resolves SUI/USD price from oracle
-    // with stale-price fallback and volatility circuit-breaker.
+    // Oracle-priced variant — RETIRED in v11 (no oracle on any circle path;
+    // circles created on v11 pin their native terms).
     public fun update_cycle_limits_with_oracle(
-        circle: &mut Circle,
-        cycle_length: u64,
-        cycle_day: u64,
-        contribution_amount_usd: u64,
-        security_deposit_usd: u64,
-        contribution_amount_local: u64,
-        security_deposit_local: u64,
-        price_info_object: &PriceInfoObject,
-        clock: &Clock,
-        ctx: &mut TxContext
+        _circle: &mut Circle,
+        _cycle_length: u64,
+        _cycle_day: u64,
+        _contribution_amount_usd: u64,
+        _security_deposit_usd: u64,
+        _contribution_amount_local: u64,
+        _security_deposit_local: u64,
+        _price_info_object: &PriceInfoObject,
+        _clock: &Clock,
+        _ctx: &mut TxContext
     ) {
-        let sui_price_usd_cents = resolve_sui_price_usd_cents_from_oracle(
-            circle,
-            price_info_object,
-            clock
-        );
-
-        update_cycle_limits(
-            circle,
-            cycle_length,
-            cycle_day,
-            contribution_amount_usd,
-            security_deposit_usd,
-            contribution_amount_local,
-            security_deposit_local,
-            sui_price_usd_cents,
-            clock,
-            ctx
-        );
+        abort E_DEPRECATED_ENTRYPOINT
     }
 
     // ----------------------------------------------------------
-    // Admin function to refresh native display amounts from USD
-    // without changing USD-centric logic thresholds.
+    // Native-amount re-pricing — RETIRED in v11. A circle's native amounts
+    // are pinned in its asset terms for life; nothing re-prices a round.
     // ----------------------------------------------------------
     public fun sync_native_display_amounts(
-        circle: &mut Circle,
-        sui_price_usd_cents: u64,
-        clock: &Clock,
-        ctx: &mut TxContext
+        _circle: &mut Circle,
+        _sui_price_usd_cents: u64,
+        _clock: &Clock,
+        _ctx: &mut TxContext
     ) {
-        let sender = tx_context::sender(ctx);
-        assert!(sender == circle.admin, ENotAdmin);
-
-        let contribution_usd_cents = config::get_contribution_amount_usd(&circle.id);
-        let security_deposit_usd_cents = config::get_security_deposit_usd(&circle.id);
-        let (contribution_native_amount, security_deposit_native_amount) = derive_native_display_amounts(
-            contribution_usd_cents,
-            security_deposit_usd_cents,
-            sui_price_usd_cents
-        );
-
-        config::set_native_display_amounts(
-            &mut circle.id,
-            contribution_native_amount,
-            security_deposit_native_amount
-        );
-        touch_admin_heartbeat(circle, clock);
-
-        event::emit(NativeDisplayAmountsSynced {
-            circle_id: object::uid_to_inner(&circle.id),
-            admin: sender,
-            contribution_usd_cents,
-            contribution_native_amount,
-            security_deposit_usd_cents,
-            security_deposit_native_amount,
-            sui_price_usd_cents,
-        });
+        abort E_DEPRECATED_ENTRYPOINT
     }
 
-    // Resolve price from oracle and sync native display amounts.
     public fun sync_native_display_amounts_with_oracle(
-        circle: &mut Circle,
-        price_info_object: &PriceInfoObject,
-        clock: &Clock,
-        ctx: &mut TxContext
+        _circle: &mut Circle,
+        _price_info_object: &PriceInfoObject,
+        _clock: &Clock,
+        _ctx: &mut TxContext
     ) {
-        let sui_price_usd_cents = resolve_sui_price_usd_cents_from_oracle(
-            circle,
-            price_info_object,
-            clock
-        );
-        sync_native_display_amounts(circle, sui_price_usd_cents, clock, ctx);
+        abort E_DEPRECATED_ENTRYPOINT
     }
 
     // ----------------------------------------------------------
@@ -2811,17 +2697,6 @@ module njangi::njangi_circles {
         circle.contributions_this_cycle
     }
     
-    // Add a USD-cent amount to the cycle contribution counter.
-    public(package) fun add_to_contributions_this_cycle(circle: &mut Circle, amount: u64) {
-        circle.contributions_this_cycle = circle.contributions_this_cycle + amount;
-    }
-
-    // Reset the contributions counter for this cycle (after a payout)
-    public(package) fun reset_contributions_this_cycle(circle: &mut Circle) {
-        circle.contributions_this_cycle = 0;
-        clear_cycle_contributors(circle);
-    }
-
     // ----------------------------------------------------------
     // Per-round contributor de-duplication (legacy custody path).
     // The per-cycle escrow already enforces one-contribution-per-member
@@ -2842,18 +2717,6 @@ module njangi::njangi_circles {
         };
         let contributors = dynamic_field::borrow<String, vector<address>>(&circle.id, key);
         vector::contains(contributors, &member)
-    }
-
-    // Record `member` as having contributed for the current payout round.
-    // Aborts with E_ALREADY_CONTRIBUTED_THIS_CYCLE on a duplicate.
-    public(package) fun record_cycle_contributor(circle: &mut Circle, member: address) {
-        let key = string::utf8(FIELD_CYCLE_CONTRIBUTORS);
-        if (!dynamic_field::exists_(&circle.id, key)) {
-            dynamic_field::add<String, vector<address>>(&mut circle.id, key, vector[]);
-        };
-        let contributors = dynamic_field::borrow_mut<String, vector<address>>(&mut circle.id, key);
-        assert!(!vector::contains(contributors, &member), E_ALREADY_CONTRIBUTED_THIS_CYCLE);
-        vector::push_back(contributors, member);
     }
 
     // Clear the contributor record. Must be called everywhere
@@ -2922,8 +2785,15 @@ module njangi::njangi_circles {
     ) {
         assert!(is_member(circle, member_addr), ENotMember);
         let circle_id = object::uid_to_inner(&circle.id);
+        // v11: on a circle with pinned terms, "held" means a deposit recorded
+        // in the circle's v11 deposit records; the legacy per-member fields
+        // describe legacy storage only.
+        let held = if (has_asset_policy(circle)) {
+            collateral_held(circle, member_addr)
+        } else {
+            members::get_deposit_balance(table::borrow(&circle.members, member_addr))
+        };
         let member = table::borrow_mut(&mut circle.members, member_addr);
-        let held = members::get_deposit_balance(member);
         if (held > 0 && !members::has_paid_deposit(member)) {
             members::set_deposit_paid(member, true);
             event::emit(DepositPaidReconciled {
@@ -3330,14 +3200,14 @@ module njangi::njangi_circles {
                 && config::is_recovery_proposal_passed(&circle.id),
             ERecoveryExecutionNotReady
         );
-        execute_recovery_internal<CoinType>(
-            circle,
-            wallet,
-            false,
-            RECOVERY_TRIGGER_ROLE_VOTE_EXECUTION,
-            clock,
-            ctx
-        );
+        // v11: a converted circle stops once and refunds per asset; this
+        // call refunds `CoinType` (other assets: `refund_asset<U>`).
+        // v11 refunds only from v11 deposit records: a circle created before
+        // v11 converts first (`adopt_asset_policy`, permissionless).
+        assert!(is_converted(circle), E_CIRCLE_NOT_CONVERTED);
+        assert_bound_wallet(circle, wallet);
+        stop_internal(circle, false, RECOVERY_TRIGGER_ROLE_VOTE_EXECUTION, clock, ctx);
+        refund_asset_internal<CoinType>(circle, wallet, clock, ctx);
     }
 
     public fun trigger_auto_release<CoinType>(
@@ -3349,131 +3219,10 @@ module njangi::njangi_circles {
         assert!(config::is_auto_release_ready(&circle.id, clock), ERecoveryExecutionNotReady);
         let current_time = clock::timestamp_ms(clock);
         let trigger_role = resolve_auto_release_trigger_role(circle, tx_context::sender(ctx), current_time);
-        execute_recovery_internal<CoinType>(circle, wallet, true, trigger_role, clock, ctx);
-    }
-
-    fun execute_recovery_internal<CoinType>(
-        circle: &mut Circle,
-        wallet: &mut CustodyWallet,
-        used_auto_release: bool,
-        trigger_role: u8,
-        clock: &Clock,
-        ctx: &mut TxContext
-    ) {
-        let executor = tx_context::sender(ctx);
-        let current_time = clock::timestamp_ms(clock);
-
-        assert!(custody::get_circle_id(wallet) == get_id(circle), EWalletCircleMismatch);
-
-        let member_addresses = recovery_member_addresses(circle);
-        assert!(vector::length(&member_addresses) == circle.current_members, ERecoveryMemberSnapshotMismatch);
-
-        let (total_sui_refund, total_stablecoin_refund) = get_recovery_refund_totals(circle, &member_addresses);
-        assert!(custody::get_total_wallet_balance(wallet) >= total_sui_refund, ERecoveryInsufficientWalletBalance);
-        assert!(custody::get_stablecoin_balance<CoinType>(wallet) >= total_stablecoin_refund, ERecoveryInsufficientWalletBalance);
-
-        event::emit(RecoveryExecutionStarted {
-            circle_id: object::uid_to_inner(&circle.id),
-            executor,
-            member_count: vector::length(&member_addresses),
-            total_sui_refund,
-            total_stablecoin_refund,
-            used_auto_release,
-            trigger_role,
-            timestamp: current_time,
-        });
-
-        config::mark_recovery_stopped(&mut circle.id, clock);
-        circle.is_active = false;
-        circle.paused_after_cycle = false;
-        circle.contributions_this_cycle = 0;
-        clear_cycle_contributors(circle);
-        circle.next_payout_time = current_time;
-        circle.active_auction = option::none();
-
-        let mut refunded_members = 0;
-        let member_count = vector::length(&member_addresses);
-        let mut i = 0;
-        while (i < member_count) {
-            let member_addr = *vector::borrow(&member_addresses, i);
-            let member = get_member(circle, member_addr);
-            let sui_contributions_refunded = members::get_recovery_sui_contributions(member);
-            let sui_deposit_refunded = members::get_recovery_sui_deposit(member);
-            let stablecoin_contributions_refunded = members::get_recovery_stablecoin_contributions(member);
-            let stablecoin_deposit_refunded = members::get_recovery_stablecoin_deposit(member);
-            let member_sui_refund = sui_contributions_refunded + sui_deposit_refunded;
-            let member_stablecoin_refund = stablecoin_contributions_refunded + stablecoin_deposit_refunded;
-
-            if (member_sui_refund > 0) {
-                let refund_coin = custody::withdraw_sui_for_recovery(
-                    wallet,
-                    member_sui_refund,
-                    member_addr,
-                    clock,
-                    ctx
-                );
-                transfer::public_transfer(refund_coin, member_addr);
-            };
-
-            if (member_stablecoin_refund > 0) {
-                let refund_coin = custody::withdraw_stablecoin_for_recovery<CoinType>(
-                    wallet,
-                    member_stablecoin_refund,
-                    member_addr,
-                    clock,
-                    ctx
-                );
-                transfer::public_transfer(refund_coin, member_addr);
-            };
-
-            if (member_sui_refund > 0 || member_stablecoin_refund > 0) {
-                refunded_members = refunded_members + 1;
-            };
-
-            if (
-                member_sui_refund > 0
-                    || member_stablecoin_refund > 0
-                    || sui_deposit_refunded > 0
-                    || stablecoin_deposit_refunded > 0
-            ) {
-                let member_mut = get_member_mut(circle, member_addr);
-                if (sui_deposit_refunded > 0 || stablecoin_deposit_refunded > 0) {
-                    members::set_deposit_balance(member_mut, 0);
-                    members::set_deposit_paid(member_mut, false);
-                };
-                members::clear_all_recovery_balances(member_mut);
-            };
-
-            if (
-                sui_contributions_refunded > 0
-                    || sui_deposit_refunded > 0
-                    || stablecoin_contributions_refunded > 0
-                    || stablecoin_deposit_refunded > 0
-            ) {
-                event::emit(RecoveryMemberRefunded {
-                    circle_id: object::uid_to_inner(&circle.id),
-                    member: member_addr,
-                    sui_contributions_refunded,
-                    sui_deposit_refunded,
-                    stablecoin_contributions_refunded,
-                    stablecoin_deposit_refunded,
-                    timestamp: current_time,
-                });
-            };
-
-            i = i + 1;
-        };
-
-        config::mark_recovery_refunded(&mut circle.id, clock);
-
-        event::emit(RecoveryExecutionCompleted {
-            circle_id: object::uid_to_inner(&circle.id),
-            executor,
-            refunded_members,
-            total_sui_refund,
-            total_stablecoin_refund,
-            timestamp: current_time,
-        });
+        assert!(is_converted(circle), E_CIRCLE_NOT_CONVERTED);
+        assert_bound_wallet(circle, wallet);
+        stop_internal(circle, true, trigger_role, clock, ctx);
+        refund_asset_internal<CoinType>(circle, wallet, clock, ctx);
     }
 
     // ----------------------------------------------------------
@@ -3639,53 +3388,6 @@ module njangi::njangi_circles {
         };
     }
 
-    fun recovery_member_addresses(circle: &Circle): vector<address> {
-        let mut member_addresses = vector::empty<address>();
-        let rotation = &circle.rotation_order;
-        let len = vector::length(rotation);
-        let mut i = 0;
-
-        while (i < len) {
-            let member_addr = *vector::borrow(rotation, i);
-            if (
-                member_addr != @0x0
-                    && table::contains(&circle.members, member_addr)
-                    && !vector::contains(&member_addresses, &member_addr)
-            ) {
-                vector::push_back(&mut member_addresses, member_addr);
-            };
-            i = i + 1;
-        };
-
-        member_addresses
-    }
-
-    fun get_recovery_refund_totals(
-        circle: &Circle,
-        member_addresses: &vector<address>
-    ): (u64, u64) {
-        let mut total_sui_refund = 0;
-        let mut total_stablecoin_refund = 0;
-        let member_count = vector::length(member_addresses);
-        let mut i = 0;
-
-        while (i < member_count) {
-            let member_addr = *vector::borrow(member_addresses, i);
-            let member = get_member(circle, member_addr);
-            total_sui_refund =
-                total_sui_refund
-                    + members::get_recovery_sui_contributions(member)
-                    + members::get_recovery_sui_deposit(member);
-            total_stablecoin_refund =
-                total_stablecoin_refund
-                    + members::get_recovery_stablecoin_contributions(member)
-                    + members::get_recovery_stablecoin_deposit(member);
-            i = i + 1;
-        };
-
-        (total_sui_refund, total_stablecoin_refund)
-    }
-
     // ----------------------------------------------------------
     // Helper to convert cycle length to milliseconds
     // ----------------------------------------------------------
@@ -3727,83 +3429,17 @@ module njangi::njangi_circles {
         option::some(recipient)
     }
     
-    // Count the active members in the rotation and whether the scheduled
-    // recipient (member at current_position) is one of them. Shared by the
-    // funding gate and the payout-amount calculation so the two can never
-    // disagree about how many contributions a cycle collects.
-    fun count_active_members_and_recipient(circle: &Circle): (u64, bool) {
-        let mut active_members = 0;
-        let rotation = &circle.rotation_order;
-        let len = vector::length(rotation);
-        let mut i = 0;
-
-        // Get current recipient (member at current_position)
-        let current_recipient = if (circle.current_position < len) {
-            *vector::borrow(rotation, circle.current_position)
-        } else {
-            @0x0 // Invalid recipient address
-        };
-
-        // Track if recipient is counted in active members
-        let mut recipient_is_active = false;
-
-        while (i < len) {
-            let member_addr = *vector::borrow(rotation, i);
-            if (member_addr != @0x0 && table::contains(&circle.members, member_addr)) {
-                let member = table::borrow(&circle.members, member_addr);
-                if (members::get_status(member) == core::member_status_active()) {
-                    active_members = active_members + 1;
-                    // Check if this active member is the recipient
-                    if (member_addr == current_recipient) {
-                        recipient_is_active = true;
-                    };
-                };
-            };
-            i = i + 1;
-        };
-
-        (active_members, recipient_is_active)
+    // ----------------------------------------------------------
+    // Legacy-rail funding views — RETIRED in v11 with the legacy custody
+    // payout rail they gated. A round's funding is its escrow's own record
+    // (njangi_cycle_escrow::contributor_count / required_contributors).
+    // ----------------------------------------------------------
+    public fun current_cycle_contributing_members(_circle: &Circle): u64 {
+        abort E_DEPRECATED_ENTRYPOINT
     }
 
-    // Number of members expected to contribute for the current payout round:
-    // active members in the rotation, excluding the scheduled recipient when
-    // that recipient is active (the recipient never pays into their own
-    // payout — same economics as the per-cycle escrow's required_contributors
-    // = member_count - 1). This is the only multiplier the legacy payout may
-    // use: paying contribution x member_count would silently draw the
-    // shortfall from commingled security deposits.
-    public fun current_cycle_contributing_members(circle: &Circle): u64 {
-        let (active_members, recipient_is_active) = count_active_members_and_recipient(circle);
-        if (active_members == 0) {
-            return 0
-        };
-        if (recipient_is_active) {
-            active_members - 1
-        } else {
-            active_members
-        }
-    }
-
-    // Check if all active members have contributed for the current cycle
-    public fun has_all_members_contributed(circle: &Circle): bool {
-        let (active_members, recipient_is_active) = count_active_members_and_recipient(circle);
-
-        // If there are no active members, the check passes (sanity check)
-        if (active_members == 0) {
-            return true
-        };
-
-        // Calculate expected total contributions in USD cents.
-        let contribution_amount_usd = config::get_contribution_amount_usd(&circle.id);
-
-        let expected_contributions = expected_cycle_contributions_usd(
-            contribution_amount_usd,
-            active_members,
-            recipient_is_active
-        );
-
-        // Compare with actual contributions this cycle
-        circle.contributions_this_cycle >= expected_contributions
+    public fun has_all_members_contributed(_circle: &Circle): bool {
+        abort E_DEPRECATED_ENTRYPOINT
     }
     
     // ----------------------------------------------------------
@@ -3873,118 +3509,6 @@ module njangi::njangi_circles {
         config::get_security_deposit_dual(&circle.id)
     }
 
-    // Resolve SUI/USD oracle price with:
-    // - stale check (> 1h uses last valid price)
-    // - volatility circuit breaker (> 50% change uses last valid price)
-    fun resolve_sui_price_usd_cents_from_oracle(
-        circle: &mut Circle,
-        price_info_object: &PriceInfoObject,
-        clock: &Clock
-    ): u64 {
-        let (candidate_price_usd_cents, candidate_timestamp_seconds) = price_validator::get_sui_price_snapshot(
-            price_info_object,
-            clock,
-            ORACLE_LOOKBACK_SECONDS
-        );
-        let now_seconds = clock::timestamp_ms(clock) / 1000;
-        let candidate_age_seconds = if (now_seconds > candidate_timestamp_seconds) {
-            now_seconds - candidate_timestamp_seconds
-        } else {
-            0
-        };
-        let last_valid_price = get_last_valid_sui_price_usd_cents(circle);
-
-        let (resolved_price_usd_cents, used_fallback, fallback_reason) = choose_effective_sui_price(
-            candidate_price_usd_cents,
-            candidate_age_seconds,
-            last_valid_price
-        );
-
-        // Only advance cache when we accepted the fresh candidate.
-        if (!used_fallback) {
-            cache_last_valid_sui_price(circle, resolved_price_usd_cents, candidate_timestamp_seconds);
-        };
-
-        event::emit(OraclePriceResolved {
-            circle_id: object::uid_to_inner(&circle.id),
-            candidate_price_usd_cents,
-            resolved_price_usd_cents,
-            candidate_age_seconds,
-            used_fallback,
-            fallback_reason,
-        });
-
-        resolved_price_usd_cents
-    }
-
-    // Returns:
-    // (effective_price_usd_cents, used_fallback, fallback_reason)
-    fun choose_effective_sui_price(
-        candidate_price_usd_cents: u64,
-        candidate_age_seconds: u64,
-        last_valid_price_usd_cents: Option<u64>
-    ): (u64, bool, u8) {
-        if (candidate_price_usd_cents == 0) {
-            if (option::is_some(&last_valid_price_usd_cents)) {
-                return (*option::borrow(&last_valid_price_usd_cents), true, PRICE_FALLBACK_INVALID)
-            };
-            assert!(false, ENoValidOraclePrice);
-        };
-
-        if (candidate_age_seconds > ORACLE_MAX_STALE_SECONDS) {
-            if (option::is_some(&last_valid_price_usd_cents)) {
-                return (*option::borrow(&last_valid_price_usd_cents), true, PRICE_FALLBACK_STALE)
-            };
-            assert!(false, ENoValidOraclePrice);
-        };
-
-        if (option::is_some(&last_valid_price_usd_cents)) {
-            let previous_price = *option::borrow(&last_valid_price_usd_cents);
-            if (is_extreme_price_change(previous_price, candidate_price_usd_cents)) {
-                return (previous_price, true, PRICE_FALLBACK_VOLATILITY)
-            };
-        };
-
-        (candidate_price_usd_cents, false, PRICE_FALLBACK_NONE)
-    }
-
-    // Extreme volatility means > 50% absolute change from last valid price.
-    fun is_extreme_price_change(previous_price: u64, candidate_price: u64): bool {
-        if (previous_price == 0) {
-            return false
-        };
-
-        let diff = if (candidate_price > previous_price) {
-            candidate_price - previous_price
-        } else {
-            previous_price - candidate_price
-        };
-
-        diff > (previous_price / 2)
-    }
-
-    fun get_last_valid_sui_price_usd_cents(circle: &Circle): Option<u64> {
-        if (dynamic_field::exists_(&circle.id, FIELD_LAST_VALID_SUI_PRICE_USD_CENTS)) {
-            option::some(*dynamic_field::borrow(&circle.id, FIELD_LAST_VALID_SUI_PRICE_USD_CENTS))
-        } else {
-            option::none()
-        }
-    }
-
-    fun cache_last_valid_sui_price(circle: &mut Circle, price_usd_cents: u64, timestamp_seconds: u64) {
-        if (dynamic_field::exists_(&circle.id, FIELD_LAST_VALID_SUI_PRICE_USD_CENTS)) {
-            *dynamic_field::borrow_mut(&mut circle.id, FIELD_LAST_VALID_SUI_PRICE_USD_CENTS) = price_usd_cents;
-        } else {
-            dynamic_field::add(&mut circle.id, FIELD_LAST_VALID_SUI_PRICE_USD_CENTS, price_usd_cents);
-        };
-
-        if (dynamic_field::exists_(&circle.id, FIELD_LAST_VALID_SUI_PRICE_TS_SEC)) {
-            *dynamic_field::borrow_mut(&mut circle.id, FIELD_LAST_VALID_SUI_PRICE_TS_SEC) = timestamp_seconds;
-        } else {
-            dynamic_field::add(&mut circle.id, FIELD_LAST_VALID_SUI_PRICE_TS_SEC, timestamp_seconds);
-        };
-    }
-
     // Derive native display values from USD thresholds at a given SUI price.
     fun derive_native_display_amounts(
         contribution_usd_cents: u64,
@@ -3996,25 +3520,6 @@ module njangi::njangi_circles {
         assert!(contribution_native > 0, EInvalidContributionAmount);
         assert!(security_deposit_native > 0, EIncorrectDepositAmount);
         (contribution_native, security_deposit_native)
-    }
-
-    // Contribution completeness is always based on USD amounts.
-    fun expected_cycle_contributions_usd(
-        contribution_usd_cents: u64,
-        active_members: u64,
-        recipient_is_active: bool
-    ): u64 {
-        if (active_members == 0) {
-            return 0
-        };
-
-        let contributing_members = if (recipient_is_active) {
-            active_members - 1
-        } else {
-            active_members
-        };
-
-        contribution_usd_cents * contributing_members
     }
 
     // ----------------------------------------------------------
@@ -4040,66 +3545,14 @@ module njangi::njangi_circles {
     // Note: Batch processing will be handled in the automation service
     // Individual circle checking is done via is_circle_ready_for_automated_payout
 
-    // Check if a circle is ready for automated payout
-    public fun is_circle_ready_for_automated_payout(circle: &Circle, clock: &Clock): bool {
-        // Must be active
-        if (!circle.is_active) {
-            return false
-        };
-
-        // Must not be paused
-        if (circle.paused_after_cycle) {
-            return false
-        };
-
-        // Must be overdue
-        if (!is_payout_overdue(circle, clock)) {
-            return false
-        };
-
-        // All members must have contributed
-        if (!has_all_members_contributed(circle)) {
-            return false
-        };
-
-        true
+    // Legacy automated-payout readiness — RETIRED in v11 (see above).
+    public fun is_circle_ready_for_automated_payout(_circle: &Circle, _clock: &Clock): bool {
+        abort E_DEPRECATED_ENTRYPOINT
     }
 
-    // Get comprehensive automation status for a circle
-    public fun get_automation_status(circle: &Circle, clock: &Clock): AutomationStatus {
-        let current_time = clock::timestamp_ms(clock);
-        let next_payout = circle.next_payout_time;
-        
-        let is_overdue = current_time > next_payout;
-        let time_until_payout = if (is_overdue) {
-            0
-        } else {
-            next_payout - current_time
-        };
-
-        let all_contributed = has_all_members_contributed(circle);
-        let is_ready = is_circle_ready_for_automated_payout(circle, clock);
-
-        // Calculate warning level based on time remaining
-        let warning_level = if (is_overdue) {
-            4 // Overdue
-        } else if (time_until_payout <= 3_600_000) { // 1 hour
-            3
-        } else if (time_until_payout <= 21_600_000) { // 6 hours
-            2
-        } else if (time_until_payout <= 86_400_000) { // 24 hours
-            1
-        } else {
-            0 // No warning
-        };
-
-        AutomationStatus {
-            is_overdue,
-            time_until_payout,
-            is_ready_for_payout: is_ready,
-            all_members_contributed: all_contributed,
-            warning_level,
-        }
+    // Legacy automated-payout status — RETIRED in v11 (see above).
+    public fun get_automation_status(_circle: &Circle, _clock: &Clock): AutomationStatus {
+        abort E_DEPRECATED_ENTRYPOINT
     }
 
     // Calculate time remaining until next payout (0 if overdue)
@@ -4157,65 +3610,35 @@ module njangi::njangi_circles {
         }
     }
 
-    // Emit automation events for logging and monitoring
+    // Caller-supplied automation events — RETIRED in v11: anyone could emit
+    // them about any circle. The views above stay.
     public fun emit_automation_triggered(
-        circle: &Circle,
-        automation_type: vector<u8>,
-        success: bool,
-        details: vector<u8>,
-        clock: &Clock
+        _circle: &Circle,
+        _automation_type: vector<u8>,
+        _success: bool,
+        _details: vector<u8>,
+        _clock: &Clock
     ) {
-        event::emit(AutomationTriggered {
-            circle_id: object::uid_to_inner(&circle.id),
-            automation_type: string::utf8(automation_type),
-            triggered_at: clock::timestamp_ms(clock),
-            success,
-            details: string::utf8(details),
-        });
+        abort E_DEPRECATED_ENTRYPOINT
     }
 
-    public fun emit_payout_overdue(circle: &Circle, clock: &Clock) {
-        let current_time = clock::timestamp_ms(clock);
-        let overdue_duration = get_overdue_duration(circle, clock);
-        
-        event::emit(PayoutOverdue {
-            circle_id: object::uid_to_inner(&circle.id),
-            overdue_duration_ms: overdue_duration,
-            next_payout_time: circle.next_payout_time,
-            current_time,
-            all_contributed: has_all_members_contributed(circle),
-        });
+    public fun emit_payout_overdue(_circle: &Circle, _clock: &Clock) {
+        abort E_DEPRECATED_ENTRYPOINT
     }
 
     public fun emit_automation_failed(
-        circle: &Circle,
-        automation_type: vector<u8>,
-        error_code: u64,
-        error_message: vector<u8>,
-        retry_count: u64,
-        clock: &Clock
+        _circle: &Circle,
+        _automation_type: vector<u8>,
+        _error_code: u64,
+        _error_message: vector<u8>,
+        _retry_count: u64,
+        _clock: &Clock
     ) {
-        event::emit(AutomationFailed {
-            circle_id: object::uid_to_inner(&circle.id),
-            automation_type: string::utf8(automation_type),
-            error_code,
-            error_message: string::utf8(error_message),
-            failed_at: clock::timestamp_ms(clock),
-            retry_count,
-        });
+        abort E_DEPRECATED_ENTRYPOINT
     }
 
-    public fun emit_payout_warning(circle: &Circle, warning_level: u8, clock: &Clock) {
-        let current_time = clock::timestamp_ms(clock);
-        let time_remaining = get_time_until_payout(circle, clock);
-        
-        event::emit(PayoutWarning {
-            circle_id: object::uid_to_inner(&circle.id),
-            warning_level,
-            time_remaining_ms: time_remaining,
-            next_payout_time: circle.next_payout_time,
-            current_time,
-        });
+    public fun emit_payout_warning(_circle: &Circle, _warning_level: u8, _clock: &Clock) {
+        abort E_DEPRECATED_ENTRYPOINT
     }
 
     // Note: Batch automation status queries will be handled in the automation service
@@ -4225,6 +3648,741 @@ module njangi::njangi_circles {
     public fun has_valid_rotation(circle: &Circle): bool {
         let rotation_len = vector::length(&circle.rotation_order);
         rotation_len > 0 && circle.current_position < rotation_len
+    }
+
+    // ==========================================================
+    // v11 — asset terms, deposit records, conversion, per-asset refunds
+    // ==========================================================
+
+    // ---------------- reads ----------------
+
+    public fun has_asset_policy(circle: &Circle): bool {
+        dynamic_field::exists_with_type<AssetPolicyKey, CircleAssetPolicy>(&circle.id, AssetPolicyKey {})
+    }
+
+    public fun asset_policy(circle: &Circle): Option<CircleAssetPolicy> {
+        if (has_asset_policy(circle)) {
+            option::some(*policy_ref(circle))
+        } else {
+            option::none()
+        }
+    }
+
+    /// True once the circle runs on v11 storage (its terms are pinned, at
+    /// creation or by `adopt_asset_policy`).
+    public fun is_converted(circle: &Circle): bool {
+        has_asset_policy(circle)
+    }
+
+    /// Custody-wallet ledger entries the conversion covered; 0 for circles
+    /// created on v11. Entries appended later describe legacy storage only.
+    public fun legacy_migrated_entries(circle: &Circle): Option<u64> {
+        if (has_asset_policy(circle)) {
+            option::some(policy_ref(circle).legacy_ledger_entries)
+        } else {
+            option::none()
+        }
+    }
+
+    /// The custody wallet every v11 money path of this circle must be given.
+    public fun bound_wallet_id(circle: &Circle): Option<ID> {
+        if (has_asset_policy(circle)) {
+            option::some(policy_ref(circle).wallet_id)
+        } else {
+            option::none()
+        }
+    }
+
+    public fun policy_settlement_asset(policy: &CircleAssetPolicy): vector<u8> { policy.settlement_asset }
+    public fun policy_assets(policy: &CircleAssetPolicy): vector<AssetTerms> { policy.assets }
+    public fun policy_set_at_ms(policy: &CircleAssetPolicy): u64 { policy.set_at_ms }
+    public fun policy_terms_for(policy: &CircleAssetPolicy, asset: vector<u8>): Option<AssetTerms> {
+        find_terms(policy, &asset)
+    }
+    public fun policy_settlement_terms(policy: &CircleAssetPolicy): AssetTerms {
+        option::destroy_some(find_terms(policy, &policy.settlement_asset))
+    }
+    public fun terms_asset(terms: &AssetTerms): vector<u8> { terms.asset }
+    public fun terms_decimals(terms: &AssetTerms): u8 { terms.decimals }
+    public fun terms_contribution_amount(terms: &AssetTerms): u64 { terms.contribution_amount }
+    public fun terms_security_deposit(terms: &AssetTerms): u64 { terms.security_deposit }
+
+    /// The member's security deposit in `asset`, as recorded in the
+    /// circle's custody wallet (0 when none).
+    public fun member_deposit_of(circle: &Circle, member: address, asset: vector<u8>): u64 {
+        let key = member_deposit_key(member, asset);
+        if (dynamic_field::exists_with_type<MemberDepositKey, u64>(&circle.id, key)) {
+            *dynamic_field::borrow<MemberDepositKey, u64>(&circle.id, key)
+        } else {
+            0
+        }
+    }
+
+    /// Everyone who has ever had a deposit recorded in `asset`
+    /// (append-only; refunded members stay listed with a zero record).
+    public fun depositors_of(circle: &Circle, asset: vector<u8>): vector<address> {
+        let key = DepositorsKey { asset };
+        if (dynamic_field::exists_with_type<DepositorsKey, vector<address>>(&circle.id, key)) {
+            *dynamic_field::borrow<DepositorsKey, vector<address>>(&circle.id, key)
+        } else {
+            vector::empty()
+        }
+    }
+
+    public fun total_member_deposits(circle: &Circle, asset: vector<u8>): u64 {
+        let depositors = depositors_of(circle, asset);
+        let mut total = 0;
+        let mut i = 0;
+        while (i < vector::length(&depositors)) {
+            total = total + member_deposit_of(circle, *vector::borrow(&depositors, i), asset);
+            i = i + 1;
+        };
+        total
+    }
+
+    /// The asset a member's current deposit is in (none when they hold no
+    /// deposit record).
+    public fun deposit_marker_of(circle: &Circle, member: address): Option<vector<u8>> {
+        let key = DepositMarkerKey { member };
+        if (dynamic_field::exists_with_type<DepositMarkerKey, vector<u8>>(&circle.id, key)) {
+            option::some(*dynamic_field::borrow<DepositMarkerKey, vector<u8>>(&circle.id, key))
+        } else {
+            option::none()
+        }
+    }
+
+    /// When the last refund run for `asset` completed (ms), if any.
+    public fun refund_record_of(circle: &Circle, asset: vector<u8>): Option<u64> {
+        let key = RefundRecordKey { asset };
+        if (dynamic_field::exists_with_type<RefundRecordKey, u64>(&circle.id, key)) {
+            option::some(*dynamic_field::borrow<RefundRecordKey, u64>(&circle.id, key))
+        } else {
+            option::none()
+        }
+    }
+
+    // ---------------- conversion of a pre-v11 circle ----------------
+
+    /// Converts a circle created before v11: pins its asset terms and moves
+    /// its legacy security deposits into the v11 deposit records of the SAME
+    /// custody wallet, credited to each member exactly as the wallet's
+    /// append-only ledger records them. Permissionless and deterministic:
+    /// nothing leaves the wallet, no balance moves between members, and the
+    /// terms restate what the circle already does —
+    ///   - `T` = SUI requires the circle to be in SUI mode and pins its
+    ///     configured SUI amounts;
+    ///   - a USD-pegged `T` requires the circle to be in stablecoin mode and
+    ///     pins its USD amounts at the peg.
+    /// All-or-nothing: if the ledger is not exactly "security deposits in
+    /// `T` and their refunds" and does not add up to the wallet's legacy
+    /// balance of `T`, nothing changes (E_LEGACY_NOT_MIGRATABLE).
+    public fun adopt_asset_policy<T>(
+        circle: &mut Circle,
+        wallet: &mut CustodyWallet,
+        registry: &price_validator::AssetRegistry,
+        clock: &Clock,
+        _ctx: &mut TxContext
+    ) {
+        assert!(!has_asset_policy(circle), E_POLICY_EXISTS);
+        assert_original_wallet(circle, wallet);
+
+        let decimals = price_validator::assert_usable<T>(registry, price_validator::flag_settlement());
+        let asset = core::coin_type_bytes<T>();
+        let auto_swap = config::is_auto_swap_enabled(&circle.id);
+        let (contribution_native, deposit_native) = if (core::is_sui<T>()) {
+            assert!(auto_swap, E_TERMS_INVALID);
+            (config::get_contribution_amount(&circle.id), config::get_security_deposit(&circle.id))
+        } else {
+            assert!(!auto_swap, E_TERMS_INVALID);
+            assert!(price_validator::is_usd_pegged<T>(registry), E_TERMS_INVALID);
+            (
+                core::usd_cents_to_pegged_units(config::get_contribution_amount_usd(&circle.id), decimals),
+                core::usd_cents_to_pegged_units(config::get_security_deposit_usd(&circle.id), decimals)
+            )
+        };
+        assert!(contribution_native > 0 && deposit_native > 0, E_TERMS_INVALID);
+
+        // The ledger is the source of the per-member amounts.
+        assert!(custody::legacy_is_single_asset<T>(wallet), E_LEGACY_NOT_MIGRATABLE);
+        let (consistent, users, nets) = custody::legacy_deposit_nets(wallet);
+        assert!(consistent, E_LEGACY_NOT_MIGRATABLE);
+        let mut total = 0;
+        let mut i = 0;
+        while (i < vector::length(&nets)) {
+            total = total + *vector::borrow(&nets, i);
+            i = i + 1;
+        };
+        assert!(total == custody::legacy_balance_of<T>(wallet), E_LEGACY_NOT_MIGRATABLE);
+        assert_ledger_covers_deposit_holders(circle, &users, &nets);
+
+        let ledger_entries = custody::legacy_history_length(wallet);
+        let moved = custody::migrate_legacy_to_deposit_balance<T>(wallet, clock);
+        assert!(moved == total, E_LEGACY_NOT_MIGRATABLE);
+
+        let mut migrated_members = 0;
+        let mut k = 0;
+        while (k < vector::length(&users)) {
+            let user = *vector::borrow(&users, k);
+            let net = *vector::borrow(&nets, k);
+            if (net > 0) {
+                credit_member_deposit(circle, user, asset, net);
+                set_deposit_marker(circle, user, asset);
+                if (table::contains(&circle.members, user)) {
+                    members::set_deposit_paid(table::borrow_mut(&mut circle.members, user), true);
+                };
+                migrated_members = migrated_members + 1;
+            };
+            clear_legacy_deposit_fields(circle, user);
+            k = k + 1;
+        };
+        // The legacy per-member deposit fields describe legacy storage,
+        // which no longer holds this circle's deposits.
+        let admin = circle.admin;
+        clear_legacy_deposit_fields(circle, admin);
+        let rotation = circle.rotation_order;
+        let mut r = 0;
+        while (r < vector::length(&rotation)) {
+            clear_legacy_deposit_fields(circle, *vector::borrow(&rotation, r));
+            r = r + 1;
+        };
+
+        let now = clock::timestamp_ms(clock);
+        let wallet_id = object::id(wallet);
+        let terms = AssetTerms {
+            asset,
+            decimals,
+            contribution_amount: contribution_native,
+            security_deposit: deposit_native,
+        };
+        pin_asset_policy(circle, terms, wallet_id, ledger_entries, now);
+
+        event::emit(CircleAssetPolicySet {
+            circle_id: object::uid_to_inner(&circle.id),
+            wallet_id,
+            settlement_asset: string::utf8(asset),
+            decimals,
+            contribution_amount: contribution_native,
+            security_deposit: deposit_native,
+            converted_from_legacy: true,
+            migrated_members,
+            migrated_total: total,
+            legacy_ledger_entries: ledger_entries,
+            set_at_ms: now,
+        });
+    }
+
+    // The custody wallet a pre-v11 circle's deposits live in, identified by
+    // facts fixed when the circle was created: the wallet points at this
+    // circle; the circle's recorded wallet id, where it is a real id
+    // (circles created since v9), names it; and it was created by the
+    // circle's admin in the circle's own create transaction (same creator,
+    // same clock reading). The ledger coverage check in
+    // `adopt_asset_policy` completes it: every member holding a deposit
+    // must appear in this wallet's ledger.
+    fun assert_original_wallet(circle: &Circle, wallet: &CustodyWallet) {
+        let circle_id = object::uid_to_inner(&circle.id);
+        assert!(custody::get_circle_id(wallet) == circle_id, EWalletCircleMismatch);
+        let recorded = get_wallet_id(circle);
+        if (option::is_some(&recorded) && *option::borrow(&recorded) != circle_id) {
+            assert!(*option::borrow(&recorded) == object::id(wallet), EWalletCircleMismatch);
+        };
+        assert!(custody::get_admin(wallet) == circle.admin, EWalletCircleMismatch);
+        assert!(custody::get_created_at(wallet) == circle.created_at, EWalletCircleMismatch);
+    }
+
+    // Every member the circle records as holding a deposit (flag set, or a
+    // legacy balance recorded) must have a deposit in this wallet's ledger.
+    // Fails closed: a circle whose records and ledger disagree is left as
+    // it is.
+    fun assert_ledger_covers_deposit_holders(
+        circle: &Circle,
+        users: &vector<address>,
+        nets: &vector<u64>
+    ) {
+        assert_ledger_covers(circle, circle.admin, users, nets);
+        let mut i = 0;
+        while (i < vector::length(&circle.rotation_order)) {
+            assert_ledger_covers(circle, *vector::borrow(&circle.rotation_order, i), users, nets);
+            i = i + 1;
+        };
+    }
+
+    fun assert_ledger_covers(
+        circle: &Circle,
+        addr: address,
+        users: &vector<address>,
+        nets: &vector<u64>
+    ) {
+        if (addr == @0x0 || !table::contains(&circle.members, addr)) {
+            return
+        };
+        let member = table::borrow(&circle.members, addr);
+        if (members::has_paid_deposit(member) || members::get_deposit_balance(member) > 0) {
+            let (found, index) = vector::index_of(users, &addr);
+            assert!(found && *vector::borrow(nets, index) > 0, E_LEGACY_NOT_MIGRATABLE);
+        };
+    }
+
+    fun clear_legacy_deposit_fields(circle: &mut Circle, addr: address) {
+        if (addr == @0x0 || !table::contains(&circle.members, addr)) {
+            return
+        };
+        let member = table::borrow_mut(&mut circle.members, addr);
+        members::set_deposit_balance(member, 0);
+        members::clear_all_recovery_balances(member);
+    }
+
+    // ---------------- security deposits ----------------
+
+    /// Posts the sender's security deposit in coin `T`: one of the circle's
+    /// pinned assets, at exactly its pinned amount, and (registry) still
+    /// allowed as collateral. The coin is recorded as the sender's deposit
+    /// in the circle's custody wallet; it leaves only as a refund to them.
+    public fun post_security_deposit<T>(
+        circle: &mut Circle,
+        wallet: &mut CustodyWallet,
+        registry: &price_validator::AssetRegistry,
+        deposit: Coin<T>,
+        _clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        let sender = tx_context::sender(ctx);
+        assert_bound_wallet(circle, wallet);
+        assert!(is_member(circle, sender), ENotMember);
+        let status = members::get_status(table::borrow(&circle.members, sender));
+        assert!(status == core::member_status_active() || sender == circle.admin, EMemberNotActive);
+        let state = config::get_recovery_state(&circle.id);
+        assert!(
+            state == config::recovery_state_active() || state == config::recovery_state_proposal_pending(),
+            E_CIRCLE_STOPPED
+        );
+
+        let asset = core::coin_type_bytes<T>();
+        let terms_opt = find_terms(policy_ref(circle), &asset);
+        assert!(option::is_some(&terms_opt), E_ASSET_NOT_ALLOWED);
+        let terms = option::destroy_some(terms_opt);
+        assert!(terms.security_deposit > 0, E_ASSET_NOT_ALLOWED);
+        price_validator::assert_usable<T>(registry, price_validator::flag_collateral());
+
+        let amount = coin::value(&deposit);
+        assert!(amount == terms.security_deposit, EIncorrectDepositAmount);
+        assert!(
+            !dynamic_field::exists_(&circle.id, DepositMarkerKey { member: sender }),
+            E_DEPOSIT_ALREADY_POSTED
+        );
+
+        custody::store_member_deposit<T>(wallet, deposit, sender);
+        credit_member_deposit(circle, sender, asset, amount);
+        set_deposit_marker(circle, sender, asset);
+        members::set_deposit_paid(table::borrow_mut(&mut circle.members, sender), true);
+
+        event::emit(SecurityDepositPosted {
+            circle_id: object::uid_to_inner(&circle.id),
+            member: sender,
+            coin_type: string::utf8(asset),
+            decimals: terms.decimals,
+            amount,
+        });
+    }
+
+    // ---------------- stop, then refund per asset ----------------
+
+    /// Stops a converted circle after a passed emergency-stop vote. Moves no
+    /// coins and reads no balance or member list, so no asset and no member
+    /// state can make it fail. Refunds follow per asset (`refund_asset<T>`).
+    public fun stop_for_recovery(circle: &mut Circle, clock: &Clock, ctx: &mut TxContext) {
+        assert!(is_converted(circle), E_CIRCLE_NOT_CONVERTED);
+        assert!(
+            config::can_execute_recovery(&circle.id, clock)
+                && config::is_recovery_proposal_passed(&circle.id),
+            ERecoveryExecutionNotReady
+        );
+        stop_internal(circle, false, RECOVERY_TRIGGER_ROLE_VOTE_EXECUTION, clock, ctx);
+    }
+
+    /// Stops a converted circle through its auto-release rule (same roles as
+    /// `trigger_auto_release`). Moves no coins.
+    public fun stop_for_auto_release(circle: &mut Circle, clock: &Clock, ctx: &mut TxContext) {
+        assert!(is_converted(circle), E_CIRCLE_NOT_CONVERTED);
+        assert!(config::is_auto_release_ready(&circle.id, clock), ERecoveryExecutionNotReady);
+        let trigger_role = resolve_auto_release_trigger_role(
+            circle,
+            tx_context::sender(ctx),
+            clock::timestamp_ms(clock)
+        );
+        stop_internal(circle, true, trigger_role, clock, ctx);
+    }
+
+    /// Returns every recorded deposit in `T` to the member it is recorded
+    /// for. Permissionless once the circle is stopped (by any package
+    /// version). Touches only `T`; never aborts for lack of something to
+    /// refund, so one transaction can chain it for every asset. Records the
+    /// run, and marks the circle refunded once every pinned asset is done.
+    public fun refund_asset<T>(
+        circle: &mut Circle,
+        wallet: &mut CustodyWallet,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        let state = config::get_recovery_state(&circle.id);
+        assert!(
+            state == config::recovery_state_stopped() || state == config::recovery_state_refunded(),
+            E_CIRCLE_NOT_STOPPED
+        );
+        // No pinned terms, no v11 deposit records: nothing to return.
+        if (!has_asset_policy(circle)) {
+            return
+        };
+        assert_bound_wallet(circle, wallet);
+        refund_asset_internal<T>(circle, wallet, clock, ctx);
+    }
+
+    /// `stop_for_recovery` (unless already stopped), then `refund_asset<T>`.
+    public fun execute_recovery_asset<T>(
+        circle: &mut Circle,
+        wallet: &mut CustodyWallet,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        if (!is_stopped(circle)) {
+            stop_for_recovery(circle, clock, ctx);
+        };
+        refund_asset<T>(circle, wallet, clock, ctx);
+    }
+
+    /// `stop_for_auto_release` (unless already stopped), then
+    /// `refund_asset<T>`.
+    public fun trigger_auto_release_asset<T>(
+        circle: &mut Circle,
+        wallet: &mut CustodyWallet,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        if (!is_stopped(circle)) {
+            stop_for_auto_release(circle, clock, ctx);
+        };
+        refund_asset<T>(circle, wallet, clock, ctx);
+    }
+
+    /// The sender collects their own recorded deposit in `T`: after the
+    /// circle is stopped, or at any time once they are no longer a member
+    /// (e.g. removed while their deposit stayed recorded). Paid to the
+    /// sender only; a no-op when nothing is recorded.
+    public fun claim_own_refund<T>(
+        circle: &mut Circle,
+        wallet: &mut CustodyWallet,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        let sender = tx_context::sender(ctx);
+        assert_bound_wallet(circle, wallet);
+        assert!(is_stopped(circle) || !table::contains(&circle.members, sender), E_CIRCLE_NOT_STOPPED);
+        refund_member_deposit<T>(circle, wallet, sender, clock, ctx);
+    }
+
+    fun is_stopped(circle: &Circle): bool {
+        let state = config::get_recovery_state(&circle.id);
+        state == config::recovery_state_stopped() || state == config::recovery_state_refunded()
+    }
+
+    // The stop itself: same circle-state effects as the legacy recovery, no
+    // coin movement. Emits the recovery start event (totals = deposits
+    // recorded at stop time), which existing recovery readers follow.
+    fun stop_internal(
+        circle: &mut Circle,
+        used_auto_release: bool,
+        trigger_role: u8,
+        clock: &Clock,
+        ctx: &TxContext
+    ) {
+        let executor = tx_context::sender(ctx);
+        let now = clock::timestamp_ms(clock);
+        let circle_id = object::uid_to_inner(&circle.id);
+        let (sui_total, other_total) = deposit_totals_by_rail(circle);
+        event::emit(RecoveryExecutionStarted {
+            circle_id,
+            executor,
+            member_count: circle.current_members,
+            total_sui_refund: sui_total,
+            total_stablecoin_refund: other_total,
+            used_auto_release,
+            trigger_role,
+            timestamp: now,
+        });
+
+        config::mark_recovery_stopped(&mut circle.id, clock);
+        circle.is_active = false;
+        circle.paused_after_cycle = false;
+        circle.contributions_this_cycle = 0;
+        clear_cycle_contributors(circle);
+        circle.next_payout_time = now;
+        circle.active_auction = option::none();
+    }
+
+    fun refund_asset_internal<T>(
+        circle: &mut Circle,
+        wallet: &mut CustodyWallet,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        let asset = core::coin_type_bytes<T>();
+        let now = clock::timestamp_ms(clock);
+        let circle_id = object::uid_to_inner(&circle.id);
+        let pinned = option::is_some(&find_terms(policy_ref(circle), &asset));
+        let settles_in_sui = core::is_sui<T>();
+
+        let depositors = depositors_of(circle, asset);
+        let mut total = 0;
+        let mut refunded = 0;
+        let mut i = 0;
+        while (i < vector::length(&depositors)) {
+            let member = *vector::borrow(&depositors, i);
+            let amount = refund_member_deposit<T>(circle, wallet, member, clock, ctx);
+            if (amount > 0) {
+                total = total + amount;
+                refunded = refunded + 1;
+                // Legacy per-member event, for existing recovery readers.
+                event::emit(RecoveryMemberRefunded {
+                    circle_id,
+                    member,
+                    sui_contributions_refunded: 0,
+                    sui_deposit_refunded: if (settles_in_sui) { amount } else { 0 },
+                    stablecoin_contributions_refunded: 0,
+                    stablecoin_deposit_refunded: if (settles_in_sui) { 0 } else { amount },
+                    timestamp: now,
+                });
+            };
+            i = i + 1;
+        };
+
+        if (pinned) {
+            let key = RefundRecordKey { asset };
+            if (dynamic_field::exists_with_type<RefundRecordKey, u64>(&circle.id, key)) {
+                *dynamic_field::borrow_mut<RefundRecordKey, u64>(&mut circle.id, key) = now;
+            } else {
+                dynamic_field::add(&mut circle.id, key, now);
+            };
+            event::emit(AssetRefundCompleted {
+                circle_id,
+                coin_type: string::utf8(asset),
+                total_amount: total,
+                members: refunded,
+                timestamp: now,
+            });
+        };
+
+        if (
+            config::get_recovery_state(&circle.id) == config::recovery_state_stopped()
+                && all_pinned_assets_refunded(circle)
+        ) {
+            config::mark_recovery_refunded(&mut circle.id, clock);
+            event::emit(RecoveryExecutionCompleted {
+                circle_id,
+                executor: tx_context::sender(ctx),
+                refunded_members: refunded,
+                total_sui_refund: if (settles_in_sui) { total } else { 0 },
+                total_stablecoin_refund: if (settles_in_sui) { 0 } else { total },
+                timestamp: now,
+            });
+        };
+    }
+
+    // Pays `member` their recorded deposit in `T` — to `member`, for exactly
+    // the recorded amount — and zeroes the record. 0 means nothing was
+    // recorded (no-op). The single exit of the v11 deposit records.
+    fun refund_member_deposit<T>(
+        circle: &mut Circle,
+        wallet: &mut CustodyWallet,
+        member: address,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ): u64 {
+        let asset = core::coin_type_bytes<T>();
+        let amount = clear_member_deposit(circle, member, asset);
+        if (amount == 0) {
+            return 0
+        };
+        let refund = coin::from_balance(custody::split_deposit_balance<T>(wallet, amount), ctx);
+        transfer::public_transfer(refund, member);
+        clear_deposit_marker_if(circle, member, &asset);
+        if (table::contains(&circle.members, member) && collateral_held(circle, member) == 0) {
+            members::set_deposit_paid(table::borrow_mut(&mut circle.members, member), false);
+        };
+
+        // Full coin type; followed by the deposit-returned notification relay.
+        event::emit(SecurityDepositReturned {
+            circle_id: object::uid_to_inner(&circle.id),
+            wallet_id: object::id(wallet),
+            member,
+            amount,
+            coin_type: string::utf8(asset),
+            timestamp: clock::timestamp_ms(clock),
+        });
+        amount
+    }
+
+    // ---------------- internal helpers ----------------
+
+    fun policy_ref(circle: &Circle): &CircleAssetPolicy {
+        assert!(has_asset_policy(circle), E_POLICY_MISSING);
+        dynamic_field::borrow<AssetPolicyKey, CircleAssetPolicy>(&circle.id, AssetPolicyKey {})
+    }
+
+    fun find_terms(policy: &CircleAssetPolicy, asset: &vector<u8>): Option<AssetTerms> {
+        let mut i = 0;
+        while (i < vector::length(&policy.assets)) {
+            let terms = vector::borrow(&policy.assets, i);
+            if (&terms.asset == asset) {
+                return option::some(*terms)
+            };
+            i = i + 1;
+        };
+        option::none()
+    }
+
+    fun pin_asset_policy(
+        circle: &mut Circle,
+        terms: AssetTerms,
+        wallet_id: ID,
+        ledger_entries: u64,
+        now: u64
+    ) {
+        let policy = CircleAssetPolicy {
+            settlement_asset: terms.asset,
+            assets: vector[terms],
+            set_at_ms: now,
+            wallet_id,
+            legacy_ledger_entries: ledger_entries,
+        };
+        dynamic_field::add(&mut circle.id, AssetPolicyKey {}, policy);
+    }
+
+    fun is_bound_wallet(circle: &Circle, wallet: &CustodyWallet): bool {
+        has_asset_policy(circle)
+            && object::id(wallet) == policy_ref(circle).wallet_id
+            && custody::get_circle_id(wallet) == object::uid_to_inner(&circle.id)
+    }
+
+    fun assert_bound_wallet(circle: &Circle, wallet: &CustodyWallet) {
+        assert!(has_asset_policy(circle), E_POLICY_MISSING);
+        assert!(is_bound_wallet(circle, wallet), EWalletCircleMismatch);
+    }
+
+    fun member_deposit_key(member: address, asset: vector<u8>): MemberDepositKey {
+        MemberDepositKey { member, asset, kind: DEPOSIT_KIND_SECURITY }
+    }
+
+    fun credit_member_deposit(circle: &mut Circle, member: address, asset: vector<u8>, amount: u64) {
+        let key = member_deposit_key(member, asset);
+        if (dynamic_field::exists_with_type<MemberDepositKey, u64>(&circle.id, key)) {
+            let record = dynamic_field::borrow_mut<MemberDepositKey, u64>(&mut circle.id, key);
+            *record = *record + amount;
+        } else {
+            dynamic_field::add(&mut circle.id, key, amount);
+        };
+
+        let depositors_key = DepositorsKey { asset };
+        if (dynamic_field::exists_with_type<DepositorsKey, vector<address>>(&circle.id, depositors_key)) {
+            let list = dynamic_field::borrow_mut<DepositorsKey, vector<address>>(&mut circle.id, depositors_key);
+            if (!vector::contains(list, &member)) {
+                vector::push_back(list, member);
+            };
+        } else {
+            dynamic_field::add(&mut circle.id, depositors_key, vector[member]);
+        };
+    }
+
+    fun clear_member_deposit(circle: &mut Circle, member: address, asset: vector<u8>): u64 {
+        let key = member_deposit_key(member, asset);
+        if (!dynamic_field::exists_with_type<MemberDepositKey, u64>(&circle.id, key)) {
+            return 0
+        };
+        let record = dynamic_field::borrow_mut<MemberDepositKey, u64>(&mut circle.id, key);
+        let amount = *record;
+        *record = 0;
+        amount
+    }
+
+    fun set_deposit_marker(circle: &mut Circle, member: address, asset: vector<u8>) {
+        let key = DepositMarkerKey { member };
+        if (dynamic_field::exists_with_type<DepositMarkerKey, vector<u8>>(&circle.id, key)) {
+            *dynamic_field::borrow_mut<DepositMarkerKey, vector<u8>>(&mut circle.id, key) = asset;
+        } else {
+            dynamic_field::add(&mut circle.id, key, asset);
+        };
+    }
+
+    fun clear_deposit_marker_if(circle: &mut Circle, member: address, asset: &vector<u8>) {
+        let key = DepositMarkerKey { member };
+        if (
+            dynamic_field::exists_with_type<DepositMarkerKey, vector<u8>>(&circle.id, key)
+                && dynamic_field::borrow<DepositMarkerKey, vector<u8>>(&circle.id, key) == asset
+        ) {
+            let _removed: vector<u8> = dynamic_field::remove(&mut circle.id, key);
+        };
+    }
+
+    // The member's recorded deposits across the circle's pinned assets.
+    fun collateral_held(circle: &Circle, member: address): u64 {
+        if (!has_asset_policy(circle)) {
+            return 0
+        };
+        let policy = policy_ref(circle);
+        let mut total = 0;
+        let mut i = 0;
+        while (i < vector::length(&policy.assets)) {
+            total = total + member_deposit_of(circle, member, vector::borrow(&policy.assets, i).asset);
+            i = i + 1;
+        };
+        total
+    }
+
+    fun any_member_deposit_held(circle: &Circle): bool {
+        let policy = policy_ref(circle);
+        let mut i = 0;
+        while (i < vector::length(&policy.assets)) {
+            if (total_member_deposits(circle, vector::borrow(&policy.assets, i).asset) > 0) {
+                return true
+            };
+            i = i + 1;
+        };
+        false
+    }
+
+    // (SUI, everything else) recorded deposit totals, for the legacy event.
+    fun deposit_totals_by_rail(circle: &Circle): (u64, u64) {
+        let policy = policy_ref(circle);
+        let sui = core::coin_type_bytes<SUI>();
+        let mut sui_total = 0;
+        let mut other_total = 0;
+        let mut i = 0;
+        while (i < vector::length(&policy.assets)) {
+            let asset = vector::borrow(&policy.assets, i).asset;
+            let total = total_member_deposits(circle, asset);
+            if (asset == sui) {
+                sui_total = sui_total + total;
+            } else {
+                other_total = other_total + total;
+            };
+            i = i + 1;
+        };
+        (sui_total, other_total)
+    }
+
+    fun all_pinned_assets_refunded(circle: &Circle): bool {
+        let policy = policy_ref(circle);
+        let mut i = 0;
+        while (i < vector::length(&policy.assets)) {
+            let asset = vector::borrow(&policy.assets, i).asset;
+            if (!dynamic_field::exists_(&circle.id, RefundRecordKey { asset })) {
+                return false
+            };
+            if (total_member_deposits(circle, asset) > 0) {
+                return false
+            };
+            i = i + 1;
+        };
+        true
     }
 
     // ----------------------------------------------------------
@@ -4379,6 +4537,100 @@ module njangi::njangi_circles {
     #[test_only]
     public fun has_received_payout_for_testing(circle: &Circle, member_addr: address): bool {
         members::has_received_payout(table::borrow(&circle.members, member_addr))
+    }
+
+    /// Test-only: the pre-v11 security-deposit path (the body
+    /// `member_deposit_security_deposit` had before v11), used to build
+    /// circles in the state earlier package versions leave them in — legacy
+    /// typed balance, ledger op 3, legacy per-member fields.
+    #[test_only]
+    public fun legacy_deposit_for_testing<CoinType>(
+        circle: &mut Circle,
+        wallet: &mut CustodyWallet,
+        deposit_coin: Coin<CoinType>,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        let sender = tx_context::sender(ctx);
+        let amount = coin::value(&deposit_coin);
+        let required_sui_amount = config::get_security_deposit(&circle.id);
+        let required_usd_cents = config::get_security_deposit_usd(&circle.id);
+        assert!(custody::get_circle_id(wallet) == get_id(circle), EWalletCircleMismatch);
+        assert!(is_member(circle, sender), 8);
+        let member = get_member_mut(circle, sender);
+        assert!(members::get_deposit_balance(member) == 0, 21);
+        let is_sui_deposit = std::type_name::get<CoinType>() == std::type_name::get<SUI>();
+        if (is_sui_deposit) {
+            assert!(amount == required_sui_amount, 2);
+        } else {
+            assert!(amount == custody::usd_cents_to_usdc_amount(required_usd_cents), 2);
+        };
+        members::set_deposit_balance(member, amount);
+        members::set_deposit_paid(member, true);
+        if (is_sui_deposit) {
+            members::set_recovery_sui_deposit(member, amount);
+            members::clear_recovery_stablecoin_deposit(member);
+        } else {
+            members::set_recovery_stablecoin_deposit(member, amount);
+            members::clear_recovery_sui_deposit(member);
+        };
+        custody::legacy_store_for_testing<CoinType>(
+            wallet,
+            deposit_coin,
+            sender,
+            core::custody_op_stablecoin_deposit(),
+            clock
+        );
+    }
+
+    /// Test-only: a pre-v11 legacy-rail contribution (ledger op 0).
+    #[test_only]
+    public fun legacy_contribution_for_testing<CoinType>(
+        wallet: &mut CustodyWallet,
+        payment: Coin<CoinType>,
+        member: address,
+        clock: &Clock,
+        ctx: &TxContext
+    ) {
+        let _ = ctx;
+        custody::legacy_store_for_testing<CoinType>(wallet, payment, member, core::custody_op_deposit(), clock);
+    }
+
+    #[test_only]
+    public fun mark_recovery_refunded_for_testing(circle: &mut Circle, clock: &Clock) {
+        config::mark_recovery_refunded(&mut circle.id, clock);
+    }
+
+    #[test_only]
+    public fun set_auto_swap_for_testing(circle: &mut Circle, enabled: bool) {
+        config::toggle_auto_swap(&mut circle.id, enabled);
+    }
+
+    /// Records `wallet_id` where pre-v11 readers look for the circle's
+    /// wallet (as create_circle has done since v9).
+    #[test_only]
+    public fun set_wallet_id_for_testing(circle: &mut Circle, wallet_id: ID) {
+        let key = string::utf8(b"wallet_id");
+        if (dynamic_field::exists_(&circle.id, key)) {
+            *dynamic_field::borrow_mut<String, ID>(&mut circle.id, key) = wallet_id;
+        } else {
+            dynamic_field::add(&mut circle.id, key, wallet_id);
+        };
+    }
+
+    #[test_only]
+    public fun get_created_at_for_testing(circle: &Circle): u64 {
+        circle.created_at
+    }
+
+    #[test_only]
+    public fun legacy_deposit_fields_for_testing(circle: &Circle, member_addr: address): (u64, u64, u64) {
+        let member = table::borrow(&circle.members, member_addr);
+        (
+            members::get_deposit_balance(member),
+            members::get_recovery_sui_deposit(member),
+            members::get_recovery_stablecoin_deposit(member)
+        )
     }
 
     // ----------------------------------------------------------
@@ -4619,62 +4871,11 @@ module njangi::njangi_circles {
     }
 
     #[test]
-    fun test_expected_cycle_contributions_usd() {
-        // Recipient contributes nothing to their own payout cycle.
-        assert!(expected_cycle_contributions_usd(2_000, 5, true) == 8_000, 9016);
-        assert!(expected_cycle_contributions_usd(2_000, 5, false) == 10_000, 9017);
-        assert!(expected_cycle_contributions_usd(2_000, 0, false) == 0, 9018);
-    }
-
-    #[test]
     fun test_derive_native_display_amounts_from_usd() {
         // At $2.50/SUI: $2.50 => 1 SUI, $5.00 => 2 SUI.
         let (contribution_native, security_deposit_native) = derive_native_display_amounts(250, 500, 250);
         assert!(contribution_native == 1_000_000_000, 9019);
         assert!(security_deposit_native == 2_000_000_000, 9020);
-    }
-
-    #[test]
-    fun test_extreme_price_change_threshold() {
-        // Exactly 50% is allowed; >50% is blocked.
-        assert!(!is_extreme_price_change(200, 300), 9021); // +50%
-        assert!(is_extreme_price_change(200, 301), 9022); // +50.5%
-        assert!(is_extreme_price_change(200, 99), 9023); // -50.5%
-    }
-
-    #[test]
-    fun test_choose_effective_price_fallback_paths() {
-        let last_valid = option::some(250);
-
-        // Stale price should fallback to cached value.
-        let (stale_price, stale_used_fallback, stale_reason) = choose_effective_sui_price(
-            260,
-            ORACLE_MAX_STALE_SECONDS + 1,
-            last_valid
-        );
-        assert!(stale_price == 250, 9024);
-        assert!(stale_used_fallback, 9025);
-        assert!(stale_reason == PRICE_FALLBACK_STALE, 9026);
-
-        // Extreme volatility should fallback to cached value.
-        let (vol_price, vol_used_fallback, vol_reason) = choose_effective_sui_price(
-            400,
-            5,
-            option::some(250)
-        );
-        assert!(vol_price == 250, 9027);
-        assert!(vol_used_fallback, 9028);
-        assert!(vol_reason == PRICE_FALLBACK_VOLATILITY, 9029);
-
-        // Fresh, non-extreme candidate should be accepted.
-        let (fresh_price, fresh_used_fallback, fresh_reason) = choose_effective_sui_price(
-            320,
-            5,
-            option::some(250)
-        );
-        assert!(fresh_price == 320, 9030);
-        assert!(!fresh_used_fallback, 9031);
-        assert!(fresh_reason == PRICE_FALLBACK_NONE, 9032);
     }
 
     #[test]
@@ -5518,7 +5719,7 @@ module njangi::njangi_circles {
         let mut circle = sui::test_scenario::take_shared<Circle>(scenario);
         let mut wallet = sui::test_scenario::take_shared<CustodyWallet>(scenario);
         let deposit = coin::mint_for_testing<SUI>(TEST_DEPOSIT_SUI, sui::test_scenario::ctx(scenario));
-        member_deposit_security_deposit<SUI>(
+        legacy_deposit_for_testing<SUI>(
             &mut circle,
             &mut wallet,
             deposit,

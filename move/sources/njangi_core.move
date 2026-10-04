@@ -452,6 +452,44 @@ module njangi::njangi_core {
     public fun usdc_decimals(): u8 { 6 }
     public fun sui_decimals(): u8 { 9 }
 
+    // ----------------------------------------------------------
+    // Canonical coin-type bytes (v11)
+    //
+    // `<64-hex address>::<module>::<Name>`, no `0x` prefix — the one
+    // encoding shared by the AssetRegistry keys, the custody wallet's v11
+    // deposit-record keys, circle asset policies and per-round escrow
+    // snapshots, so an asset compares equal everywhere it is recorded.
+    // ----------------------------------------------------------
+    #[allow(deprecated_usage)]
+    public fun coin_type_bytes<T>(): vector<u8> {
+        std::ascii::into_bytes(std::type_name::into_string(std::type_name::get<T>()))
+    }
+
+    public fun is_sui<T>(): bool {
+        coin_type_bytes<T>() == coin_type_bytes<sui::sui::SUI>()
+    }
+
+    // 10^exp with overflow protection (u64).
+    public fun pow10(exp: u8): u64 {
+        let mut result = 1u64;
+        let mut i = 0u8;
+        while (i < exp) {
+            assert!(result <= MAX_U64 / 10, EDecimalConversionOverflow);
+            result = result * 10;
+            i = i + 1;
+        };
+        result
+    }
+
+    // USD cents -> base units of a USD-pegged coin with `decimals` decimals
+    // (`cents * 10^(decimals - 2)`). Aborts instead of wrapping.
+    public fun usd_cents_to_pegged_units(usd_cents: u64, decimals: u8): u64 {
+        assert!(decimals >= 2 && decimals <= MAX_DECIMAL_SHIFT, EInvalidDecimalPrecision);
+        let scale = pow10(decimals - 2);
+        assert!(usd_cents <= MAX_U64 / scale, EDecimalConversionOverflow);
+        usd_cents * scale
+    }
+
     #[test]
     fun test_to_decimals_scales_and_round_trips() {
         assert!(to_decimals(0) == 0, 9200);
@@ -468,5 +506,25 @@ module njangi::njangi_core {
     fun test_to_decimals_aborts_instead_of_clamping_on_overflow() {
         // Used to silently clamp; must now abort loudly.
         to_decimals(18_446_744_074);
+    }
+
+    #[test]
+    fun test_coin_type_bytes_and_pegged_units() {
+        assert!(
+            coin_type_bytes<sui::sui::SUI>()
+                == b"0000000000000000000000000000000000000000000000000000000000000002::sui::SUI",
+            9210
+        );
+        assert!(is_sui<sui::sui::SUI>(), 9211);
+        assert!(!is_sui<UsdAmounts>(), 9212);
+        // $0.30 in a 6-decimal USD coin = 300_000 base units.
+        assert!(usd_cents_to_pegged_units(30, 6) == 300_000, 9213);
+        assert!(usd_cents_to_pegged_units(1_234, 2) == 1_234, 9214);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = EInvalidDecimalPrecision)]
+    fun test_pegged_units_rejects_sub_cent_decimals() {
+        usd_cents_to_pegged_units(100, 1);
     }
 }

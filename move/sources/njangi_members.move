@@ -7,6 +7,11 @@ module njangi::njangi_members {
     // ----------------------------------------------------------
     // Error codes specific to members
     // ----------------------------------------------------------
+    // v11: mutators no package code calls are retired. A `&mut Member` is
+    // only obtainable inside this package, so they were unreachable; the
+    // signatures stay (an upgrade cannot change or remove a public
+    // function). Mirrors njangi_circles::E_DEPRECATED_ENTRYPOINT.
+    const EDeprecated: u64 = 89;
     // ----------------------------------------------------------
     // Member struct
     // ----------------------------------------------------------
@@ -148,138 +153,75 @@ module njangi::njangi_members {
     // Reputation / Payment tracking
     // ----------------------------------------------------------
     public fun update_member_reputation(
-        member: &mut Member,
-        attended_meeting: bool,
-        on_time_payment: bool,
+        _member: &mut Member,
+        _attended_meeting: bool,
+        _on_time_payment: bool,
     ) {        
-        if (attended_meeting) {
-            member.total_meetings_attended = member.total_meetings_attended + 1;
-        };
-        member.total_meetings_required = member.total_meetings_required + 1;
-        
-        if (on_time_payment) {
-            member.consecutive_on_time_payments = member.consecutive_on_time_payments + 1;
-        } else {
-            member.consecutive_on_time_payments = 0;
-        };
-        
-        // Score out of 100
-        let attendance_score =
-            if (member.total_meetings_required == 0) { 100 }
-            else {
-                (member.total_meetings_attended * 100) / member.total_meetings_required
-            };
-        let payment_score =
-            if (member.consecutive_on_time_payments >= 12) { 100 }
-            else {
-                (member.consecutive_on_time_payments * 100) / 12
-            };
-        
-        member.reputation_score = ((attendance_score + payment_score) / 2) as u8;
+        abort EDeprecated
     }
     
     // ----------------------------------------------------------
     // Member warnings and penalties
     // ----------------------------------------------------------
     public fun issue_warning(
-        member: &mut Member,
-        clock: &Clock
+        _member: &mut Member,
+        _clock: &Clock
     ) {
-        member.warning_count = member.warning_count + 1;
-        member.last_warning_time = clock::timestamp_ms(clock);
+        abort EDeprecated
     }
     
     public fun issue_warning_with_penalty(
-        member: &mut Member,
-        warning_penalty_amount: u64,
-        allow_penalty_payments: bool,
-        clock: &Clock
+        _member: &mut Member,
+        _warning_penalty_amount: u64,
+        _allow_penalty_payments: bool,
+        _clock: &Clock
     ) {
-        member.warning_count = member.warning_count + 1;
-        member.last_warning_time = clock::timestamp_ms(clock);
-        
-        if (allow_penalty_payments) {
-            member.unpaid_penalties = member.unpaid_penalties + warning_penalty_amount;
-            vector::push_back(&mut member.warnings_with_penalties, clock::timestamp_ms(clock));
-        };
+        abort EDeprecated
     }
     
     // ----------------------------------------------------------
     // Suspend/reactivate member
     // ----------------------------------------------------------
     public fun suspend_member(
-        member: &mut Member,
-        clock: &Clock
+        _member: &mut Member,
+        _clock: &Clock
     ) {
-        member.status = core::member_status_suspended();
-        member.suspension_end_time = option::some(clock::timestamp_ms(clock) + core::ms_per_month());
+        abort EDeprecated
     }
     
     public fun reactivate_member(
-        member: &mut Member,
-        clock: &Clock
+        _member: &mut Member,
+        _clock: &Clock
     ): bool {
-        if (option::is_none(&member.suspension_end_time)) {
-            return false
-        };
-        
-        if (clock::timestamp_ms(clock) < *option::borrow(&member.suspension_end_time)) {
-            return false
-        };
-        
-        member.status = core::member_status_active();
-        member.warning_count = 0;
-        member.suspension_end_time = option::none();
-        true
+        abort EDeprecated
     }
     
     // ----------------------------------------------------------
     // Member exit
     // ----------------------------------------------------------
     public fun request_exit(
-        member: &mut Member,
-        clock: &Clock
+        _member: &mut Member,
+        _clock: &Clock
     ): bool {
-        if (member.status != core::member_status_active()) {
-            return false
-        };
-        
-        if (member.exit_requested) {
-            return false
-        };
-        
-        member.exit_requested = true;
-        member.exit_request_time = option::some(clock::timestamp_ms(clock));
-        true
+        abort EDeprecated
     }
     
     public fun process_member_exit(
-        member: &mut Member,
-        circle_contribution_amount: u64
+        _member: &mut Member,
+        _circle_contribution_amount: u64
     ): bool {
-        if (!member.exit_requested) {
-            return false
-        };
-        
-        // Check if member has met all obligations
-        if (member.total_contributed < circle_contribution_amount * member.total_meetings_required) {
-            return false
-        };
-        
-        member.status = core::member_status_exited();
-        true
+        abort EDeprecated
     }
     
     // ----------------------------------------------------------
     // Contribution management
     // ----------------------------------------------------------
     public fun record_contribution(
-        member: &mut Member,
-        amount: u64,
-        timestamp: u64
+        _member: &mut Member,
+        _amount: u64,
+        _timestamp: u64
     ) {
-        member.last_contribution = timestamp;
-        member.total_contributed = member.total_contributed + amount;
+        abort EDeprecated
     }
     
     // Reset a member's contribution status for a new position/cycle
@@ -294,34 +236,32 @@ module njangi::njangi_members {
         member.recovery_sui_contributions
     }
 
-    public fun add_recovery_sui_contributions(member: &mut Member, amount: u64) {
-        member.recovery_sui_contributions = member.recovery_sui_contributions + amount;
+    public fun add_recovery_sui_contributions(_member: &mut Member, _amount: u64) {
+        abort EDeprecated
     }
 
-    public fun subtract_recovery_sui_contributions(member: &mut Member, amount: u64) {
-        assert!(member.recovery_sui_contributions >= amount, 12);
-        member.recovery_sui_contributions = member.recovery_sui_contributions - amount;
+    public fun subtract_recovery_sui_contributions(_member: &mut Member, _amount: u64) {
+        abort EDeprecated
     }
 
-    public fun clear_recovery_sui_contributions(member: &mut Member) {
-        member.recovery_sui_contributions = 0;
+    public fun clear_recovery_sui_contributions(_member: &mut Member) {
+        abort EDeprecated
     }
 
     public fun get_recovery_stablecoin_contributions(member: &Member): u64 {
         member.recovery_stablecoin_contributions
     }
 
-    public fun add_recovery_stablecoin_contributions(member: &mut Member, amount: u64) {
-        member.recovery_stablecoin_contributions = member.recovery_stablecoin_contributions + amount;
+    public fun add_recovery_stablecoin_contributions(_member: &mut Member, _amount: u64) {
+        abort EDeprecated
     }
 
-    public fun subtract_recovery_stablecoin_contributions(member: &mut Member, amount: u64) {
-        assert!(member.recovery_stablecoin_contributions >= amount, 12);
-        member.recovery_stablecoin_contributions = member.recovery_stablecoin_contributions - amount;
+    public fun subtract_recovery_stablecoin_contributions(_member: &mut Member, _amount: u64) {
+        abort EDeprecated
     }
 
-    public fun clear_recovery_stablecoin_contributions(member: &mut Member) {
-        member.recovery_stablecoin_contributions = 0;
+    public fun clear_recovery_stablecoin_contributions(_member: &mut Member) {
+        abort EDeprecated
     }
 
     public fun get_recovery_sui_deposit(member: &Member): u64 {
@@ -332,9 +272,8 @@ module njangi::njangi_members {
         member.recovery_sui_deposit = amount;
     }
 
-    public fun subtract_recovery_sui_deposit(member: &mut Member, amount: u64) {
-        assert!(member.recovery_sui_deposit >= amount, 12);
-        member.recovery_sui_deposit = member.recovery_sui_deposit - amount;
+    public fun subtract_recovery_sui_deposit(_member: &mut Member, _amount: u64) {
+        abort EDeprecated
     }
 
     public fun clear_recovery_sui_deposit(member: &mut Member) {
@@ -349,9 +288,8 @@ module njangi::njangi_members {
         member.recovery_stablecoin_deposit = amount;
     }
 
-    public fun subtract_recovery_stablecoin_deposit(member: &mut Member, amount: u64) {
-        assert!(member.recovery_stablecoin_deposit >= amount, 12);
-        member.recovery_stablecoin_deposit = member.recovery_stablecoin_deposit - amount;
+    public fun subtract_recovery_stablecoin_deposit(_member: &mut Member, _amount: u64) {
+        abort EDeprecated
     }
 
     public fun clear_recovery_stablecoin_deposit(member: &mut Member) {
@@ -398,14 +336,13 @@ module njangi::njangi_members {
     }
     
     // Add to deposit balance
-    public fun add_to_deposit_balance(member: &mut Member, amount: u64) {
-        member.deposit_balance = member.deposit_balance + amount;
+    public fun add_to_deposit_balance(_member: &mut Member, _amount: u64) {
+        abort EDeprecated
     }
     
     // Subtract from deposit balance
-    public fun subtract_from_deposit_balance(member: &mut Member, amount: u64) {
-        assert!(member.deposit_balance >= amount, 12); // EInsufficientBalance
-        member.deposit_balance = member.deposit_balance - amount;
+    public fun subtract_from_deposit_balance(_member: &mut Member, _amount: u64) {
+        abort EDeprecated
     }
     
     // Get member status
@@ -414,8 +351,8 @@ module njangi::njangi_members {
     }
     
     // Set member status
-    public fun set_status(member: &mut Member, status: u8) {
-        member.status = status;
+    public fun set_status(_member: &mut Member, _status: u8) {
+        abort EDeprecated
     }
     
     // Get received payout
@@ -507,8 +444,8 @@ module njangi::njangi_members {
         member.activated_at
     }
     
-    public fun set_activated_at(member: &mut Member, timestamp: u64) {
-        member.activated_at = option::some(timestamp);
+    public fun set_activated_at(_member: &mut Member, _timestamp: u64) {
+        abort EDeprecated
     }
     
     public fun set_deposit_paid(member: &mut Member, paid: bool) {

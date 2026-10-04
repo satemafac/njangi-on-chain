@@ -11,21 +11,23 @@ module njangi::njangi_custody {
     use std::ascii;
     
     use njangi::njangi_core as core;
-    use njangi::njangi_price_validator as price_validator;
     use pyth::price_info::PriceInfoObject;
-    
+
     // ----------------------------------------------------------
     // Error codes
     // ----------------------------------------------------------
-    const EWalletNotActive: u64 = 43;
-    const EFundsTimeLocked: u64 = 44;
-    const EUnsupportedToken: u64 = 50;
+    // 43, 44, 50 and 55 belonged to the legacy-storage movers retired in
+    // v11; do not reuse them.
     const EInsufficientAmount: u64 = 53;
     const EInvalidPriceInfo: u64 = 54;
-    const EInsufficientDepositValue: u64 = 55;
     const EInvalidDecimalPrecision: u64 = 56;
     const EDecimalConversionOverflow: u64 = 57;
     const EPrecisionLoss: u64 = 58;
+    // v11: the wallet's deposit records for an asset hold less than a
+    // member refund asked for.
+    const EDepositBalanceInsufficient: u64 = 59;
+    // Mirrors njangi_circles::E_DEPRECATED_ENTRYPOINT.
+    const EDeprecated: u64 = 89;
     
     // ----------------------------------------------------------
     // Local constants from core
@@ -124,6 +126,28 @@ module njangi::njangi_custody {
         member: address,
         timestamp: u64,
     }
+
+    // ----------------------------------------------------------
+    // v11 deposit records
+    //
+    // `DepositBalanceKey { asset }` -> `Balance<T>` is a typed record inside
+    // this circle's custody wallet holding the members' security deposits
+    // in asset `T`. The key type is new in v11 and only this module can
+    // construct it, so the coins are reachable solely through the
+    // package-internal helpers below. Their one caller, njangi_circles,
+    // keeps the per-member amounts (`MemberDepositKey`) and only ever pays
+    // a deposit back to the member it is recorded for. No admin, operator
+    // or capability holder has a path to these coins.
+    // Moves of these records do not append to `transaction_history`, which
+    // therefore stays an exact ledger of legacy storage.
+    // ----------------------------------------------------------
+    public struct DepositBalanceKey has copy, drop, store { asset: vector<u8> }
+
+    /// Written at the legacy typed-balance key of an asset once that asset's
+    /// legacy balance has moved to the v11 deposit records (conversion) or,
+    /// for circles created on v11, when the wallet is created. The legacy
+    /// slot of a v11 asset never holds coins again.
+    public struct LegacySlotMigrated has store, drop { migrated_at_ms: u64 }
     
     // ----------------------------------------------------------
     // Create a new custody wallet
@@ -189,191 +213,16 @@ module njangi::njangi_custody {
     }
 
     // ----------------------------------------------------------
-    // Create a transaction record
-    // ----------------------------------------------------------
-    fun create_transaction(
-        operation_type: u8,
-        user: address,
-        amount: u64,
-        timestamp: u64
-    ): CustodyTransaction {
-        CustodyTransaction {
-            operation_type,
-            user,
-            amount,
-            timestamp
-        }
-    }
-
-    fun assert_wallet_can_release_funds(
-        wallet: &CustodyWallet,
-        amount: u64,
-        current_time: u64
-    ) {
-        assert!(wallet.is_active, EWalletNotActive);
-        assert!(amount > 0, EInsufficientAmount);
-
-        if (option::is_some(&wallet.locked_until)) {
-            let lock_time = *option::borrow(&wallet.locked_until);
-            assert!(current_time >= lock_time, EFundsTimeLocked);
-        };
-    }
-
-    fun withdraw_sui_from_all_storage(
-        wallet: &mut CustodyWallet,
-        amount: u64,
-        ctx: &mut TxContext
-    ): Coin<SUI> {
-        assert!(amount > 0, EInsufficientAmount);
-
-        let available_main_balance = balance::value(&wallet.balance);
-        let available_dynamic_balance = get_stablecoin_balance<SUI>(wallet);
-        assert!(available_main_balance + available_dynamic_balance >= amount, 12);
-
-        let mut amount_left = amount;
-        let mut payout_balance = balance::zero<SUI>();
-
-        let amount_from_main = if (available_main_balance >= amount_left) {
-            amount_left
-        } else {
-            available_main_balance
-        };
-
-        if (amount_from_main > 0) {
-            let main_piece = balance::split(&mut wallet.balance, amount_from_main);
-            balance::join(&mut payout_balance, main_piece);
-            amount_left = amount_left - amount_from_main;
-        };
-
-        if (amount_left > 0) {
-            let dynamic_piece = withdraw_coin_from_storage<SUI>(wallet, amount_left, ctx);
-            balance::join(&mut payout_balance, coin::into_balance(dynamic_piece));
-        };
-
-        coin::from_balance(payout_balance, ctx)
-    }
-    
-    // ----------------------------------------------------------
     // Compliance note: the public `deposit`, `withdraw`, `lock_wallet`,
     // `unlock_wallet`, and `withdraw_from_dynamic_fields` admin levers were
-    // removed in the non-custodial Phase 1 cleanup. Contributions flow
-    // through njangi_payments, payouts use the recipient-pull `claim_payout`,
-    // and refunds use the member-initiated recovery helpers below.
+    // removed in the non-custodial Phase 1 cleanup. In v11 the legacy
+    // storage movers (legacy-rail payouts and legacy-storage refunds) are
+    // gone too: a member's deposit moves only through the v11 deposit
+    // records below, and only back to that member. Legacy storage is read
+    // (views, conversion) and moved only by conversion, into the v11
+    // records of the same wallet.
     // ----------------------------------------------------------
 
-    public(package) fun withdraw_sui_for_recovery(
-        wallet: &mut CustodyWallet,
-        amount: u64,
-        recipient: address,
-        clock: &Clock,
-        ctx: &mut TxContext
-    ): Coin<SUI> {
-        let current_time = clock::timestamp_ms(clock);
-
-        assert_wallet_can_release_funds(wallet, amount, current_time);
-        let withdrawal_coin = withdraw_sui_from_all_storage(wallet, amount, ctx);
-
-        let txn = create_transaction(
-            core::custody_op_withdrawal(),
-            recipient,
-            amount,
-            current_time
-        );
-        vector::push_back(&mut wallet.transaction_history, txn);
-
-        event::emit(CustodyWithdrawn {
-            circle_id: wallet.circle_id,
-            wallet_id: object::uid_to_inner(&wallet.id),
-            recipient,
-            amount,
-            operation_type: core::custody_op_withdrawal(),
-        });
-
-        withdrawal_coin
-    }
-
-    // ----------------------------------------------------------
-    // Package-internal payout helpers. Trust boundary: callers (njangi_payments,
-    // njangi_circles) verify recipient eligibility (rotation order, membership,
-    // refund amount). Custody just exposes the mechanism without admin discretion.
-    // ----------------------------------------------------------
-    public(package) fun release_sui_to_member(
-        wallet: &mut CustodyWallet,
-        amount: u64,
-        recipient: address,
-        clock: &Clock,
-        ctx: &mut TxContext
-    ): Coin<SUI> {
-        let current_time = clock::timestamp_ms(clock);
-
-        assert_wallet_can_release_funds(wallet, amount, current_time);
-        let withdrawal_coin = withdraw_sui_from_all_storage(wallet, amount, ctx);
-
-        let txn = create_transaction(
-            core::custody_op_withdrawal(),
-            recipient,
-            amount,
-            current_time
-        );
-        vector::push_back(&mut wallet.transaction_history, txn);
-
-        event::emit(CustodyWithdrawn {
-            circle_id: wallet.circle_id,
-            wallet_id: object::uid_to_inner(&wallet.id),
-            recipient,
-            amount,
-            operation_type: core::custody_op_withdrawal(),
-        });
-
-        withdrawal_coin
-    }
-
-    public(package) fun release_stablecoin_to_member<CoinType>(
-        wallet: &mut CustodyWallet,
-        amount: u64,
-        recipient: address,
-        clock: &Clock,
-        ctx: &mut TxContext
-    ): Coin<CoinType> {
-        let current_time = clock::timestamp_ms(clock);
-
-        assert_wallet_can_release_funds(wallet, amount, current_time);
-
-        let previous_balance = get_stablecoin_balance<CoinType>(wallet);
-        assert!(previous_balance >= amount, 12);
-
-        let coin_to_send = withdraw_coin_from_storage<CoinType>(wallet, amount, ctx);
-        let new_balance = get_stablecoin_balance<CoinType>(wallet);
-        let coin_type_str = balance_field_name<CoinType>();
-
-        let txn = create_transaction(
-            core::custody_op_withdrawal(),
-            recipient,
-            amount,
-            current_time
-        );
-        vector::push_back(&mut wallet.transaction_history, txn);
-
-        event::emit(CustodyWithdrawn {
-            circle_id: wallet.circle_id,
-            wallet_id: object::uid_to_inner(&wallet.id),
-            recipient,
-            amount,
-            operation_type: core::custody_op_withdrawal(),
-        });
-
-        event::emit(StablecoinHoldingUpdated {
-            circle_id: wallet.circle_id,
-            wallet_id: object::uid_to_inner(&wallet.id),
-            coin_type: coin_type_str,
-            previous_balance,
-            new_balance,
-            timestamp: current_time,
-        });
-
-        coin_to_send
-    }
-    
     // ----------------------------------------------------------
     // Get wallet balance
     // ----------------------------------------------------------
@@ -435,6 +284,12 @@ module njangi::njangi_custody {
     // ----------------------------------------------------------
     public fun get_admin(wallet: &CustodyWallet): address {
         wallet.admin
+    }
+
+    // Creation timestamp recorded when the wallet was created (the circle's
+    // own create transaction stamps both with the same clock reading).
+    public fun get_created_at(wallet: &CustodyWallet): u64 {
+        wallet.created_at
     }
     
     // ----------------------------------------------------------
@@ -549,18 +404,21 @@ module njangi::njangi_custody {
         string::utf8(ascii::into_bytes(type_name_str))
     }
     
-    // Check if a stablecoin balance exists
+    // Check if a stablecoin balance exists. Typed lookups only (v11): a slot
+    // holding another type — a different coin, or a migrated marker — is
+    // not a balance of `CoinType`.
     public fun has_stablecoin_balance<CoinType>(wallet: &CustodyWallet): bool {
-        let legacy_field = coin_field_name();
-        let balance_field = balance_field_name<CoinType>();
-        dynamic_object_field::exists_(&wallet.id, legacy_field) || dynamic_field::exists_(&wallet.id, balance_field)
+        dynamic_object_field::exists_with_type<String, Coin<CoinType>>(&wallet.id, coin_field_name())
+            || dynamic_field::exists_with_type<String, Balance<CoinType>>(&wallet.id, balance_field_name<CoinType>())
     }
     
-    // Get a stablecoin balance from stored coins
+    // Get a stablecoin balance from stored coins. Every read is type-checked
+    // (`exists_with_type`), so one asset's legacy storage can never make a
+    // read of another asset abort.
     public fun get_stablecoin_balance<CoinType>(wallet: &CustodyWallet): u64 {
         // New storage path: dynamic_field<String, Balance<CoinType>>
         let balance_field = balance_field_name<CoinType>();
-        let dynamic_balance = if (dynamic_field::exists_(&wallet.id, balance_field)) {
+        let dynamic_balance = if (dynamic_field::exists_with_type<String, Balance<CoinType>>(&wallet.id, balance_field)) {
             let stored_balance = dynamic_field::borrow<String, Balance<CoinType>>(&wallet.id, balance_field);
             balance::value(stored_balance)
         } else {
@@ -569,7 +427,7 @@ module njangi::njangi_custody {
 
         // Legacy storage path: dynamic_object_field<String, Coin<CoinType>>
         let legacy_field = coin_field_name();
-        let legacy_balance = if (dynamic_object_field::exists_(&wallet.id, legacy_field)) {
+        let legacy_balance = if (dynamic_object_field::exists_with_type<String, Coin<CoinType>>(&wallet.id, legacy_field)) {
             let coin = dynamic_object_field::borrow<String, Coin<CoinType>>(&wallet.id, legacy_field);
             coin::value(coin)
         } else {
@@ -579,79 +437,6 @@ module njangi::njangi_custody {
         dynamic_balance + legacy_balance
     }
 
-    // Store a Coin<CoinType> as Balance<CoinType> under a typed dynamic field key.
-    fun store_coin_balance<CoinType>(
-        wallet: &mut CustodyWallet,
-        coin_to_store: Coin<CoinType>
-    ) {
-        let field_name = balance_field_name<CoinType>();
-        let incoming_balance = coin::into_balance(coin_to_store);
-
-        if (dynamic_field::exists_(&wallet.id, field_name)) {
-            let existing_balance = dynamic_field::borrow_mut<String, Balance<CoinType>>(&mut wallet.id, field_name);
-            balance::join(existing_balance, incoming_balance);
-        } else {
-            dynamic_field::add<String, Balance<CoinType>>(&mut wallet.id, field_name, incoming_balance);
-            register_stablecoin_type<CoinType>(wallet);
-        };
-    }
-
-    // Withdraw from new Balance dynamic fields first, then from legacy Coin object fields.
-    fun withdraw_coin_from_storage<CoinType>(
-        wallet: &mut CustodyWallet,
-        amount: u64,
-        ctx: &mut TxContext
-    ): Coin<CoinType> {
-        assert!(amount > 0, EInsufficientAmount);
-        let has_legacy_storage = dynamic_object_field::exists_(&wallet.id, coin_field_name());
-        let has_balance_storage = dynamic_field::exists_(&wallet.id, balance_field_name<CoinType>());
-        assert!(has_legacy_storage || has_balance_storage, EUnsupportedToken);
-
-        let mut amount_left = amount;
-        let mut payout_balance = balance::zero<CoinType>();
-
-        if (has_balance_storage) {
-            let balance_key = balance_field_name<CoinType>();
-            let stored_balance = dynamic_field::borrow_mut<String, Balance<CoinType>>(&mut wallet.id, balance_key);
-            let available_balance = balance::value(stored_balance);
-            let amount_from_balance = if (available_balance >= amount_left) { amount_left } else { available_balance };
-
-            if (amount_from_balance > 0) {
-                let split_balance = balance::split(stored_balance, amount_from_balance);
-                balance::join(&mut payout_balance, split_balance);
-                amount_left = amount_left - amount_from_balance;
-            };
-
-            if (balance::value(stored_balance) == 0) {
-                let zero_balance = dynamic_field::remove<String, Balance<CoinType>>(
-                    &mut wallet.id,
-                    balance_field_name<CoinType>()
-                );
-                balance::destroy_zero(zero_balance);
-            };
-        };
-
-        if (amount_left > 0) {
-            assert!(dynamic_object_field::exists_(&wallet.id, coin_field_name()), 12);
-            let mut stored_coin = dynamic_object_field::remove<String, Coin<CoinType>>(
-                &mut wallet.id,
-                coin_field_name()
-            );
-            assert!(coin::value(&stored_coin) >= amount_left, 12);
-
-            let legacy_piece = coin::split<CoinType>(&mut stored_coin, amount_left, ctx);
-            balance::join(&mut payout_balance, coin::into_balance(legacy_piece));
-
-            if (coin::value(&stored_coin) > 0) {
-                dynamic_object_field::add(&mut wallet.id, coin_field_name(), stored_coin);
-            } else {
-                coin::destroy_zero(stored_coin);
-            };
-        };
-
-        coin::from_balance(payout_balance, ctx)
-    }
-    
     // Track coin type metadata
     fun register_stablecoin_type<CoinType>(wallet: &mut CustodyWallet) {
         // Get the type name as an ascii::String
@@ -701,177 +486,15 @@ module njangi::njangi_custody {
         }
     }
     
-    // Get decimals for a specific coin type
-    public fun get_coin_decimals(wallet: &CustodyWallet, coin_symbol: String): u8 {
-        let mut metadata_key = string::utf8(b"metadata_");
-        string::append(&mut metadata_key, coin_symbol);
-        
-        if (dynamic_field::exists_(&wallet.id, metadata_key)) {
-            let metadata = *dynamic_field::borrow<String, vector<String>>(&wallet.id, metadata_key);
-            if (vector::length(&metadata) >= 2) {
-                // Convert ASCII character back to number (e.g., '6' -> 6)
-                let decimal_str = *vector::borrow(&metadata, 1);
-                if (string::length(&decimal_str) > 0) {
-                    let decimal_bytes = *string::bytes(&decimal_str);
-                    let decimal_ascii = *vector::borrow(&decimal_bytes, 0);
-                    return (decimal_ascii - 48) as u8 // ASCII to number conversion
-                }
-            }
-        };
-        
-        // Default to 9 if not found (SUI standard)
-        9
+    // Metadata-by-symbol views — RETIRED in v11. Nothing ever wrote the
+    // fields they read, so they could only answer a guessed default. A
+    // circle's decimals live in its pinned asset terms (njangi_circles).
+    public fun get_coin_decimals(_wallet: &CustodyWallet, _coin_symbol: String): u8 {
+        abort EDeprecated
     }
-    
-    // Get full type path for a coin symbol
-    public fun get_coin_type_path(wallet: &CustodyWallet, coin_symbol: String): String {
-        let mut metadata_key = string::utf8(b"metadata_");
-        string::append(&mut metadata_key, coin_symbol);
-        
-        if (dynamic_field::exists_(&wallet.id, metadata_key)) {
-            let metadata = *dynamic_field::borrow<String, vector<String>>(&wallet.id, metadata_key);
-            if (vector::length(&metadata) >= 3) {
-                return *vector::borrow(&metadata, 2)
-            }
-        };
-        
-        // Return empty string if not found
-        string::utf8(b"")
-    }
-    
-    // ----------------------------------------------------------
-    // Internal function to store a security deposit coin in the custody wallet
-    // Verification and member state updates are handled in the calling module (njangi_circles)
-    // ----------------------------------------------------------
-    public(package) fun internal_store_security_deposit<CoinType>(
-        wallet: &mut CustodyWallet,
-        stablecoin: Coin<CoinType>,
-        member_addr: address,
-        required_amount: u64,
-        price_info_object: &PriceInfoObject,
-        clock: &Clock,
-        ctx: &mut TxContext
-    ) {
-        let amount = coin::value(&stablecoin);
-        let current_time = clock::timestamp_ms(clock);
 
-        assert!(wallet.is_active, EWalletNotActive);
-        assert!(amount > 0, EInsufficientAmount);
-
-        // Get the coin type name
-        let coin_type_name = type_name::into_string(type_name::get<CoinType>());
-        
-        // Validate the deposit using Pyth price oracle
-        let usd_value = price_validator::validate_stablecoin_deposit(
-            price_info_object,
-            amount,
-            required_amount,
-            coin_type_name,
-            clock,
-            ctx
-        );
-        
-        // Ensure the deposit meets the required amount
-        assert!(usd_value >= required_amount, EInsufficientDepositValue);
-
-        // Store as dynamic_field<String, Balance<CoinType>> using coin::into_balance.
-        let previous_balance = get_stablecoin_balance<CoinType>(wallet);
-        store_coin_balance<CoinType>(wallet, stablecoin);
-
-        let new_balance = get_stablecoin_balance<CoinType>(wallet);
-
-        let txn = create_transaction(
-            core::custody_op_stablecoin_deposit(),
-            member_addr,
-            amount,
-            current_time
-        );
-        vector::push_back(&mut wallet.transaction_history, txn);
-
-        // Determine the correct coin type string based on the type
-        let coin_type_str = if (std::type_name::get<CoinType>() == std::type_name::get<SUI>()) {
-            // If it's SUI, use "sui" instead of "stablecoin"
-            string::utf8(b"sui")
-        } else {
-            // For other coins (actual stablecoins), use "stablecoin"
-            string::utf8(b"stablecoin")
-        };
-
-        event::emit(CustodyDeposited {
-            circle_id: wallet.circle_id,
-            wallet_id: object::uid_to_inner(&wallet.id),
-            member: member_addr,
-            amount,
-            operation_type: core::custody_op_stablecoin_deposit(),
-        });
-
-        event::emit(CoinDeposited {
-            circle_id: wallet.circle_id,
-            wallet_id: object::uid_to_inner(&wallet.id),
-            coin_type: coin_type_str,
-            amount,
-            member: member_addr,
-            previous_balance,
-            new_balance,
-            timestamp: current_time,
-        });
-        
-        // Emit new event with price information
-        event::emit(StablecoinDepositWithPrice {
-            circle_id: wallet.circle_id,
-            wallet_id: object::uid_to_inner(&wallet.id),
-            coin_type: coin_type_str,
-            amount,
-            usd_value,
-            member: member_addr,
-            timestamp: current_time,
-        });
-    }
-    
-    public(package) fun withdraw_stablecoin_for_recovery<CoinType>(
-        wallet: &mut CustodyWallet,
-        amount: u64,
-        recipient: address,
-        clock: &Clock,
-        ctx: &mut TxContext
-    ): Coin<CoinType> {
-        let current_time = clock::timestamp_ms(clock);
-
-        assert_wallet_can_release_funds(wallet, amount, current_time);
-
-        let previous_balance = get_stablecoin_balance<CoinType>(wallet);
-        assert!(previous_balance >= amount, 12);
-
-        let coin_to_send = withdraw_coin_from_storage<CoinType>(wallet, amount, ctx);
-        let new_balance = get_stablecoin_balance<CoinType>(wallet);
-        let coin_type_str = balance_field_name<CoinType>();
-
-        let txn = create_transaction(
-            core::custody_op_withdrawal(),
-            recipient,
-            amount,
-            current_time
-        );
-        vector::push_back(&mut wallet.transaction_history, txn);
-
-        event::emit(CustodyWithdrawn {
-            circle_id: wallet.circle_id,
-            wallet_id: object::uid_to_inner(&wallet.id),
-            recipient,
-            amount,
-            operation_type: core::custody_op_withdrawal(),
-        });
-
-        event::emit(StablecoinHoldingUpdated {
-            circle_id: wallet.circle_id,
-            wallet_id: object::uid_to_inner(&wallet.id),
-            coin_type: coin_type_str,
-            previous_balance,
-            new_balance,
-            timestamp: current_time,
-        });
-
-        coin_to_send
+    public fun get_coin_type_path(_wallet: &CustodyWallet, _coin_symbol: String): String {
+        abort EDeprecated
     }
 
     // ----------------------------------------------------------
@@ -886,139 +509,21 @@ module njangi::njangi_custody {
     }
     
     // ----------------------------------------------------------
-    // Add a public function to validate deposit amounts using Pyth
+    // Oracle-priced deposit validation — RETIRED in v11 (deposits are
+    // exact amounts of the circle's pinned asset; no oracle on the money
+    // path).
     // ----------------------------------------------------------
+    #[allow(unused_type_parameter)]
     public fun validate_deposit_amount<CoinType>(
-        amount: u64,
-        required_amount: u64,
-        price_info_object: &PriceInfoObject,
-        clock: &Clock,
-        ctx: &mut TxContext
+        _amount: u64,
+        _required_amount: u64,
+        _price_info_object: &PriceInfoObject,
+        _clock: &Clock,
+        _ctx: &mut TxContext
     ): u64 {
-        let coin_type_name = type_name::into_string(type_name::get<CoinType>());
-        
-        price_validator::validate_stablecoin_deposit(
-            price_info_object,
-            amount,
-            required_amount,
-            coin_type_name,
-            clock,
-            ctx
-        )
+        abort EDeprecated
     }
-    
-    // ----------------------------------------------------------
-    // Internal function to store a security deposit coin without price validation
-    // For backward compatibility during transition to price validation
-    // ----------------------------------------------------------
-    public(package) fun internal_store_security_deposit_without_validation<CoinType>(
-        wallet: &mut CustodyWallet,
-        stablecoin: Coin<CoinType>,
-        member_addr: address,
-        clock: &Clock,
-        _ctx: &TxContext
-    ) {
-        let amount = coin::value(&stablecoin);
-        let current_time = clock::timestamp_ms(clock);
 
-        assert!(wallet.is_active, EWalletNotActive);
-        assert!(amount > 0, EInsufficientAmount);
-
-        // Store as dynamic_field<String, Balance<CoinType>> using coin::into_balance.
-        let previous_balance = get_stablecoin_balance<CoinType>(wallet);
-        store_coin_balance<CoinType>(wallet, stablecoin);
-
-        let new_balance = get_stablecoin_balance<CoinType>(wallet);
-
-        let txn = create_transaction(
-            core::custody_op_stablecoin_deposit(),
-            member_addr,
-            amount,
-            current_time
-        );
-        vector::push_back(&mut wallet.transaction_history, txn);
-
-        // Determine the correct coin type string based on the type
-        let coin_type_str = if (std::type_name::get<CoinType>() == std::type_name::get<SUI>()) {
-            // If it's SUI, use "sui" instead of "stablecoin"
-            string::utf8(b"sui")
-        } else {
-            // For other coins (actual stablecoins), use "stablecoin"
-            string::utf8(b"stablecoin")
-        };
-
-        event::emit(CustodyDeposited {
-            circle_id: wallet.circle_id,
-            wallet_id: object::uid_to_inner(&wallet.id),
-            member: member_addr,
-            amount,
-            operation_type: core::custody_op_stablecoin_deposit(),
-        });
-
-        event::emit(CoinDeposited {
-            circle_id: wallet.circle_id,
-            wallet_id: object::uid_to_inner(&wallet.id),
-            coin_type: coin_type_str,
-            amount,
-            member: member_addr,
-            previous_balance,
-            new_balance,
-            timestamp: current_time,
-        });
-    }
-    
-    // ----------------------------------------------------------
-    // Internal function to deposit a contribution coin (generic type)
-    // ----------------------------------------------------------
-    public(package) fun deposit_contribution_coin<CoinType>(
-        wallet: &mut CustodyWallet,
-        contribution_coin: Coin<CoinType>,
-        member_addr: address,
-        clock: &Clock,
-        _ctx: &TxContext
-    ) {
-        let amount = coin::value(&contribution_coin);
-        let current_time = clock::timestamp_ms(clock);
-
-        assert!(wallet.is_active, EWalletNotActive);
-        assert!(amount > 0, EInsufficientAmount);
-
-        // Store as dynamic_field<String, Balance<CoinType>> using coin::into_balance.
-        let previous_balance = get_stablecoin_balance<CoinType>(wallet);
-        store_coin_balance<CoinType>(wallet, contribution_coin);
-
-        let new_balance = get_stablecoin_balance<CoinType>(wallet);
-
-        // Use CUSTODY_OP_DEPOSIT for generic contributions
-        let txn = create_transaction(
-            core::custody_op_deposit(),
-            member_addr,
-            amount,
-            current_time
-        );
-        vector::push_back(&mut wallet.transaction_history, txn);
-
-        // Determine the correct coin type string based on the type
-        let coin_type_str = if (std::type_name::get<CoinType>() == std::type_name::get<SUI>()) {
-            string::utf8(b"sui")
-        } else {
-            // Use a generic term or maybe the actual type name? Let's stick to stablecoin for now.
-            string::utf8(b"stablecoin")
-        };
-
-        // Emit CoinDeposited event - CustodyDeposited might be misleading here
-        event::emit(CoinDeposited {
-            circle_id: wallet.circle_id,
-            wallet_id: object::uid_to_inner(&wallet.id),
-            coin_type: coin_type_str,
-            amount,
-            member: member_addr,
-            previous_balance,
-            new_balance,
-            timestamp: current_time,
-        });
-    }
-    
     // ----------------------------------------------------------
     // Get wallet balance in raw form (keeping decimals)
     // Checks both the main balance field and any SUI in dynamic fields
@@ -1052,11 +557,15 @@ module njangi::njangi_custody {
             return true
         };
 
-        // New check: typed dynamic_field<String, Balance<CoinType>> keys.
+        // New check: typed dynamic_field<String, Balance<CoinType>> keys. A
+        // slot that only carries the v11 migrated marker holds no coins.
         let mut i = 0;
         while (i < len) {
             let coin_type_key = *vector::borrow(&stablecoin_types, i);
-            if (dynamic_field::exists_(&wallet.id, coin_type_key)) {
+            if (
+                dynamic_field::exists_(&wallet.id, coin_type_key)
+                    && !dynamic_field::exists_with_type<String, LegacySlotMigrated>(&wallet.id, coin_type_key)
+            ) {
                 return true
             };
             i = i + 1;
@@ -1070,6 +579,309 @@ module njangi::njangi_custody {
         };
         
         false
+    }
+
+    // ----------------------------------------------------------
+    // v11 deposit-record primitives (package-internal)
+    // ----------------------------------------------------------
+
+    fun deposit_balance_key<T>(): DepositBalanceKey {
+        DepositBalanceKey { asset: core::coin_type_bytes<T>() }
+    }
+
+    /// Joins `funds` into the wallet's deposit record for `T`; returns the
+    /// record's new value.
+    public(package) fun join_deposit_balance<T>(wallet: &mut CustodyWallet, funds: Balance<T>): u64 {
+        let key = deposit_balance_key<T>();
+        if (dynamic_field::exists_with_type<DepositBalanceKey, Balance<T>>(&wallet.id, key)) {
+            let record = dynamic_field::borrow_mut<DepositBalanceKey, Balance<T>>(&mut wallet.id, key);
+            balance::join(record, funds)
+        } else {
+            let value = balance::value(&funds);
+            dynamic_field::add(&mut wallet.id, key, funds);
+            value
+        }
+    }
+
+    /// Splits `amount` out of the deposit record for `T`. The only caller,
+    /// njangi_circles, asks for exactly a member's recorded deposit and
+    /// pays it to that member.
+    public(package) fun split_deposit_balance<T>(wallet: &mut CustodyWallet, amount: u64): Balance<T> {
+        let key = deposit_balance_key<T>();
+        assert!(dynamic_field::exists_with_type<DepositBalanceKey, Balance<T>>(&wallet.id, key), EDepositBalanceInsufficient);
+        let record = dynamic_field::borrow_mut<DepositBalanceKey, Balance<T>>(&mut wallet.id, key);
+        assert!(balance::value(record) >= amount, EDepositBalanceInsufficient);
+        balance::split(record, amount)
+    }
+
+    /// Coins of `T` held in this wallet's v11 deposit records.
+    public fun deposit_balance_value<T>(wallet: &CustodyWallet): u64 {
+        let key = deposit_balance_key<T>();
+        if (dynamic_field::exists_with_type<DepositBalanceKey, Balance<T>>(&wallet.id, key)) {
+            balance::value(dynamic_field::borrow<DepositBalanceKey, Balance<T>>(&wallet.id, key))
+        } else {
+            0
+        }
+    }
+
+    /// Records a member's security deposit in `T` (njangi_circles::
+    /// post_security_deposit) and emits the custody deposit event the
+    /// notification relay follows (the coin type and decimals travel in
+    /// njangi_circles::SecurityDepositPosted).
+    public(package) fun store_member_deposit<T>(
+        wallet: &mut CustodyWallet,
+        deposit: Coin<T>,
+        member: address
+    ): u64 {
+        let amount = coin::value(&deposit);
+        assert!(amount > 0, EInsufficientAmount);
+        let new_balance = join_deposit_balance<T>(wallet, coin::into_balance(deposit));
+        event::emit(CustodyDeposited {
+            circle_id: wallet.circle_id,
+            wallet_id: object::uid_to_inner(&wallet.id),
+            member,
+            amount,
+            operation_type: core::custody_op_stablecoin_deposit(),
+        });
+        new_balance
+    }
+
+    /// v11: creates the circle's wallet with T's legacy slot already marked
+    /// migrated, so the wallet keeps `T` only in its v11 deposit records.
+    /// Shared, like every custody wallet.
+    public(package) fun create_custody_wallet_for_asset<T>(
+        circle_id: ID,
+        timestamp: u64,
+        ctx: &mut TxContext
+    ): ID {
+        let admin = tx_context::sender(ctx);
+        let mut wallet = CustodyWallet {
+            id: object::new(ctx),
+            circle_id,
+            balance: balance::zero<SUI>(),
+            admin,
+            created_at: timestamp,
+            locked_until: option::none(),
+            is_active: true,
+            transaction_history: vector::empty(),
+        };
+        dynamic_field::add(
+            &mut wallet.id,
+            balance_field_name<T>(),
+            LegacySlotMigrated { migrated_at_ms: timestamp }
+        );
+        register_stablecoin_type<T>(&mut wallet);
+
+        let wallet_id = object::uid_to_inner(&wallet.id);
+        transfer::share_object(wallet);
+        event::emit(CustodyWalletCreated { circle_id, wallet_id, admin });
+        wallet_id
+    }
+
+    // ----------------------------------------------------------
+    // v11 conversion helpers (package-internal)
+    //
+    // A legacy circle converts by moving its legacy deposits into the v11
+    // deposit records of the same wallet. The per-member amounts come from
+    // `transaction_history`, which only package code writes and only when
+    // coins actually move.
+    // ----------------------------------------------------------
+
+    public(package) fun legacy_history_length(wallet: &CustodyWallet): u64 {
+        vector::length(&wallet.transaction_history)
+    }
+
+    /// True when legacy storage has only ever held `T` (`registered_types`
+    /// ⊆ {T}), holds it only as a typed balance (no `coin_objects`), holds
+    /// no SUI when `T` is not SUI, and its ledger records only security
+    /// deposits (op 3) and withdrawals (op 1).
+    public(package) fun legacy_is_single_asset<T>(wallet: &CustodyWallet): bool {
+        let own_key = balance_field_name<T>();
+        let types = get_supported_stablecoin_types(wallet);
+        let mut i = 0;
+        while (i < vector::length(&types)) {
+            if (vector::borrow(&types, i) != &own_key) {
+                return false
+            };
+            i = i + 1;
+        };
+        if (dynamic_object_field::exists_(&wallet.id, coin_field_name())) {
+            return false
+        };
+        if (!core::is_sui<T>()) {
+            if (balance::value(&wallet.balance) > 0) {
+                return false
+            };
+            if (dynamic_field::exists_(&wallet.id, balance_field_name<SUI>())) {
+                return false
+            };
+        };
+        // T's slot holds T's balance or nothing; a migrated marker means the
+        // slot was already converted.
+        if (
+            dynamic_field::exists_(&wallet.id, own_key)
+                && !dynamic_field::exists_with_type<String, Balance<T>>(&wallet.id, own_key)
+        ) {
+            return false
+        };
+        let history = &wallet.transaction_history;
+        let mut j = 0;
+        while (j < vector::length(history)) {
+            let op = vector::borrow(history, j).operation_type;
+            if (op != core::custody_op_withdrawal() && op != core::custody_op_stablecoin_deposit()) {
+                return false
+            };
+            j = j + 1;
+        };
+        true
+    }
+
+    /// Per-member net legacy deposits: Σ deposits − Σ withdrawals by
+    /// `user`, over the whole ledger. The flag is false when some member was
+    /// paid back more than they deposited, i.e. the ledger cannot be read as
+    /// deposits and refunds alone.
+    public(package) fun legacy_deposit_nets(wallet: &CustodyWallet): (bool, vector<address>, vector<u64>) {
+        let history = &wallet.transaction_history;
+        let mut users = vector::empty<address>();
+        let mut deposited = vector::empty<u64>();
+        let mut withdrawn = vector::empty<u64>();
+        let mut i = 0;
+        while (i < vector::length(history)) {
+            let txn = vector::borrow(history, i);
+            let (found, index) = vector::index_of(&users, &txn.user);
+            let k = if (found) {
+                index
+            } else {
+                vector::push_back(&mut users, txn.user);
+                vector::push_back(&mut deposited, 0);
+                vector::push_back(&mut withdrawn, 0);
+                vector::length(&users) - 1
+            };
+            if (txn.operation_type == core::custody_op_stablecoin_deposit()) {
+                let slot = vector::borrow_mut(&mut deposited, k);
+                *slot = *slot + txn.amount;
+            } else if (txn.operation_type == core::custody_op_withdrawal()) {
+                let slot = vector::borrow_mut(&mut withdrawn, k);
+                *slot = *slot + txn.amount;
+            };
+            i = i + 1;
+        };
+
+        let mut consistent = true;
+        let mut nets = vector::empty<u64>();
+        let mut k = 0;
+        while (k < vector::length(&users)) {
+            let d = *vector::borrow(&deposited, k);
+            let w = *vector::borrow(&withdrawn, k);
+            if (w > d) {
+                consistent = false;
+                vector::push_back(&mut nets, 0);
+            } else {
+                vector::push_back(&mut nets, d - w);
+            };
+            k = k + 1;
+        };
+        (consistent, users, nets)
+    }
+
+    /// Coins of `T` in legacy storage: its typed balance, plus the main
+    /// balance when `T` is SUI.
+    public(package) fun legacy_balance_of<T>(wallet: &CustodyWallet): u64 {
+        let key = balance_field_name<T>();
+        let typed = if (dynamic_field::exists_with_type<String, Balance<T>>(&wallet.id, key)) {
+            balance::value(dynamic_field::borrow<String, Balance<T>>(&wallet.id, key))
+        } else {
+            0
+        };
+        if (core::is_sui<T>()) {
+            typed + balance::value(&wallet.balance)
+        } else {
+            typed
+        }
+    }
+
+    /// Moves every legacy coin of `T` into the wallet's v11 deposit record
+    /// for `T` (same wallet, nothing leaves it) and marks T's legacy
+    /// slot migrated. Returns the amount moved.
+    public(package) fun migrate_legacy_to_deposit_balance<T>(wallet: &mut CustodyWallet, clock: &Clock): u64 {
+        let key = balance_field_name<T>();
+        let mut moved = 0;
+        if (dynamic_field::exists_with_type<String, Balance<T>>(&wallet.id, key)) {
+            let legacy = dynamic_field::remove<String, Balance<T>>(&mut wallet.id, key);
+            moved = balance::value(&legacy);
+            join_deposit_balance<T>(wallet, legacy);
+        };
+        if (core::is_sui<T>()) {
+            moved = moved + migrate_main_sui_to_deposit_balance(wallet);
+        };
+        close_legacy_slot<T>(wallet, clock);
+        moved
+    }
+
+    fun migrate_main_sui_to_deposit_balance(wallet: &mut CustodyWallet): u64 {
+        let main = balance::withdraw_all(&mut wallet.balance);
+        let value = balance::value(&main);
+        if (value > 0) {
+            join_deposit_balance<SUI>(wallet, main);
+        } else {
+            balance::destroy_zero(main);
+        };
+        value
+    }
+
+    /// Marks T's legacy slot migrated (`LegacySlotMigrated`) and records `T`
+    /// in `registered_types`. The slot must hold no coins.
+    public(package) fun close_legacy_slot<T>(wallet: &mut CustodyWallet, clock: &Clock) {
+        let key = balance_field_name<T>();
+        if (dynamic_field::exists_with_type<String, Balance<T>>(&wallet.id, key)) {
+            let leftover = dynamic_field::remove<String, Balance<T>>(&mut wallet.id, key);
+            balance::destroy_zero(leftover);
+        };
+        if (!dynamic_field::exists_(&wallet.id, key)) {
+            dynamic_field::add(
+                &mut wallet.id,
+                key,
+                LegacySlotMigrated { migrated_at_ms: clock::timestamp_ms(clock) }
+            );
+        };
+        register_stablecoin_type<T>(wallet);
+    }
+
+    /// True when T's legacy slot carries the v11 migrated marker.
+    public fun is_legacy_slot_migrated<T>(wallet: &CustodyWallet): bool {
+        dynamic_field::exists_with_type<String, LegacySlotMigrated>(&wallet.id, balance_field_name<T>())
+    }
+
+    // ----------------------------------------------------------
+    // Test-only: legacy-storage writes as package versions before v11 make
+    // them (typed legacy balance + ledger entry), so tests can build a
+    // wallet in the state those versions leave behind.
+    // ----------------------------------------------------------
+    #[test_only]
+    public fun legacy_store_for_testing<CoinType>(
+        wallet: &mut CustodyWallet,
+        deposit: Coin<CoinType>,
+        member: address,
+        operation_type: u8,
+        clock: &Clock
+    ) {
+        let amount = coin::value(&deposit);
+        let field_name = balance_field_name<CoinType>();
+        let incoming = coin::into_balance(deposit);
+        // Untyped existence check, then a typed borrow — exactly what the
+        // pre-v11 writer does, so a migrated slot makes it abort the same way.
+        if (dynamic_field::exists_(&wallet.id, field_name)) {
+            balance::join(dynamic_field::borrow_mut<String, Balance<CoinType>>(&mut wallet.id, field_name), incoming);
+        } else {
+            dynamic_field::add<String, Balance<CoinType>>(&mut wallet.id, field_name, incoming);
+            register_stablecoin_type<CoinType>(wallet);
+        };
+        vector::push_back(&mut wallet.transaction_history, CustodyTransaction {
+            operation_type,
+            user: member,
+            amount,
+            timestamp: clock::timestamp_ms(clock),
+        });
     }
 
     #[test]
