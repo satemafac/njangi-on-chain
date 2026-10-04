@@ -291,3 +291,74 @@ describe('the recovery controls use this rule', () => {
     expect(managePage).not.toMatch(/stablecoinType:\s*String\(extraBody\.stablecoinType \|\| recoveryStablecoinMeta/);
   });
 });
+
+describe('v11: a circle with pinned asset terms refunds its pinned coin', () => {
+  const CIRCLE = '0x' + 'cc'.repeat(32);
+  const PKG = '0x' + 'ab'.repeat(32);
+  const bytes = (text: string) => Array.from(text).map((c) => c.charCodeAt(0));
+  const policyValue = (walletId: string) => ({
+    fields: {
+      settlement_asset: bytes(`${USDC_ADDRESS}::usdc::USDC`),
+      assets: [{
+        fields: {
+          asset: bytes(`${USDC_ADDRESS}::usdc::USDC`),
+          decimals: 6,
+          contribution_amount: '10000000',
+          security_deposit: '5000000',
+        },
+      }],
+      set_at_ms: '1',
+      wallet_id: walletId,
+      legacy_ledger_entries: '0',
+    },
+  });
+
+  /** The wallet holds an unrelated coin in legacy storage; the circle pins USDC. */
+  function v11Client(boundWallet: string) {
+    const getDynamicFields = jest.fn(async ({ parentId }: { parentId: string }) => ({
+      data: parentId === WALLET
+        ? [REGISTERED_TYPES, typedBalance(OTHER_STABLE)]
+        : [{ name: { type: `${PKG}::njangi_circles::AssetPolicyKey`, value: {} }, objectId: '0x' + '0f'.repeat(32) }],
+      hasNextPage: false,
+      nextCursor: null,
+    }));
+    const getObject = jest.fn(async ({ id }: { id: string }) => (
+      id === WALLET
+        ? { data: { content: { fields: { circle_id: CIRCLE } } } }
+        : { data: { content: { fields: { value: policyValue(boundWallet) } } } }
+    ));
+    return { getDynamicFields, getObject } as unknown as SuiClient;
+  }
+
+  const withFlag = async (fn: () => Promise<void>) => {
+    const before = process.env.NEXT_PUBLIC_V11_ENABLED;
+    process.env.NEXT_PUBLIC_V11_ENABLED = 'true';
+    try {
+      await fn();
+    } finally {
+      process.env.NEXT_PUBLIC_V11_ENABLED = before;
+    }
+  };
+
+  it('uses the pinned settlement coin, whatever legacy storage holds', () =>
+    withFlag(async () => {
+      await expect(resolveRecoveryCoinType(v11Client(WALLET), WALLET, CONFIGURED_USDC)).resolves.toEqual({
+        coinType: USDC,
+        source: 'pinned_terms',
+      });
+    }));
+
+  it('ignores terms bound to another wallet and keeps the holdings rule', () =>
+    withFlag(async () => {
+      await expect(
+        resolveRecoveryCoinType(v11Client('0x' + 'ee'.repeat(32)), WALLET, CONFIGURED_USDC),
+      ).resolves.toEqual({ coinType: OTHER_STABLE, source: 'stablecoin_balance' });
+    }));
+
+  it('with the flag off, nothing changes', async () => {
+    await expect(resolveRecoveryCoinType(v11Client(WALLET), WALLET, CONFIGURED_USDC)).resolves.toEqual({
+      coinType: OTHER_STABLE,
+      source: 'stablecoin_balance',
+    });
+  });
+});

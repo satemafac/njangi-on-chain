@@ -42,6 +42,8 @@ export interface CreateCircleTransactionData {
   auto_release_enabled?: boolean;
   auto_release_delay_ms?: string | number | bigint;
   next_in_command?: string | null;
+  /** v11 only (create_circle_with_asset): the circle's coin. Default USDC. */
+  settlement_asset?: 'USDC' | 'SUI';
 }
 
 interface BaseRecoveryBuilderInput {
@@ -133,10 +135,37 @@ const toOptionalU8 = (value: CircleOptionU8 | null | undefined): number | null =
   return value.some;
 };
 
-export function buildCreateCircleTx({
-  packageId,
-  circleData,
-}: BuildCreateCircleTxInput): Transaction {
+export interface ParsedCreateCircleData {
+  name: string;
+  currencyType: string;
+  contributionAmount: bigint;
+  contributionAmountLocal: bigint;
+  contributionAmountUsd: bigint;
+  securityDeposit: bigint;
+  securityDepositLocal: bigint;
+  securityDepositUsd: bigint;
+  cycleLength: number;
+  cycleDay: number;
+  circleType: number;
+  maxMembers: number;
+  rotationStyle: number;
+  penaltyRules: boolean[];
+  goalType: number | null;
+  targetAmount: bigint | null;
+  targetAmountLocal: bigint | null;
+  targetDate: bigint | null;
+  verificationRequired: boolean;
+  autoReleaseEnabled: boolean;
+  autoReleaseDelayMs: bigint;
+  nextInCommand: string | null;
+}
+
+/**
+ * Validates and normalizes the create-circle form data. Shared by the
+ * legacy `create_circle` builder and the v11 `create_circle_with_asset`
+ * builder (v11-circle-tx.ts) so both refuse the same inputs.
+ */
+export function parseCreateCircleData(circleData: CreateCircleTransactionData): ParsedCreateCircleData {
   if (!circleData.name || circleData.name.trim().length === 0) {
     throw new Error('Circle name is required.');
   }
@@ -145,7 +174,6 @@ export function buildCreateCircleTx({
     throw new Error('Penalty rules are required.');
   }
 
-  const normalizedPackageId = normalizeRequiredPackageId(packageId);
   const contributionAmount = toU64(circleData.contribution_amount, 'Contribution amount');
   const contributionAmountLocal = toU64(
     circleData.contribution_amount_local ?? 0,
@@ -212,33 +240,66 @@ export function buildCreateCircleTx({
     }
   }
 
+  return {
+    name: circleData.name,
+    currencyType: circleData.currency_type || 'USD',
+    contributionAmount,
+    contributionAmountLocal,
+    contributionAmountUsd,
+    securityDeposit,
+    securityDepositLocal,
+    securityDepositUsd,
+    cycleLength,
+    cycleDay,
+    circleType,
+    maxMembers,
+    rotationStyle,
+    penaltyRules: circleData.penalty_rules,
+    goalType: toOptionalU8(circleData.goal_type),
+    targetAmount: toOptionalU64(circleData.target_amount),
+    targetAmountLocal: toOptionalU64(circleData.target_amount_local),
+    targetDate: toOptionalU64(circleData.target_date),
+    verificationRequired: circleData.verification_required,
+    autoReleaseEnabled,
+    autoReleaseDelayMs,
+    nextInCommand,
+  };
+}
+
+export function buildCreateCircleTx({
+  packageId,
+  circleData,
+}: BuildCreateCircleTxInput): Transaction {
+  const parsed = parseCreateCircleData(circleData);
+  const normalizedPackageId = normalizeRequiredPackageId(packageId);
+
   const tx = new Transaction();
   tx.setGasBudget(CREATE_CIRCLE_GAS_BUDGET);
   tx.moveCall({
     target: `${normalizedPackageId}::njangi_circles::create_circle`,
     arguments: [
-      tx.pure.string(circleData.name),
-      tx.pure.u64(contributionAmount),
-      tx.pure.string(circleData.currency_type || 'USD'),
-      tx.pure.u64(contributionAmountLocal),
-      tx.pure.u64(contributionAmountUsd),
-      tx.pure.u64(securityDeposit),
-      tx.pure.u64(securityDepositLocal),
-      tx.pure.u64(securityDepositUsd),
-      tx.pure.u64(cycleLength),
-      tx.pure.u64(cycleDay),
-      tx.pure.u8(circleType),
-      tx.pure.u64(maxMembers),
-      tx.pure.u8(rotationStyle),
-      tx.pure.vector('bool', circleData.penalty_rules),
-      tx.pure.option('u8', toOptionalU8(circleData.goal_type)),
-      tx.pure.option('u64', toOptionalU64(circleData.target_amount)),
-      tx.pure.option('u64', toOptionalU64(circleData.target_amount_local)),
-      tx.pure.option('u64', toOptionalU64(circleData.target_date)),
-      tx.pure.bool(circleData.verification_required),
-      tx.pure.bool(autoReleaseEnabled),
-      tx.pure.u64(autoReleaseDelayMs),
-      tx.pure.option('address', nextInCommand),
+      tx.pure.string(parsed.name),
+      tx.pure.u64(parsed.contributionAmount),
+      tx.pure.string(parsed.currencyType),
+      tx.pure.u64(parsed.contributionAmountLocal),
+      tx.pure.u64(parsed.contributionAmountUsd),
+      tx.pure.u64(parsed.securityDeposit),
+      tx.pure.u64(parsed.securityDepositLocal),
+      tx.pure.u64(parsed.securityDepositUsd),
+      tx.pure.u64(parsed.cycleLength),
+      tx.pure.u64(parsed.cycleDay),
+      tx.pure.u8(parsed.circleType),
+      tx.pure.u64(parsed.maxMembers),
+      tx.pure.u8(parsed.rotationStyle),
+      tx.pure.vector('bool', parsed.penaltyRules),
+      tx.pure.option('u8', parsed.goalType),
+      tx.pure.option('u64', parsed.targetAmount),
+      tx.pure.option('u64', parsed.targetAmountLocal),
+      tx.pure.option('u64', parsed.targetDate),
+      tx.pure.bool(parsed.verificationRequired),
+      tx.pure.bool(parsed.autoReleaseEnabled),
+      tx.pure.u64(parsed.autoReleaseDelayMs),
+      tx.pure.option('address', parsed.nextInCommand),
       tx.object(CLOCK_OBJECT_ID),
     ],
   });

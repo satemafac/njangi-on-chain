@@ -50,6 +50,8 @@
 
 import type { SuiClient } from '@mysten/sui/client';
 import { normalizeStructTag, normalizeSuiAddress, parseStructTag } from '@mysten/sui/utils';
+import { isV11AssetTermsEnabled } from '@/config/feature-flags';
+import { readCircleAssetPolicy } from '@/lib/v11-circle-tx';
 
 const FRAMEWORK_ADDRESS = normalizeSuiAddress('0x2');
 const SUI_COIN_TYPE = normalizeStructTag('0x2::sui::SUI');
@@ -86,7 +88,12 @@ export interface CustodyCoinHoldings {
   legacyCoinType: string | null;
 }
 
-export type RecoveryCoinTypeSource = 'legacy_coin' | 'stablecoin_balance' | 'no_stablecoin';
+export type RecoveryCoinTypeSource =
+  | 'legacy_coin'
+  | 'stablecoin_balance'
+  | 'no_stablecoin'
+  // v11: the circle's pinned settlement coin (NEXT_PUBLIC_V11_ENABLED).
+  | 'pinned_terms';
 
 export interface RecoveryCoinType {
   coinType: string;
@@ -241,13 +248,53 @@ export function chooseRecoveryCoinType(
   return { coinType: fallback, source: 'no_stablecoin' };
 }
 
-/** Reads the wallet, then applies the rule. Throws instead of guessing. */
+/**
+ * Reads the wallet, then applies the rule. Throws instead of guessing.
+ *
+ * v11 (NEXT_PUBLIC_V11_ENABLED): a circle with pinned asset terms refunds
+ * from its v11 deposit records, one asset per call, so the type argument is
+ * the circle's pinned settlement coin, whatever else legacy storage holds.
+ * A circle without pinned terms keeps the wallet-holdings rule above.
+ */
 export async function resolveRecoveryCoinType(
-  client: Pick<SuiClient, 'getDynamicFields'>,
+  client: Pick<SuiClient, 'getDynamicFields' | 'getObject'>,
   walletId: string,
   fallbackCoinType: string,
 ): Promise<RecoveryCoinType> {
+  if (isV11AssetTermsEnabled()) {
+    const pinned = await readPinnedSettlementCoinType(client, walletId);
+    if (pinned) return { coinType: pinned, source: 'pinned_terms' };
+  }
   return chooseRecoveryCoinType(await readCustodyCoinHoldings(client, walletId), fallbackCoinType);
+}
+
+/** The settlement coin pinned by the circle this wallet is bound to, or null. */
+async function readPinnedSettlementCoinType(
+  client: Pick<SuiClient, 'getDynamicFields' | 'getObject'>,
+  walletId: string,
+): Promise<string | null> {
+  let circleId: string | null = null;
+  try {
+    const wallet = await client.getObject({ id: walletId, options: { showContent: true } });
+    const content = wallet.data?.content;
+    const fields = content && 'fields' in content ? (content.fields as Record<string, unknown>) : null;
+    circleId = typeof fields?.circle_id === 'string' ? fields.circle_id : null;
+  } catch (error) {
+    throw new RecoveryCoinTypeError('read_failed', `Could not read custody wallet ${walletId}`, error);
+  }
+  if (!circleId) {
+    throw new RecoveryCoinTypeError('read_failed', `Custody wallet ${walletId} names no circle`);
+  }
+
+  let policy: Awaited<ReturnType<typeof readCircleAssetPolicy>>;
+  try {
+    policy = await readCircleAssetPolicy(client, circleId);
+  } catch (error) {
+    throw new RecoveryCoinTypeError('read_failed', `Could not read the asset terms of circle ${circleId}`, error);
+  }
+  if (!policy) return null;
+  if (normalizeSuiAddress(policy.walletId) !== normalizeSuiAddress(walletId)) return null;
+  return normalizeTypeTag(policy.settlement.coinType);
 }
 
 /** What the recovery controls say when there is no type argument to sign with. */

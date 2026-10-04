@@ -140,6 +140,24 @@ export function isFinalizedEscrowCollectEnabled(): boolean {
   return flagEnabled(process.env.NEXT_PUBLIC_ESCROW_FINALIZED_COLLECT_ENABLED);
 }
 
+/**
+ * v11 Move package: circles pin their asset terms (settlement coin, decimals,
+ * native amounts), security deposits are v11 deposit records in the circle's
+ * custody wallet (`post_security_deposit<T>`), new circles are created with
+ * `create_circle_with_asset<T>`, and removal returns a deposit in the coin it
+ * was paid in (`admin_remove_member_asset<T>`). See src/lib/v11-circle-tx.ts.
+ *
+ * Same rule as the flags above, and stricter: flip it on only after the v11
+ * package is published on the active network, the AssetRegistry is blessed
+ * with the circle assets registered, and the existing circles are converted.
+ * v11 retires the unpinned `create_circle` and the legacy deposit entrypoint,
+ * so once the active package id is v11 this flag must be ON or creating a
+ * circle and posting a deposit abort (89).
+ */
+export function isV11AssetTermsEnabled(): boolean {
+  return flagEnabled(process.env.NEXT_PUBLIC_V11_ENABLED);
+}
+
 export function isRampEnabled(provider: 'coinbase' | 'moonpay' | 'transak'): boolean {
   switch (provider) {
     case 'coinbase':
