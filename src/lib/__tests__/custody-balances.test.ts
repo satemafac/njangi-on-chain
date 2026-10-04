@@ -99,6 +99,18 @@ describe('readCustodyBalances', () => {
     await expect(readCustodyBalances(client, WALLET, USDC)).resolves.toMatchObject({ usdc: 0n });
   });
 
+  it('throws, never reads zero USDC, when the USDC type is unconfigured or malformed', async () => {
+    const client = fakeClient({
+      walletBalance: '0',
+      pages: [[typedField('0xusdc', USDC, USDC.slice(2))]],
+      objects: { '0xusdc': { value: '30000000' } },
+    });
+    for (const unconfigured of ['', '0xyour_testnet_usdc_type', 'USDC']) {
+      await expect(readCustodyBalances(client, WALLET, unconfigured)).rejects.toThrow(/USDC coin type/);
+    }
+    expect(client.getObject).not.toHaveBeenCalled();
+  });
+
   it('throws, never reads zero, when a read fails or does not parse', async () => {
     const pages = [[typedField('0xusdc', USDC, USDC.slice(2))]];
     await expect(

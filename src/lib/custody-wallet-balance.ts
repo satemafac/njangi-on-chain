@@ -110,7 +110,9 @@ async function readObjectBalance(
 
 /**
  * The wallet's SUI and USDC in base units. Throws when any read fails or
- * does not parse: a balance that could not be read is not zero.
+ * does not parse: a balance that could not be read is not zero. So does a
+ * USDC type that is not a coin type (USDC unconfigured or malformed), which
+ * would otherwise skip every USDC field and read as holding none.
  */
 export async function readCustodyBalances(
   client: CustodyBalanceClient,
@@ -118,6 +120,9 @@ export async function readCustodyBalances(
   usdcCoinType: string,
 ): Promise<CustodyBalances> {
   const usdcType = normalizeCoinType(usdcCoinType);
+  if (!usdcType) {
+    throw new Error(`Cannot read custody balances without a USDC coin type (got "${usdcCoinType}")`);
+  }
 
   const wallet = await client.getObject({ id: walletId, options: { showContent: true } });
   const walletContent = wallet.data?.content;

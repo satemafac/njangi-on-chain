@@ -639,11 +639,19 @@ export default function ManageCircle() {
   // round keeps running in its own coin, so the switch waits for it. Null
   // until checked; see src/lib/settlement-mode-lock.ts.
   const [settlementRound, setSettlementRound] = useState<RoundOpenRead | null>(null);
+  // The last custody balance read failed: the card says so instead of
+  // "No balances available".
+  const [custodyBalancesUnreadable, setCustodyBalancesUnreadable] = useState(false);
 
   // The network's USDC: the only stablecoin a custody wallet settles in.
   // (CustodyWallet has no `stablecoin_config` field to name another one.)
-  const manageUsdcCoinType = (): string =>
-    supportedCoinBySymbol('USDC', getCurrentNetwork() as NetworkType)?.coinType ?? '';
+  // Throws when USDC is not configured: both callers keep the balances they
+  // showed, rather than reading a wallet without its USDC as holding none.
+  const manageUsdcCoinType = (): string => {
+    const usdc = supportedCoinBySymbol('USDC', getCurrentNetwork() as NetworkType);
+    if (!usdc) throw new Error('USDC is not configured for this network');
+    return usdc.coinType;
+  };
 
   // Both the first load and the refresh buttons read the wallet with
   // readCustodyBalances and show it through here, so they cannot disagree.
@@ -653,6 +661,7 @@ export default function ManageCircle() {
     walletId: string,
     balances: CustodyBalances,
     outstandingDepositRaw: bigint,
+    usdcCoinType: string,
   ) => {
     const suiDeposits = toDisplayAmount(balances.suiDeposits, 9);
     const suiContributions = toDisplayAmount(balances.suiMain, 9);
@@ -660,6 +669,7 @@ export default function ManageCircle() {
     const usdcDeposits = Math.min(toDisplayAmount(outstandingDepositRaw, 6), usdcTotal);
     const usdcContributions = Math.max(0, usdcTotal - usdcDeposits);
 
+    setCustodyBalancesUnreadable(false);
     setSuiSecurityDepositBalance(suiDeposits);
     setSuiContributionBalance(suiContributions);
     setUsdcSecurityDepositBalance(usdcDeposits);
@@ -670,7 +680,7 @@ export default function ManageCircle() {
         walletId,
         stablecoinEnabled: false,
         stablecoinType: 'USDC',
-        stablecoinCoinType: manageUsdcCoinType(),
+        stablecoinCoinType: usdcCoinType,
         stablecoinBalance: usdcTotal,
         suiBalance: suiContributions + suiDeposits,
         securityDeposits: suiDeposits > 0 ? suiDeposits : usdcDeposits,
@@ -1331,10 +1341,12 @@ export default function ManageCircle() {
             // balance only in its nested form, so it showed 0 whenever the RPC
             // returned the plain string, and it counted SUI deposits only as
             // legacy Coin<SUI> objects. A failed read keeps what was shown.
-            const balances = await readCustodyBalances(client, walletId, manageUsdcCoinType());
-            applyCustodyBalances(walletId, balances, outstandingSecurityDepositRaw);
+            const usdcCoinType = manageUsdcCoinType();
+            const balances = await readCustodyBalances(client, walletId, usdcCoinType);
+            applyCustodyBalances(walletId, balances, outstandingSecurityDepositRaw, usdcCoinType);
           }
         } catch (error) {
+          setCustodyBalancesUnreadable(true);
           logSuiReadError('Error fetching custody wallet info:', error);
         }
 
@@ -2805,14 +2817,16 @@ export default function ManageCircle() {
     setFetchingUsdcBalance(true);
     try {
       const client = getSuiClientFromPool(getCurrentRpcUrl());
-      const balances = await readCustodyBalances(client, walletId, manageUsdcCoinType());
+      const usdcCoinType = manageUsdcCoinType();
+      const balances = await readCustodyBalances(client, walletId, usdcCoinType);
       const outstandingDepositRaw = members.reduce((total, member) => {
         if (!member.depositPaid) return total;
         return total + (member.depositBalanceRaw || 0n);
       }, 0n);
-      applyCustodyBalances(walletId, balances, outstandingDepositRaw);
+      applyCustodyBalances(walletId, balances, outstandingDepositRaw, usdcCoinType);
     } catch (error) {
       // Keeps the last balances shown: a failed read is not a zero balance.
+      setCustodyBalancesUnreadable(true);
       logSuiReadError('Error fetching custody wallet balances:', error);
     } finally {
       setFetchingSuiBalance(false);
@@ -3086,6 +3100,13 @@ export default function ManageCircle() {
                       </button>
                     </div>
 
+                    {custodyBalancesUnreadable && (
+                      <p role="status" className="mb-3 rounded-[14px] border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                        We couldn&rsquo;t read the circle wallet&rsquo;s balances just now. The figures below are the
+                        last ones read, if any. Refresh to try again.
+                      </p>
+                    )}
+
                     <div className="space-y-3">
                       <div className="grid grid-cols-1 gap-2 sm:gap-3 md:grid-cols-2">
                         <div className="rounded-[18px] border border-stone-200 bg-white p-3">
@@ -3159,7 +3180,7 @@ export default function ManageCircle() {
                           </div>
                         )}
 
-                        {!fetchingUsdcBalance && (usdcContributionBalance === null || usdcContributionBalance === 0) &&
+                        {!fetchingUsdcBalance && !custodyBalancesUnreadable && (usdcContributionBalance === null || usdcContributionBalance === 0) &&
                           (usdcSecurityDepositBalance === null || usdcSecurityDepositBalance === 0) && (
                           <p className="text-sm text-gray-500 mt-1">No USDC balances available</p>
                         )}
@@ -3233,7 +3254,7 @@ export default function ManageCircle() {
                           </div>
                         )}
 
-                        {!fetchingSuiBalance && (suiContributionBalance === null || suiContributionBalance === 0) &&
+                        {!fetchingSuiBalance && !custodyBalancesUnreadable && (suiContributionBalance === null || suiContributionBalance === 0) &&
                           (suiSecurityDepositBalance === null || suiSecurityDepositBalance === 0) && (
                           <div>
                             <p className="text-sm text-gray-500 mt-1">No SUI balances available</p>
