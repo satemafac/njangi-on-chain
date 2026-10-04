@@ -39,18 +39,19 @@ Note: The button `{{1}}` variable is separate from body variables. Body uses `{{
 ## Template 1: `circle_link`
 **Trigger**: When admin links WhatsApp to a circle
 
-**Status (October 2026): not sent.** The body below promises cycle deadlines
-and "important alerts", which nothing sends. The app sends the link
-confirmation as text instead: `buildLinkConfirmation` in
+**Status (October 2026): not sent.** The legacy body below promised cycle
+deadlines and "important alerts", which nothing sends, so on 2026-10-03 the
+template was edited to the new body below. Meta approved the edit but moved
+the template to the **Marketing** category, so the app still doesn't send it.
+The link confirmation goes out as text instead: `buildLinkConfirmation` in
 `src/content/whatsapp-updates.ts`, which lists exactly what the number gets.
 Text reaches the number only inside the 24-hour window, so with
-`WHATSAPP_TEMPLATES_ENABLED=true` most link confirmations won't arrive until
-this template is fixed. To send it again, edit it in WhatsApp Manager to the
-proposed body below (same name, same `{{1}}`, same button). Once Meta approves
-the edit, restore `buildTemplate` on the `circle_linked` stream in
-`src/lib/whatsapp-bot/circle-events.ts`.
+`WHATSAPP_TEMPLATES_ENABLED=true` most link confirmations won't arrive. To fix
+that, submit a Utility variant under a new name, and once it's approved,
+restore `buildTemplate` on the `circle_linked` stream in
+`src/lib/whatsapp-bot/circle-events.ts` with that name.
 
-**Body (approved for the legacy bot; promises updates nothing sends):**
+**Legacy body (approved for the legacy bot; promised updates nothing sends):**
 ```
 ✅ *Circle Connected!*
 
@@ -64,13 +65,13 @@ Your WhatsApp is now linked to *{{1}}*. You'll automatically receive updates for
 Powered by Njangi On-Chain.
 ```
 
-**Proposed body (not submitted; needs the owner's approval and Meta review):**
+**New body (approved 2026-10-03, category Marketing):**
 ```
 ✅ *Circle Connected!*
 
 Your WhatsApp is now linked to *{{1}}*. This circle's updates will come to this number. Reply *help* to see which ones.
 
-Powered by Njangi On-Chain.
+_Powered by Njangi On-Chain._
 ```
 
 It names no update itself, so it stays true when updates are added or removed.
@@ -485,6 +486,38 @@ Ensure all contributions are in before the payout date.
 
 ---
 
+## Template 16: `payout_ready`
+**Trigger**: The round's pot is full and the recipient's payout is waiting to be
+collected (the "your turn" nudge: `src/lib/your-turn-notification.ts`).
+
+**Status:** approved 2026-10-03 (Utility, English `en`). The nudge attaches it
+only when the payout figure is known and the recipient's language is English;
+other languages keep their localized text until a template is approved in that
+language. Sent only when `WHATSAPP_TEMPLATES_ENABLED=true`.
+
+**Body:**
+```
+🎉 *It's your turn!*
+
+The pot for circle *{{1}}* is full for round {{2}}.
+Your payout of {{3}} is ready to collect.
+
+Open the Njangi app and tap "Collect my payout".
+```
+
+**Body Variables:**
+1. `{{1}}` = Circle short id, e.g. `0xa3fada…` (review sample: `Family Savings`)
+2. `{{2}}` = Round number (sample: `3`)
+3. `{{3}}` = Payout amount (sample: `0.20 USDC`)
+
+**Button:**
+- Text: `Collect my payout`
+- URL: `https://njangionchain.com/circle/{{1}}` (Dynamic). The app passes
+  `<circle id>/contribute`, because Meta only allows the variable at the end of
+  the URL.
+
+---
+
 ## Quick Reference Table
 
 | # | Template Name | Trigger | Button Text | Button URL |
@@ -504,6 +537,7 @@ Ensure all contributions are in before the payout date.
 | 13 | `contribution_reminder_weekly` | 24h before weekly payout | Contribute Now | `/circle/{{1}}/contribute` |
 | 14 | `payout_trigger_reminder` | 2h after missed payout | Manage Circle | `/circle/{{1}}/manage` |
 | 15 | `payout_upcoming` | Payout day approaching | Contribute Now | `/circle/{{1}}/contribute` |
+| 16 | `payout_ready` | Pot full, payout waiting to be collected | Collect my payout | `/circle/{{1}}` + `<id>/contribute` |
 
 ---
 

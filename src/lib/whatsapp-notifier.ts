@@ -66,9 +66,9 @@ export type NotificationKind =
 // Template parameter LAYOUTS are part of the approval: the arrays built by
 // each stream's buildTemplate must match the approved body placeholder
 // count ({{1}}, {{2}}, …) exactly or Meta rejects the send with error
-// 132000. The "your turn" nudge sends no template (see
-// your-turn-notification.ts), and neither does the link confirmation: the
-// approved circle_link body promises updates nothing sends
+// 132000. The "your turn" nudge sends the `payout_ready` template (see
+// your-turn-notification.ts). The link confirmation sends no template: Meta
+// approved the edited circle_link body as Marketing, not Utility
 // (WHATSAPP_TEMPLATES.md).
 // ---------------------------------------------------------------------------
 

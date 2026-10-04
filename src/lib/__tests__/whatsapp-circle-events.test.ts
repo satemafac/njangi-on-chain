@@ -568,7 +568,7 @@ describe('buildTemplate (Meta-approved business-initiated sends)', () => {
     expect(template('rotation_changed', { circle_id: CIRCLE })).toBeNull();
   });
 
-  it('claim_redeemed → payout_processed (same template buildYourTurnTemplate reuses)', () => {
+  it('claim_redeemed → payout_processed (the payout has been sent)', () => {
     const t = template(
       'claim_redeemed',
       { escrow_id: ESCROW, cycle_no: '5', recipient: RECIPIENT, amount: '200000' },
