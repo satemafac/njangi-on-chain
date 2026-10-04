@@ -55,6 +55,20 @@ describe('wallet balance helpers', () => {
     expect(mockGetBalance).toHaveBeenCalledTimes(1);
   });
 
+  it('reads the default USDC type when NEXT_PUBLIC_TESTNET_USDC is blank, not the type ""', async () => {
+    process.env.NEXT_PUBLIC_TESTNET_USDC = '';
+    mockGetBalance.mockResolvedValue({ totalBalance: '7' });
+
+    const result = await refreshUsdcBalance(walletAddress, { forceRefresh: true });
+
+    expect(result.coinType).toBe(
+      '0x26b3bc67befc214058ca78ea9a2690298d731a2d4309485ec3d40198063c4abc::usdc::USDC',
+    );
+    expect(mockGetBalance).toHaveBeenCalledWith(
+      expect.objectContaining({ coinType: result.coinType }),
+    );
+  });
+
   it('returns combined snapshot for SUI and USDC', async () => {
     mockGetBalance
       .mockResolvedValueOnce({ totalBalance: '100' })

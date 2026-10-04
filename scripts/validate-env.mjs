@@ -172,6 +172,31 @@ for (const [key, value] of [
   }
 }
 
+// The active network's coin types (src/config/coin-types.ts). USDC is
+// optional, because the app falls back to the network's native Circle USDC,
+// but a value that is set replaces that default everywhere, and one that is
+// not a coin type makes every USDC payment refuse to build
+// (src/lib/supported-coins.ts). .env.example once shipped a `0xyour_…`
+// placeholder for testnet USDC, which passed every check here. Only the keys
+// network-config.ts reads for the network are checked; pattern as
+// COIN_TYPE_PATTERN in src/config/coin-types.ts.
+const COIN_TYPE_PATTERN = /^0x[0-9a-fA-F]{1,64}::[A-Za-z_][A-Za-z0-9_]*::[A-Za-z_][A-Za-z0-9_]*$/;
+const coinTypeKeys =
+  currentNetwork === 'mainnet'
+    ? ['NEXT_PUBLIC_MAINNET_USDC', 'NEXT_PUBLIC_MAINNET_USDT', 'NEXT_PUBLIC_MAINNET_SUI_USDE']
+    : ['NEXT_PUBLIC_TESTNET_USDC', 'NEXT_PUBLIC_TESTNET_SUI_USDE'];
+for (const key of coinTypeKeys) {
+  const value = read(key);
+  if (value && !COIN_TYPE_PATTERN.test(value)) {
+    errors.push(
+      `${key} is "${value}", not a coin type (0x<address>::<module>::<Name>). ` +
+        (key.endsWith('_USDC')
+          ? "Leave it empty to use the network's native USDC, or set the real coin type."
+          : 'Leave it empty, or set the real coin type.'),
+    );
+  }
+}
+
 // Vercel serverless migration (June 2026): per-process state (zkLogin
 // sessions, rate limits, webhook dedupe) lives in Postgres. A deployment
 // without DATABASE_URL silently degrades to per-instance memory/SQLite,
