@@ -260,18 +260,6 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     // Create circle
     'create.eyebrow': 'Create circle',
     'create.stepCounter': 'Step {current} of {total}',
-    'create.step.type.label': 'Circle type',
-    'create.step.type.title': 'Choose the circle structure',
-    'create.step.type.description':
-      'Start with the operating model. Rotational circles take turns receiving the pot; smart-goal circles (Premium) save toward shared milestones.',
-    'create.step.currency.label': 'Currency',
-    'create.step.currency.title': 'Choose the value anchor',
-    'create.step.currency.description':
-      'Set the currency your members understand and plan around. SUI remains the settlement rail underneath.',
-    'create.step.config.label': 'Configuration',
-    'create.step.config.title': 'Define how the circle runs',
-    'create.step.config.description':
-      'Set the name, contribution amount, cadence, deposit, and optional rules that will guide this group.',
     'create.step.invites.label': 'Invites',
     'create.step.invites.title': 'Invite members into the circle',
     'create.step.invites.description':
@@ -776,18 +764,6 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     // Création de cercle
     'create.eyebrow': 'Créer un cercle',
     'create.stepCounter': 'Étape {current} sur {total}',
-    'create.step.type.label': 'Type de cercle',
-    'create.step.type.title': 'Choisissez la structure du cercle',
-    'create.step.type.description':
-      "Commencez par le modèle de fonctionnement. Les cercles rotatifs reçoivent la cagnotte à tour de rôle ; les cercles à objectif (Premium) épargnent vers des jalons partagés.",
-    'create.step.currency.label': 'Devise',
-    'create.step.currency.title': 'Choisissez la devise de référence',
-    'create.step.currency.description':
-      "Définissez la devise que vos membres comprennent et avec laquelle ils planifient. SUI reste le rail de règlement sous-jacent.",
-    'create.step.config.label': 'Configuration',
-    'create.step.config.title': 'Définissez le fonctionnement du cercle',
-    'create.step.config.description':
-      "Définissez le nom, le montant du versement, la fréquence, le dépôt et les règles optionnelles qui guideront ce groupe.",
     'create.step.invites.label': 'Invitations',
     'create.step.invites.title': 'Invitez des membres dans le cercle',
     'create.step.invites.description':
