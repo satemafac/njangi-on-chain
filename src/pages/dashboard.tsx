@@ -30,6 +30,20 @@ import { ZkLoginClient } from '@/services/zkLoginClient';
 import { isSwapsEnabled } from '@/config/feature-flags';
 import { getCircleConfigFieldsByObjectId, getCircleConfigObjectId } from '@/lib/circle-config';
 import { clearWalletBalanceCache, refreshWalletBalances } from '@/lib/wallet';
+import {
+  buildWalletCoins,
+  findSupportedWalletCoin,
+  walletCoinAmount,
+  type WalletCoin,
+} from '@/lib/wallet-coins';
+import {
+  formatBaseUnits,
+  parseCoinAmount,
+  resolveSupportedCoin,
+  supportedCoinBySymbol,
+  UNSUPPORTED_COIN_LABEL,
+} from '@/lib/supported-coins';
+import type { FundingBalances } from '@/lib/funds-arrival';
 import type { CoinbaseAssetIntent } from '@/types/coinbase-onramp';
 import {
   getPackageId,
@@ -666,38 +680,24 @@ interface TransactionHistoryItem {
 
 const HISTORY_FETCH_LIMIT = 60;
 
+// SUI and the network's USDC by exact type (src/lib/supported-coins.ts).
+// Every other coin is shown by name with no amount: it used to get 6 decimals
+// whatever it really had.
 const getHistoryTokenMetadata = (
   coinType: string,
   networkConfig: NetworkConfig,
-): { symbol: string; decimals: number } => {
-  if (coinType === networkConfig.coinTypes.SUI) {
-    return { symbol: 'SUI', decimals: 9 };
+): { symbol: string; decimals: number | null } => {
+  const coin = resolveSupportedCoin(coinType, networkConfig.enoki.network);
+  if (coin) {
+    return { symbol: coin.symbol, decimals: coin.decimals };
   }
-
-  if (
-    coinType === networkConfig.coinTypes.USDC ||
-    coinType === networkConfig.tokens.USDC
-  ) {
-    return { symbol: 'USDC', decimals: 6 };
-  }
-
-  if (
-    networkConfig.tokens.USDT &&
-    coinType === networkConfig.tokens.USDT
-  ) {
-    return { symbol: 'USDT', decimals: 6 };
-  }
-
-  const fallbackSymbol = coinType.split('::').pop()?.toUpperCase() || 'TOKEN';
-  return {
-    symbol: fallbackSymbol,
-    decimals: fallbackSymbol === 'SUI' ? 9 : 6,
-  };
+  const name = coinType.split('::').pop()?.toUpperCase() || 'TOKEN';
+  return { symbol: `${name} (${UNSUPPORTED_COIN_LABEL})`, decimals: null };
 };
 
-const formatHistoryTokenAmount = (rawAmount: bigint, decimals: number): string => {
-  const fixed = (Number(rawAmount) / 10 ** decimals).toFixed(4);
-  return fixed.replace(/\.?0+$/, '');
+const formatHistoryTokenAmount = (rawAmount: bigint, decimals: number | null): string => {
+  if (decimals === null) return '';
+  return formatBaseUnits(rawAmount, decimals, 4) ?? '';
 };
 
 const getNetGasFeeMist = (tx: any): bigint => {
@@ -1627,18 +1627,8 @@ const getManualSwapDecimals = (symbol: 'SUI' | 'USDC') => (symbol === 'SUI' ? 4 
 const formatManualSwapAmount = (amount: number, symbol: 'SUI' | 'USDC') =>
   `${amount.toFixed(getManualSwapDecimals(symbol))} ${symbol}`;
 
-const getManualSwapBalance = (
-  coins: Array<{ coinType: string; symbol: string; balance: string }>,
-  symbol: 'SUI' | 'USDC',
-) => {
-  const coin = coins.find((entry) => entry.symbol === symbol);
-  if (!coin) {
-    return 0;
-  }
-
-  const decimals = symbol === 'SUI' ? 1e9 : 1e6;
-  return Number(coin.balance) / decimals;
-};
+const getManualSwapBalance = (coins: WalletCoin[], symbol: 'SUI' | 'USDC') =>
+  walletCoinAmount(findSupportedWalletCoin(coins, symbol)) ?? 0;
 
 const formatManualSwapPercent = (value: number) => `${value.toFixed(2)}%`;
 
@@ -1669,10 +1659,10 @@ export default function Dashboard() {
     return () => window.removeEventListener('unhandledrejection', suppressPackageErrors);
   }, []);
   
-  // Use centralized network configuration
-  const currentNetworkConfig = getCurrentNetworkConfig();
   const [balance, setBalance] = useState<string>('0');
-  const [allCoins, setAllCoins] = useState<{coinType: string, symbol: string, balance: string}[]>([]);
+  // One row per exact coin type (src/lib/wallet-coins.ts); only SUI and the
+  // network's USDC carry decimals.
+  const [allCoins, setAllCoins] = useState<WalletCoin[]>([]);
   const [showFullAddress, setShowFullAddress] = useState(false);
   const [isReceiveOpen, setIsReceiveOpen] = useState(false);
   const [isCashOutOpen, setIsCashOutOpen] = useState(false);
@@ -2087,46 +2077,13 @@ export default function Dashboard() {
           owner: userAddress,
         });
 
-        const coinMap = new Map<string, {coinType: string, symbol: string, balance: string}>();
+        // Keyed by exact coin type. Merging by struct name summed any
+        // package's `::usdc::USDC` into the real USDC row.
+        const processedCoins = buildWalletCoins(chainBalances, activeNetwork);
 
-        chainBalances.forEach((coin: any) => {
-          const typeStr = coin.coinType;
-          const totalBalance = coin.totalBalance || '0';
-          let symbol: string;
-
-          if (typeStr === activeNetworkConfig.coinTypes.SUI) {
-            symbol = 'SUI';
-          } else if (typeStr === activeNetworkConfig.coinTypes.USDC) {
-            symbol = 'USDC';
-          } else {
-            const typeMatch = typeStr.match(/::([^:]+)$/);
-            symbol = typeMatch ? typeMatch[1] : typeStr;
-          }
-
-          if (coinMap.has(symbol)) {
-            const existingCoin = coinMap.get(symbol)!;
-            const newBalance = BigInt(existingCoin.balance) + BigInt(totalBalance);
-            coinMap.set(symbol, {
-              ...existingCoin,
-              balance: newBalance.toString()
-            });
-          } else {
-            coinMap.set(symbol, {
-              coinType: typeStr,
-              symbol,
-              balance: totalBalance
-            });
-          }
-        });
-
-        const processedCoins = Array.from(coinMap.values());
-        const suiBalance = chainBalances.find(
-          (coin: any) => coin.coinType === activeNetworkConfig.coinTypes.SUI
-        );
-
-        setBalance(suiBalance?.totalBalance || '0');
+        setBalance(findSupportedWalletCoin(processedCoins, 'SUI')?.balance || '0');
         setAllCoins(processedCoins);
-        console.log('Aggregated balances by symbol:', processedCoins);
+        console.log('Wallet balances by coin type:', processedCoins);
         return true;
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
@@ -2151,18 +2108,22 @@ export default function Dashboard() {
     return false;
   }, [userAddress]);
 
-  // Live USDC balance (whole units) for the Receive modal's arrival watcher.
-  // Reads the current USDC coin balance directly so a CEX transfer is detected
-  // the moment it lands, without waiting for the periodic dashboard refresh.
-  const pollUsdcBalance = useCallback(async (): Promise<number> => {
-    if (!userAddress) return 0;
-    const cfg = getCurrentNetworkConfig();
-    const client = getSuiClientFromPool(cfg.rpcUrl);
-    const { totalBalance } = await client.getBalance({
-      owner: userAddress,
-      coinType: cfg.coinTypes.USDC,
-    });
-    return Number(BigInt(totalBalance)) / 1e6; // USDC has 6 decimals
+  // Live SUI and USDC balances (base units) for the Receive modal's arrival
+  // watcher, read directly so a CEX transfer is noticed the moment it lands.
+  // Both coins: the guide sends some members to withdraw SUI instead, and
+  // the old USDC-only read divided by 1e6 for every coin.
+  const pollFundingBalances = useCallback(async (): Promise<FundingBalances> => {
+    if (!userAddress) throw new Error('Not signed in');
+    const activeNetwork = getCurrentNetwork();
+    const sui = supportedCoinBySymbol('SUI', activeNetwork);
+    const usdc = supportedCoinBySymbol('USDC', activeNetwork);
+    if (!sui || !usdc) throw new Error(`USDC is not configured for ${activeNetwork}`);
+    const client = getSuiClientFromPool(getCurrentNetworkConfig().rpcUrl);
+    const [suiBalance, usdcBalance] = await Promise.all([
+      client.getBalance({ owner: userAddress, coinType: sui.coinType }),
+      client.getBalance({ owner: userAddress, coinType: usdc.coinType }),
+    ]);
+    return { SUI: BigInt(suiBalance.totalBalance), USDC: BigInt(usdcBalance.totalBalance) };
   }, [userAddress]);
 
   // Handle manual balance refresh
@@ -2383,9 +2344,11 @@ export default function Dashboard() {
           newConvertedBalances.SUI = suiBalance * suiPriceInCurrency;
         }
 
-        // Convert other token balances
+        // Convert other token balances. Only SUI and USDC have known decimals
+        // and prices; an unsupported coin is never valued.
         for (const coin of allCoins) {
-          const tokenBalance = Number(coin.balance) / getCoinDecimals(coin.coinType);
+          const tokenBalance = walletCoinAmount(coin);
+          if (!coin.supported || tokenBalance === null) continue;
 
           if (coin.symbol === 'SUI') {
             newConvertedBalances[coin.symbol] = newConvertedBalances.SUI || 0;
@@ -5484,17 +5447,14 @@ export default function Dashboard() {
     }
   }, []);
 
-  // Helper function to get decimals based on coin type
-  const getCoinDecimals = (coinType: string): number => {
-    if (coinType === currentNetworkConfig.coinTypes.SUI) {
-      return 1000000000; // 9 decimals
-    } else if (coinType === currentNetworkConfig.coinTypes.USDC) {
-      return 1000000; // 6 decimals
-    } else {
-      // Default to 9 decimals for unknown coins
-      return 1000000000;
-    }
-  };
+  // The send flow offers only SUI and the network's USDC, known by exact type
+  // (src/lib/wallet-coins.ts). It used to look the token up by name and
+  // scale any coin it did not recognise at 9 decimals.
+  const sendableCoin = (symbol: string): WalletCoin | undefined =>
+    symbol === 'SUI' || symbol === 'USDC' ? findSupportedWalletCoin(allCoins, symbol) : undefined;
+
+  // SUI kept back for the network fee, in MIST.
+  const SEND_GAS_RESERVE_MIST = 10_000_000n; // 0.01 SUI
 
   // Validate SUI address format
   const isValidSuiAddress = (address: string): boolean => {
@@ -5522,32 +5482,34 @@ export default function Dashboard() {
       errors.recipientAddress = 'Cannot send to your own address';
     }
 
-    // Validate amount
+    // Validate amount, in the coin's base units (exact, no floating point).
+    // Only SUI and USDC can be sent from here.
+    const selectedCoin = sendableCoin(formData.selectedToken);
     if (!formData.amount.trim()) {
       errors.amount = 'Amount is required';
+    } else if (!selectedCoin || selectedCoin.decimals === null) {
+      errors.amount = 'Choose SUI or USDC to send';
     } else {
-      const amount = parseFloat(formData.amount);
-      if (isNaN(amount) || amount <= 0) {
+      const amountBase = parseCoinAmount(formData.amount, selectedCoin.decimals);
+      if (amountBase === null) {
+        errors.amount = `Enter an amount with at most ${selectedCoin.decimals} decimal places`;
+      } else if (amountBase <= BigInt(0)) {
         errors.amount = 'Amount must be a positive number';
       } else {
         // Check balance
-        const selectedCoin = allCoins.find(coin => coin.symbol === formData.selectedToken);
-        if (selectedCoin) {
-          const decimals = getCoinDecimals(selectedCoin.coinType);
-          const availableBalance = Number(selectedCoin.balance) / decimals;
-          
-          if (amount > availableBalance) {
-            errors.balance = `Insufficient balance. Available: ${availableBalance.toFixed(6)} ${formData.selectedToken}`;
-          } else if (formData.selectedToken === 'SUI' && amount > availableBalance - 0.01) {
-            errors.balance = 'Please leave at least 0.01 SUI for gas fees';
-          }
+        const availableBase = BigInt(selectedCoin.balance);
+        if (amountBase > availableBase) {
+          errors.balance = `Insufficient balance. Available: ${formatBaseUnits(availableBase, selectedCoin.decimals, 6)} ${selectedCoin.symbol}`;
+        } else if (selectedCoin.symbol === 'SUI' && amountBase > availableBase - SEND_GAS_RESERVE_MIST) {
+          errors.balance = 'Please leave at least 0.01 SUI for gas fees';
+        }
 
-          // High value warning (over $1000 USD equivalent)
-          if (formData.selectedToken === 'SUI' && suiPrice && amount * suiPrice > 1000) {
-            warnings.highValue = `High value transfer: ~$${(amount * suiPrice).toFixed(2)} USD`;
-          } else if (formData.selectedToken === 'USDC' && amount > 1000) {
-            warnings.highValue = `High value transfer: $${amount.toFixed(2)} USD`;
-          }
+        // High value warning (over $1000 USD equivalent)
+        const amount = parseFloat(formData.amount);
+        if (selectedCoin.symbol === 'SUI' && suiPrice && amount * suiPrice > 1000) {
+          warnings.highValue = `High value transfer: ~$${(amount * suiPrice).toFixed(2)} USD`;
+        } else if (selectedCoin.symbol === 'USDC' && amount > 1000) {
+          warnings.highValue = `High value transfer: $${amount.toFixed(2)} USD`;
         }
       }
     }
@@ -5585,16 +5547,16 @@ export default function Dashboard() {
     setTransferStep('confirm');
 
     try {
-      // Prepare transaction data
-      const amount = parseFloat(transferForm.amount);
-      const selectedCoin = allCoins.find(coin => coin.symbol === transferForm.selectedToken);
-      
-      if (!selectedCoin) {
-        throw new Error('Selected token not found');
+      // Prepare transaction data: SUI or USDC only, scaled by the coin's own
+      // decimals from the exact typed amount.
+      const selectedCoin = sendableCoin(transferForm.selectedToken);
+      if (!selectedCoin || selectedCoin.decimals === null) {
+        throw new Error('Choose SUI or USDC to send');
       }
-
-      const decimals = getCoinDecimals(selectedCoin.coinType);
-      const amountInSmallestUnit = Math.floor(amount * decimals);
+      const amountInSmallestUnit = parseCoinAmount(transferForm.amount, selectedCoin.decimals);
+      if (amountInSmallestUnit === null || amountInSmallestUnit <= BigInt(0)) {
+        throw new Error(`Enter an amount with at most ${selectedCoin.decimals} decimal places`);
+      }
 
       // Normalize recipient address
       let recipientAddress = transferForm.recipientAddress.trim();
@@ -5676,10 +5638,10 @@ export default function Dashboard() {
 
   // Set percentage amount
   const setPercentageAmount = (percentage: number) => {
-    const selectedCoin = allCoins.find(coin => coin.symbol === transferForm.selectedToken);
-    if (selectedCoin) {
-      const decimals = getCoinDecimals(selectedCoin.coinType);
-      let totalBalance = Number(selectedCoin.balance) / decimals;
+    const selectedCoin = sendableCoin(transferForm.selectedToken);
+    const balanceInUnits = walletCoinAmount(selectedCoin);
+    if (selectedCoin && balanceInUnits !== null) {
+      let totalBalance = balanceInUnits;
       
       // Clear any previous gas errors
       setGasError(null);
@@ -5705,10 +5667,10 @@ export default function Dashboard() {
   };
   // Set max amount with intelligent gas estimation
   const setMaxAmount = () => {
-    const selectedCoin = allCoins.find(coin => coin.symbol === transferForm.selectedToken);
-    if (selectedCoin) {
-      const decimals = getCoinDecimals(selectedCoin.coinType);
-      let maxAmount = Number(selectedCoin.balance) / decimals;
+    const selectedCoin = sendableCoin(transferForm.selectedToken);
+    const balanceInUnits = walletCoinAmount(selectedCoin);
+    if (selectedCoin && balanceInUnits !== null) {
+      let maxAmount = balanceInUnits;
       
       // Clear any previous gas errors
       setGasError(null);
@@ -5934,8 +5896,9 @@ export default function Dashboard() {
     return (
       <div className={variant === 'desktop' ? 'mt-4 space-y-3' : 'space-y-3'}>
         {allCoins.map((coin, index) => {
-          const tokenBalance = Number(coin.balance) / getCoinDecimals(coin.coinType);
-          const convertedValue = convertedBalances[coin.symbol] || 0;
+          // Null for an unsupported coin: shown by name, never scaled.
+          const tokenBalance = walletCoinAmount(coin);
+          const convertedValue = coin.supported ? convertedBalances[coin.symbol] || 0 : 0;
 
           return (
             <div
@@ -5950,7 +5913,10 @@ export default function Dashboard() {
                 </div>
                 <div className="min-w-0">
                   <p className="text-sm font-medium text-slate-900">{coin.symbol}</p>
-                  {(coin.symbol === 'SUI' || coin.symbol === 'USDC') && suiPrice && convertedValue > 0 && (
+                  {!coin.supported && (
+                    <p className="text-xs text-slate-500">Unsupported coin, not used by circles</p>
+                  )}
+                  {coin.supported && suiPrice && convertedValue > 0 && (
                     <p className="text-xs text-slate-500">
                       {balanceVisible
                         ? formatCurrency(convertedValue, selectedCurrency)
@@ -5963,12 +5929,14 @@ export default function Dashboard() {
               <div className="flex items-center gap-3">
                 <div className="text-right">
                   <div className="text-sm font-medium text-slate-900">
-                    {balanceVisible
-                      ? tokenBalance.toFixed(coin.symbol === 'USDC' ? 2 : 4)
-                      : formatBalanceDisplay(tokenBalance)}
+                    {tokenBalance === null
+                      ? '—'
+                      : balanceVisible
+                        ? tokenBalance.toFixed(coin.symbol === 'USDC' ? 2 : 4)
+                        : formatBalanceDisplay(tokenBalance)}
                   </div>
                 </div>
-                {(coin.symbol === 'USDC' || coin.symbol === 'SUI') && (
+                {coin.supported && (
                   <button
                     type="button"
                     onClick={() => {
@@ -8295,9 +8263,8 @@ export default function Dashboard() {
                     Select token
                   </label>
                   <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                    {allCoins.map((coin) => {
-                      const decimals = getCoinDecimals(coin.coinType);
-                      const balance = Number(coin.balance) / decimals;
+                    {allCoins.filter((coin) => coin.supported).map((coin) => {
+                      const balance = walletCoinAmount(coin) ?? 0;
                       return (
                         <button
                           key={coin.symbol}
@@ -8918,7 +8885,7 @@ export default function Dashboard() {
         isOpen={isReceiveOpen}
         onClose={() => setIsReceiveOpen(false)}
         walletAddress={userAddress || ''}
-        pollBalance={pollUsdcBalance}
+        pollBalance={pollFundingBalances}
         onArrived={() => {
           void fetchBalance();
         }}
@@ -8927,19 +8894,22 @@ export default function Dashboard() {
       <CashOutGuide
         isOpen={isCashOutOpen}
         onClose={() => setIsCashOutOpen(false)}
-        availableUsdc={
-          Number(allCoins.find((c) => c.symbol === 'USDC')?.balance || '0') / 1e6
-        }
-        availableSui={Number(balance || '0') / 1e9}
+        availableUsdc={walletCoinAmount(findSupportedWalletCoin(allCoins, 'USDC')) ?? 0}
+        availableSui={walletCoinAmount(findSupportedWalletCoin(allCoins, 'SUI')) ?? 0}
         onSend={async ({ toAddress, amount, coin }) => {
-          const cfg = getCurrentNetworkConfig();
-          const coinType = coin === 'USDC' ? cfg.coinTypes.USDC : cfg.coinTypes.SUI;
-          const decimals = coin === 'USDC' ? 1e6 : 1e9;
-          const smallestUnit = Math.floor(amount * decimals).toString();
+          const sendCoin = supportedCoinBySymbol(coin, getCurrentNetwork());
+          if (!sendCoin) {
+            throw new Error(`${coin} is not configured for this network.`);
+          }
+          // Exact: Math.floor(0.29 * 1e6) is 289999, not 290000.
+          const smallestUnit = parseCoinAmount(String(amount), sendCoin.decimals);
+          if (smallestUnit === null || smallestUnit <= BigInt(0)) {
+            throw new Error(`Enter an amount with at most ${sendCoin.decimals} decimal places.`);
+          }
           const result = await sendTokens({
             recipientAddress: toAddress,
-            amount: smallestUnit,
-            coinType,
+            amount: smallestUnit.toString(),
+            coinType: sendCoin.coinType,
           });
           if (!result.success) {
             throw new Error('Send failed. Check the address and your balance, then try again.');

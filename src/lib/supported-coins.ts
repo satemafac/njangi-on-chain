@@ -106,7 +106,7 @@ export function formatBaseUnits(base: bigint | string, decimals: number, maxFrac
 /** "0.3 USDC" for 300000 base units of USDC; null when `base` is not an amount. */
 export function formatCoinAmount(
   base: bigint | string,
-  coin: Pick<SupportedCoin, 'symbol' | 'decimals'>,
+  coin: { symbol: string; decimals: number },
   maxFractionDigits: number = coin.decimals,
 ): string | null {
   const amount = formatBaseUnits(base, coin.decimals, maxFractionDigits);
