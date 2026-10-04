@@ -1,7 +1,7 @@
 import { initCetusSDK } from '@cetusprotocol/cetus-sui-clmm-sdk';
 import { Transaction } from '@mysten/sui/transactions';
 import { getPooledSuiClient, getRpcCandidateUrls } from './sui-rpc-failover';
-import { getObjectTransactionPackageId } from './circle-service';
+import { normalizeCoinType, resolveSupportedCoin, toBaseUnitsTruncated } from '@/lib/supported-coins';
 import { 
   CetusErrorCode, 
   createCetusError, 
@@ -12,65 +12,41 @@ import {
 
 const DEFAULT_SLIPPAGE = 50; // 0.5%
 const SUI_TYPE = '0x2::sui::SUI';
-const SUI_DECIMALS = 9;
-const STABLECOIN_DECIMALS = 6;
 
 import {
   getCurrentCoinTypes,
   getCurrentCetusConfig,
   getCurrentRpcUrl,
   getCurrentNetwork,
-  getCurrentTokens,
 } from './network-config';
 
 function getCurrentUsdcType(): string {
   return getCurrentCoinTypes().USDC;
 }
 
-function getCurrentUsdcTypeCandidates(): string[] {
-  const currentCoinTypes = getCurrentCoinTypes();
-  const currentTokens = getCurrentTokens();
-  return Array.from(
-    new Set([currentCoinTypes.USDC, currentTokens.USDC].filter((value): value is string => Boolean(value)))
-  );
-}
-
-function getCurrentUsdtType(): string {
-  return getCurrentTokens().USDT || getCurrentUsdcType();
-}
-
-function getCetusPackageId(): string {
-  return getCurrentCetusConfig().packageId;
-}
-
-function getCetusGlobalConfigId(): string {
-  return getCurrentCetusConfig().globalConfig;
-}
-
 function getCetusSuiUsdcPoolId(): string {
   return getCurrentCetusConfig().pools.SUI_USDC;
 }
 
+/**
+ * One spelling per type (`0x` + 64 hex digits), so the short and long forms
+ * of SUI compare equal. Exact type only: this used to rewrite every
+ * `::usdc::` type, from any package, to the network's USDC.
+ */
 function normalizeCoinTypeForNetwork(coinType: string): string {
-  const normalized = normalizeSuiObjectId(coinType);
-
-  if (normalizeSuiObjectId(SUI_TYPE) === normalized) {
-    return SUI_TYPE;
-  }
-
-  if (getCurrentUsdcTypeCandidates().map(normalizeSuiObjectId).includes(normalized)) {
-    return getCurrentUsdcType();
-  }
-
-  if (normalized.toLowerCase().includes('::usdc::')) {
-    return getCurrentUsdcType();
-  }
-
-  return normalized;
+  return normalizeCoinType(coinType) ?? coinType;
 }
 
+/**
+ * SUI is 9 decimals and the network's USDC 6, by exact type. Any other coin
+ * is refused: it used to be scaled at 6 decimals whatever it really had.
+ */
 function getCoinDecimals(coinType: string): number {
-  return normalizeCoinTypeForNetwork(coinType) === SUI_TYPE ? SUI_DECIMALS : STABLECOIN_DECIMALS;
+  const coin = resolveSupportedCoin(coinType, getCurrentNetwork());
+  if (!coin) {
+    throw new Error(`Swaps support SUI and USDC only, not ${coinType}`);
+  }
+  return coin.decimals;
 }
 
 function normalizeSlippageToBps(slippage: number): number {
@@ -81,15 +57,15 @@ function normalizeSlippageToBps(slippage: number): number {
   return slippage <= 10 ? Math.floor(slippage * 100) : Math.floor(slippage);
 }
 
+// Exact base units, cut (never rounded up) past the coin's decimals.
+// Math.floor(amount * 10 ** decimals) asked a by-amount-out swap for a 0.29
+// USDC share for 289,999 units.
 function toAtomicAmount(amount: number | string, coinType: string): bigint {
-  const parsedAmount =
-    typeof amount === 'string' ? Number.parseFloat(amount) : Number(amount);
-
-  if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+  const atomic = toBaseUnitsTruncated(amount, getCoinDecimals(coinType));
+  if (atomic === null || atomic <= 0n) {
     throw new Error('Invalid swap amount');
   }
-
-  return BigInt(Math.floor(parsedAmount * Math.pow(10, getCoinDecimals(coinType))));
+  return atomic;
 }
 
 function fromAtomicAmount(amount: bigint | string, coinType: string): number {
@@ -476,10 +452,11 @@ class CetusService {
         const resolvedCoinB = this.resolveCoinType(coinTypeB);
         console.log(`Finding pools for: ${resolvedCoinA} and ${resolvedCoinB}`);
       
-        const currentUsdcType = getCurrentUsdcType();
+        const suiType = normalizeCoinTypeForNetwork(SUI_TYPE);
+        const currentUsdcType = normalizeCoinTypeForNetwork(getCurrentUsdcType());
         const isSuiUsdcPair = (
-          (resolvedCoinA === SUI_TYPE && resolvedCoinB === currentUsdcType) ||
-          (resolvedCoinB === SUI_TYPE && resolvedCoinA === currentUsdcType)
+          (resolvedCoinA === suiType && resolvedCoinB === currentUsdcType) ||
+          (resolvedCoinB === suiType && resolvedCoinA === currentUsdcType)
         );
 
         if (isSuiUsdcPair) {
@@ -540,62 +517,9 @@ class CetusService {
     });
   }
 
-  /**
-   * Creates a transaction to configure stablecoin swap settings in the custody wallet
-   * This directly calls the configure_stablecoin_swap function in the njangi_circle module
-   */
-  async configureStablecoinSwap(
-    walletId: string,
-    config: {
-      enabled: boolean;
-      targetCoinType: 'USDC' | 'USDT';
-      slippageTolerance: number; // basis points (e.g., 50 = 0.5%)
-      minimumSwapAmount: number; // in SUI
-    }
-  ): Promise<Transaction> {
-    if (!await this.ensureInitialized()) {
-      throw new Error('Cetus SDK not initialized');
-    }
-
-    try {
-      // Create transaction
-      const tx = new Transaction();
-      
-      // Set target coin type based on selection
-      const targetCoinType = config.targetCoinType === 'USDC' ? getCurrentUsdcType() : getCurrentUsdtType();
-      
-      // Get pool details
-      const poolId = await this.findPoolForCoinPair(SUI_TYPE, targetCoinType);
-      if (!poolId) {
-        throw new Error('USDC/SUI pool not found');
-      }
-      const globalConfigId = getCetusGlobalConfigId();
-      
-      // Convert minimum swap amount to MIST (1 SUI = 1e9 MIST)
-      const minimumSwapAmount = BigInt(Math.floor(config.minimumSwapAmount * 1e9));
-      const packageIdToUse = await getObjectTransactionPackageId(walletId);
-      
-      // Call the configure_stablecoin_swap function in the Move contract
-      tx.moveCall({
-        target: `${packageIdToUse}::njangi_circle::configure_stablecoin_swap`,
-        arguments: [
-          tx.object(walletId), // custody wallet object
-          tx.pure.bool(config.enabled), // enabled
-          tx.pure.string(targetCoinType), // target_coin_type
-          tx.pure.address(getCetusPackageId()), // dex_address
-          tx.pure.u64(BigInt(config.slippageTolerance)), // slippage_tolerance
-          tx.pure.u64(minimumSwapAmount), // minimum_swap_amount
-          tx.pure.address(globalConfigId), // global_config_id
-          tx.pure.address(poolId), // pool_id
-        ],
-      });
-      
-      return tx;
-    } catch (error) {
-      console.error('Failed to prepare stablecoin config transaction:', error);
-      throw error;
-    }
-  }
+  // configureStablecoinSwap (removed 2026-10) built a call to
+  // `njangi_circle::configure_stablecoin_swap`. The package has no module of
+  // that name, so the transaction could never execute, and nothing called it.
 
   /**
    * Prepares a swap transaction without executing it

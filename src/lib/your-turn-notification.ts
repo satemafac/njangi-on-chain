@@ -14,18 +14,21 @@
 // and the recipient's collection. The cron sends it in that window (it
 // reads the escrow first and skips a claimed or refunded one).
 //
-// No Meta template is attached. The nudge used to reuse the approved
-// `payout_processed` template, whose fixed copy reads "Payout Distributed!
-// … Payout sent to {{3}}": false for a payout that is waiting to be
-// collected, so with WHATSAPP_TEMPLATES_ENABLED=true it would contradict
-// the nudge. No legacy template says "your payout is ready to collect" for
-// a round the recipient collects themselves, so the nudge sends its
-// freeform body, which Meta delivers inside an open 24h service window.
-// Delivery outside that window needs a template approved for this copy,
-// wired in here.
+// Template: `payout_ready` (Utility, English `en`, approved in WhatsApp
+// Manager 2026-10-03). Its body is the English copy below with {{1}} the
+// circle's short id, {{2}} the round and {{3}} the payout, plus a dynamic
+// URL button `https://njangionchain.com/circle/{{1}}` whose suffix we set
+// to `<circleId>/contribute` (Meta only allows the variable at the end of
+// the URL). It is attached only when the payout figure is known ({{3}} is
+// required) and the recipient's locale is English (the template is
+// English-only; other locales keep their localized freeform body until
+// localized templates are approved). The dispatcher sends a template only
+// when WHATSAPP_TEMPLATES_ENABLED=true; otherwise the freeform body goes
+// out, which Meta delivers inside an open 24h service window. The nudge no
+// longer reuses `payout_processed`, whose copy says the payout was sent.
 
 import { sendMemberNotification } from './whatsapp-notifier';
-import type { SendMemberNotificationResult } from './whatsapp-notifier';
+import type { SendMemberNotificationResult, WhatsAppTemplatePayload } from './whatsapp-notifier';
 import type { NetworkType } from '../services/whatsapp-registry-service';
 
 export type SupportedLocale = 'en' | 'fr' | 'pcm' | 'sw' | 'am' | 'ar' | 'fa';
@@ -96,6 +99,38 @@ export function buildYourTurnMessage(
   return fn({ circleShort: circleId.slice(0, 8), cycleNo, amount });
 }
 
+/**
+ * The approved `payout_ready` template for a known payout (see the header).
+ * The {{1}} short id matches the freeform body's "circle 0xa3fada…".
+ */
+export function buildYourTurnTemplate(
+  circleId: string,
+  cycleNo: number,
+  amount: string,
+): WhatsAppTemplatePayload {
+  return {
+    name: 'payout_ready',
+    // The language the template was approved under (English, `en`).
+    language: 'en',
+    components: [
+      {
+        type: 'body',
+        parameters: [
+          { type: 'text', text: `${circleId.slice(0, 8)}…` },
+          { type: 'text', text: String(cycleNo) },
+          { type: 'text', text: amount },
+        ],
+      },
+      {
+        type: 'button',
+        sub_type: 'url',
+        index: '0',
+        parameters: [{ type: 'text', text: `${circleId}/contribute` }],
+      },
+    ],
+  };
+}
+
 export interface YourTurnNotificationInput {
   circleId: string;
   cycleNo: number;
@@ -139,17 +174,17 @@ export interface YourTurnNotificationInput {
 export async function sendYourTurnNotification(
   input: YourTurnNotificationInput,
 ): Promise<SendMemberNotificationResult> {
+  const locale = input.locale ?? 'en';
   return sendMemberNotification({
     memberAddress: input.recipient,
     phoneOverride: input.recipientPhone,
-    body: buildYourTurnMessage(
-      input.locale ?? 'en',
-      input.circleId,
-      input.cycleNo,
-      input.amount,
-    ),
-    // No `template`: see the header. The body is the send shape whether or
-    // not WHATSAPP_TEMPLATES_ENABLED is set.
+    body: buildYourTurnMessage(locale, input.circleId, input.cycleNo, input.amount),
+    // `payout_ready` only for a known payout in English; see the header.
+    // The dispatcher ignores it unless WHATSAPP_TEMPLATES_ENABLED=true.
+    template:
+      input.amount && locale === 'en'
+        ? buildYourTurnTemplate(input.circleId, input.cycleNo, input.amount)
+        : undefined,
     kind: 'cycle_finalized',
     network: input.network,
     // Round-scoped dedupe — a duplicate webhook or a notifier restart

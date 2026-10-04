@@ -4,6 +4,10 @@ _2026-07-01. Multi-agent research (codebase capability, Sui asset landscape, liv
 
 ## Decision
 
+> **Update 2026-10-04:** the MVP stays SUI + USDC. BTC-denominated circles (OKX xBTC)
+> and later coins are on the roadmap: [`multi-asset-roadmap.md`](multi-asset-roadmap.md).
+
+
 **Support exactly two user-facing assets: native Circle USDC (the savings/settlement asset) and SUI (gas + alternate deposit path). Accept a small set of swap-in assets (Sui Bridge USDT, wBTC/xBTC, ETH) that auto-convert to USDC via Cetus. Register nothing else.**
 
 ## Why USDC is the only viable settlement asset (verified)

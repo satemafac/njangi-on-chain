@@ -1,4 +1,5 @@
 import { getPooledSuiClient } from '@/services/sui-rpc-failover';
+import { SUI_COIN_TYPE, usdcCoinTypeForNetwork } from '@/config/coin-types';
 
 export type WalletNetwork = 'testnet' | 'mainnet';
 
@@ -33,7 +34,6 @@ interface CachedBalanceEntry {
   value: WalletBalanceResult;
 }
 
-const SUI_COIN_TYPE = '0x2::sui::SUI';
 const BALANCE_CACHE_TTL_MS = 30_000;
 const balanceCache = new Map<string, CachedBalanceEntry>();
 
@@ -50,14 +50,15 @@ function resolveRpcUrl(network: WalletNetwork, override?: string): string {
   if (override && override.trim()) {
     return override.trim();
   }
+  // `||` after trim, not `??`: a blank env value is unset, not an empty URL.
   if (network === 'mainnet') {
     return (
-      process.env.NEXT_PUBLIC_MAINNET_RPC_URL ??
+      process.env.NEXT_PUBLIC_MAINNET_RPC_URL?.trim() ||
       'https://sui-rpc.publicnode.com'
     );
   }
   return (
-    process.env.NEXT_PUBLIC_TESTNET_RPC_URL ?? 'https://sui-testnet-rpc.publicnode.com'
+    process.env.NEXT_PUBLIC_TESTNET_RPC_URL?.trim() || 'https://sui-testnet-rpc.publicnode.com'
   );
 }
 
@@ -68,16 +69,10 @@ function resolveUsdcCoinType(
   if (override && override.trim()) {
     return override.trim();
   }
-  if (network === 'mainnet') {
-    return (
-      process.env.NEXT_PUBLIC_MAINNET_USDC ??
-      '0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC'
-    );
-  }
-  return (
-    process.env.NEXT_PUBLIC_TESTNET_USDC ??
-    '0x26b3bc67befc214058ca78ea9a2690298d731a2d4309485ec3d40198063c4abc::usdc::USDC'
-  );
+  // The shared resolver, not a local `env ?? default`: `??` kept an empty
+  // NEXT_PUBLIC_<NET>_USDC as "", so this read a balance of type "" while
+  // every other surface used the default.
+  return usdcCoinTypeForNetwork(network);
 }
 
 function assertWalletAddress(walletAddress: string): void {
