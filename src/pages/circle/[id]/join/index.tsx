@@ -27,6 +27,7 @@ import {
   type InvitePreview,
 } from '@/lib/invite-preview';
 import { getCurrentNetwork } from '@/services/network-config';
+import { circleCoinFromConfig, formatUsdcFromCents, type CircleCoin } from '@/lib/circle-coin-display';
 
 // Define Circle type
 interface Circle {
@@ -38,6 +39,11 @@ interface Circle {
   currencyType?: string; // Add currency type field
   securityDeposit: number; // Calculated SUI amount
   securityDepositUsd: number; // USD amount (cents/100)
+  /** The coin members pay in (the circle's SUI/USDC mode); null when its config could not be read. */
+  coin: CircleCoin | null;
+  /** What a USDC circle charges, e.g. "0.30 USDC", from the stored USD cents; null when not read. */
+  contributionUsdc: string | null;
+  securityDepositUsdc: string | null;
   cycleLength: number;
   cycleDay: number;
   maxMembers: number;
@@ -294,6 +300,11 @@ export default function JoinCircle({ invitePreview }: JoinCircleProps) {
         cycleLength: 0,             // 0=weekly, 1=monthly, 2=quarterly
         cycleDay: 1,                // Default to 1st day
         maxMembers: 3,              // Default max members
+        // Read from the CircleConfig only: the creation event cannot say,
+        // because the admin can switch the mode before the circle starts.
+        coin: null as CircleCoin | null,
+        contributionUsdc: null as string | null,
+        securityDepositUsdc: null as string | null,
       };
 
       // 1. Use values from transaction/event first
@@ -340,6 +351,11 @@ export default function JoinCircle({ invitePreview }: JoinCircleProps) {
             configValues.maxMembers = Number(configFields.max_members);
             console.log('Join - Extracted max_members from CircleConfig:', configValues.maxMembers);
           }
+          // The coin members pay in. A USDC circle charges its stored USD
+          // cents in USDC; a SUI circle its stored SUI amount.
+          configValues.coin = circleCoinFromConfig(configFields.auto_swap_enabled);
+          configValues.contributionUsdc = formatUsdcFromCents(configFields.contribution_amount_usd);
+          configValues.securityDepositUsdc = formatUsdcFromCents(configFields.security_deposit_usd);
         }
       } catch (error) {
         logSuiReadError('Join - Error fetching CircleConfig fields:', error);
@@ -481,6 +497,9 @@ export default function JoinCircle({ invitePreview }: JoinCircleProps) {
         currencyType: transactionInput?.currency_type || circleCreationEventData?.currency_type || fields.currency_type || 'USD', // Get currency type from transaction input, creation event, or fields
         securityDeposit: configValues.securityDeposit,
         securityDepositUsd: configValues.securityDepositUsd,
+        coin: configValues.coin,
+        contributionUsdc: configValues.contributionUsdc,
+        securityDepositUsdc: configValues.securityDepositUsdc,
         cycleLength: configValues.cycleLength,
         cycleDay: configValues.cycleDay,
         maxMembers: configValues.maxMembers,
@@ -709,15 +728,21 @@ export default function JoinCircle({ invitePreview }: JoinCircleProps) {
     return `${address.slice(0, 6)}...${address.slice(-4)}`;
   };
 
-  // Helper component to display both USD and SUI amounts
-  const CurrencyDisplay = ({ 
-    usd, 
-    sui, 
+  // The amount in the circle's currency, and below it in the coin members
+  // actually pay: USDC for a USDC circle, SUI for a SUI circle, nothing when
+  // the circle's mode could not be read. (Every circle used to read "X SUI".)
+  const CurrencyDisplay = ({
+    usd,
+    sui,
+    usdc,
+    coin,
     currencyType = 'USD',
-    className = '' 
-  }: { 
-    usd?: number; 
-    sui?: number; 
+    className = ''
+  }: {
+    usd?: number;
+    sui?: number;
+    usdc: string | null;
+    coin: CircleCoin | null;
     currencyType?: string;
     className?: string;
   }) => {
@@ -741,14 +766,18 @@ export default function JoinCircle({ invitePreview }: JoinCircleProps) {
       ? displaySuiValue.toLocaleString('en-US', { maximumFractionDigits: 0 })
       : displaySuiValue.toLocaleString('en-US', { maximumFractionDigits: 2 });
     
+    const coinLine = coin === 'USDC' ? usdc : coin === 'SUI' ? `${formattedSui} SUI` : null;
+
     return (
       <div className={`flex flex-col gap-1 ${className}`}>
         <span className="text-xl font-semibold tracking-[-0.02em] text-[#171923]">
           {formatCurrency(usdValue, currencyType)}
         </span>
-        <span className="text-sm font-medium text-[#667085]">
-          {formattedSui} SUI
-        </span>
+        {coinLine ? (
+          <span className="text-sm font-medium text-[#667085]">
+            {coinLine}
+          </span>
+        ) : null}
       </div>
     );
   };
@@ -1028,6 +1057,8 @@ export default function JoinCircle({ invitePreview }: JoinCircleProps) {
                           <CurrencyDisplay
                             usd={circle.contributionAmountUsd}
                             sui={circle.contributionAmount}
+                            usdc={circle.contributionUsdc}
+                            coin={circle.coin}
                             currencyType={circle.currencyType}
                             className="items-end text-right"
                           />
@@ -1041,6 +1072,8 @@ export default function JoinCircle({ invitePreview }: JoinCircleProps) {
                           <CurrencyDisplay
                             usd={circle.securityDepositUsd}
                             sui={circle.securityDeposit}
+                            usdc={circle.securityDepositUsdc}
+                            coin={circle.coin}
                             currencyType={circle.currencyType}
                             className="items-end text-right"
                           />
@@ -1087,6 +1120,8 @@ export default function JoinCircle({ invitePreview }: JoinCircleProps) {
                           <CurrencyDisplay
                             usd={circle.contributionAmountUsd}
                             sui={circle.contributionAmount}
+                            usdc={circle.contributionUsdc}
+                            coin={circle.coin}
                             currencyType={circle.currencyType}
                             className="mt-4"
                           />
@@ -1096,6 +1131,8 @@ export default function JoinCircle({ invitePreview }: JoinCircleProps) {
                           <CurrencyDisplay
                             usd={circle.securityDepositUsd}
                             sui={circle.securityDeposit}
+                            usdc={circle.securityDepositUsdc}
+                            coin={circle.coin}
                             currencyType={circle.currencyType}
                             className="mt-4"
                           />
@@ -1191,6 +1228,8 @@ export default function JoinCircle({ invitePreview }: JoinCircleProps) {
                           <CurrencyDisplay
                             usd={circle.contributionAmountUsd}
                             sui={circle.contributionAmount}
+                            usdc={circle.contributionUsdc}
+                            coin={circle.coin}
                             currencyType={circle.currencyType}
                             className="mt-4"
                           />
@@ -1200,6 +1239,8 @@ export default function JoinCircle({ invitePreview }: JoinCircleProps) {
                           <CurrencyDisplay
                             usd={circle.securityDepositUsd}
                             sui={circle.securityDeposit}
+                            usdc={circle.securityDepositUsdc}
+                            coin={circle.coin}
                             currencyType={circle.currencyType}
                             className="mt-4"
                           />
