@@ -118,7 +118,7 @@ describe('the recovery coin type comes from the custody wallet, not from events'
   // escrow-era wallet: StablecoinContributionMade is emitted only by the
   // retired legacy rail, StablecoinDepositWithPrice carries the literal
   // "stablecoin" instead of a type, and StablecoinHoldingUpdated an unprefixed
-  // type name. resolveCustodyStablecoinType reads the wallet itself.
+  // type name. resolveRecoveryCoinType reads the wallet itself.
   const LEGACY_STABLECOIN_EVENTS = [
     'StablecoinContributionMade',
     'StablecoinDepositWithPrice',
@@ -137,7 +137,7 @@ describe('the recovery coin type comes from the custody wallet, not from events'
 
   it('the circle page resolves the recovery coin type from the wallet', () => {
     const source = readFileSync(join(process.cwd(), 'src/pages/circle/[id]/index.tsx'), 'utf8');
-    expect(source).toContain('resolveCustodyStablecoinType');
+    expect(source).toContain('resolveRecoveryCoinType');
     expect(source).not.toContain('loadRecoveryStablecoinCoinType');
   });
 });

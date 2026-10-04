@@ -31,11 +31,13 @@ import {
 } from '@/lib/recovery-execution';
 import { getRecoveryProposalUiState, getRecoveryDelegateCardCopy } from '@/lib/recovery-ui';
 import { resolveCustodyWalletId } from '@/lib/custody-wallet-discovery';
+import { recoveryCoinTypeErrorMessage, resolveRecoveryCoinType } from '@/lib/recovery-coin-type';
 import { resolveStablecoinMetadata } from '@/lib/stablecoin-metadata';
 import { priceService } from '../../../../services/price-service';
 import { JoinRequest } from '../../../../services/database-service';
 import { getCirclePackageId, getSuiClientFromPool } from '../../../../services/circle-service';
 import {
+  getCurrentCoinTypes,
   getCurrentRpcUrl,
   getCurrentNetwork,
 } from '../../../../services/network-config';
@@ -58,7 +60,7 @@ import MilestonesManageCard from '@/components/milestones/MilestonesManageCard';
 import { resolveCircleSettlementCoin } from '@/lib/circle-settlement';
 import { readObject, queryEventsCached, invalidateObject, invalidateSuiRead } from '@/lib/sui-read';
 import { allDepositsHeldForRounds, depositsHeldButFlagsCleared } from '@/lib/deposit-status';
-import { logSuiReadError } from '@/services/sui-rpc-failover';
+import { getPooledSuiClient, logSuiReadError } from '@/services/sui-rpc-failover';
 import type { NetworkType } from '@/services/whatsapp-registry-service';
 
 // Define a proper Circle type to fix linter errors
@@ -4466,11 +4468,15 @@ export default function ManageCircle() {
             network: getCurrentNetwork(),
           });
           break;
+        // No default coin type: callers pass the one resolveRecoveryCoinType
+        // read from the wallet, and the builders refuse an empty one. The
+        // display default (the network's USDC) used to stand in here even
+        // when the wallet held another coin or could not be read.
         case 'executeRecovery':
           await zkLoginClient.executeRecovery(account, {
             circleId: circle.id,
             walletId: String(extraBody.walletId || ''),
-            stablecoinType: String(extraBody.stablecoinType || recoveryStablecoinMeta.coinType),
+            stablecoinType: String(extraBody.stablecoinType || ''),
             network: getCurrentNetwork(),
           });
           break;
@@ -4478,7 +4484,7 @@ export default function ManageCircle() {
           await zkLoginClient.triggerAutoRelease(account, {
             circleId: circle.id,
             walletId: String(extraBody.walletId || ''),
-            stablecoinType: String(extraBody.stablecoinType || recoveryStablecoinMeta.coinType),
+            stablecoinType: String(extraBody.stablecoinType || ''),
             network: getCurrentNetwork(),
           });
           break;
@@ -4572,12 +4578,28 @@ export default function ManageCircle() {
     });
   };
 
-  const handleExecuteRecovery = () => {
+  const handleExecuteRecovery = async () => {
     if (!circle?.custody?.walletId) {
       toast.error('Custody wallet information is unavailable.');
       return;
     }
     const recoveryWalletId = circle.custody.walletId;
+
+    // Same rule as the circle page (recovery-coin-type.ts): the coin the
+    // wallet holds, the network's USDC when it holds no stablecoin, and no
+    // transaction at all when the wallet could not be read.
+    let recoveryCoinType: string;
+    try {
+      ({ coinType: recoveryCoinType } = await resolveRecoveryCoinType(
+        getPooledSuiClient(),
+        recoveryWalletId,
+        getCurrentCoinTypes().USDC,
+      ));
+    } catch (error) {
+      console.error('Recovery coin type unavailable:', error);
+      toast.error(recoveryCoinTypeErrorMessage(error));
+      return;
+    }
 
     setConfirmationModal({
       isOpen: true,
@@ -4596,7 +4618,7 @@ export default function ManageCircle() {
       onConfirm: async () => {
         await postRecoveryAction(
           'executeRecovery',
-          { walletId: recoveryWalletId },
+          { walletId: recoveryWalletId, stablecoinType: recoveryCoinType },
           {
             loading: 'Executing emergency recovery...',
             success: 'Emergency recovery executed.',
