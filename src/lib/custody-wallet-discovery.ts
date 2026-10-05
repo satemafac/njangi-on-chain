@@ -68,6 +68,7 @@ const CUSTODY_TOUCHING_FUNCTIONS = new Set([
 
 export type CustodyDiscoverySource =
   | 'dynamic_field'
+  | 'asset_policy'
   | 'creation_tx'
   | 'events'
   | 'transaction_history';
@@ -399,6 +400,50 @@ async function fromTransactionHistory(
  * Null must be handled as "unresolved", not "the circle has no wallet" —
  * gate the actions that need it, and say why they are gated.
  */
+/**
+ * v11: a converted or v11-created circle records its custody wallet in its
+ * asset policy (`njangi_circles::AssetPolicyKey` → `CircleAssetPolicy.wallet_id`):
+ * the wallet every v11 money call must pass. Plain object reads, served by
+ * every endpoint and immune to transaction pruning, so a circle created before
+ * v9 (placeholder `wallet_id` field) whose creation transaction the node no
+ * longer serves still resolves without the rate-limited event tier. Null when
+ * the circle has no policy or the read failed; the later tiers then try.
+ */
+async function fromAssetPolicy(client: SuiClient, circleId: string): Promise<string | null> {
+  try {
+    let cursor: string | null | undefined = null;
+    do {
+      const page: Awaited<ReturnType<SuiClient['getDynamicFields']>> = await client.getDynamicFields({
+        parentId: circleId,
+        cursor,
+      });
+      const entry = page.data.find(
+        (field) =>
+          typeof field.name?.type === 'string' && field.name.type.endsWith('::njangi_circles::AssetPolicyKey'),
+      );
+      if (entry) {
+        const object = await client.getObject({ id: entry.objectId, options: { showContent: true } });
+        const content = object.data?.content;
+        const value =
+          content && content.dataType === 'moveObject'
+            ? (content.fields as Record<string, unknown>).value
+            : null;
+        const policy =
+          value && typeof value === 'object'
+            ? (((value as { fields?: unknown }).fields ?? value) as Record<string, unknown>)
+            : null;
+        const walletId = policy?.wallet_id;
+        return typeof walletId === 'string' && /^0x[0-9a-fA-F]{1,64}$/.test(walletId) ? normalizeId(walletId) : null;
+      }
+      cursor = page.hasNextPage ? page.nextCursor : null;
+    } while (cursor);
+    return null;
+  } catch (error) {
+    console.warn('[custody-discovery] asset-policy read failed; trying the other tiers', { circleId, error });
+    return null;
+  }
+}
+
 export async function resolveCustodyWalletId(
   args: ResolveCustodyWalletArgs,
 ): Promise<CustodyWalletResolution | null> {
@@ -407,6 +452,13 @@ export async function resolveCustodyWalletId(
   const fromField = await fromDynamicField(client, circleId);
   if (fromField && (await isCustodyWalletForCircle(client, fromField, circleId)) === true) {
     return { walletId: fromField, source: 'dynamic_field' };
+  }
+
+  // v11 terms record the wallet: plain object reads, no event or transaction
+  // history needed. Validated like every other tier.
+  const fromPolicy = await fromAssetPolicy(client, circleId);
+  if (fromPolicy && (await isCustodyWalletForCircle(client, fromPolicy, circleId)) === true) {
+    return { walletId: fromPolicy, source: 'asset_policy' };
   }
 
   // Before the event scan: a direct digest lookup, served by every endpoint,
