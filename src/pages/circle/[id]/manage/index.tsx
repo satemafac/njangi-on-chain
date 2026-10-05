@@ -7263,6 +7263,7 @@ export default function ManageCircle() {
                       circleName={circle.name}
                       isAdmin
                       memberNames={memberNameMap}
+                      adminAddress={circle.admin}
                       showAdminOpenButton
                       circleIsActive={circle.isActive && depositsHeldForRounds}
                       autoOpenWhenReady={autoOpenFirstRound}

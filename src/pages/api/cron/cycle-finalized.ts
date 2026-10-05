@@ -70,6 +70,7 @@ import {
   type YourTurnEscrow,
 } from '../../../lib/cycle-finalized-cron';
 import { sendYourTurnNotification } from '../../../lib/your-turn-notification';
+import { roundNumber } from '../../../lib/round-number';
 import {
   getPublishedPackageMetadata,
   normalizePackageId,
@@ -316,6 +317,12 @@ async function runDrain(res: NextApiResponse, ctx: RunDrainContext) {
       const sendResult = await sendYourTurnNotification({
         circleId,
         cycleNo: parsed.cycleNo,
+        // What the member reads; the cycle_no above counts laps.
+        roundNo: roundNumber({
+          cycleNo: parsed.cycleNo,
+          recipient: escrow.recipient,
+          members: escrow.members,
+        }),
         // The escrow's own coin; null (no figure in the message) when its
         // decimals are unknown rather than a figure off by powers of ten.
         amount: formatEscrowPayout(parsed.totalContributed, escrow.coinType),

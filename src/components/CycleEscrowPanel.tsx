@@ -35,6 +35,8 @@ import {
   resolveNextRoundAction,
   type CircleRotationPointer,
 } from '@/lib/cycle-round-progression';
+import { roundNumber } from '@/lib/round-number';
+import { resolveRoundMemberStatus, type RoundMemberStatus } from '@/lib/round-member-status';
 import {
   beginOpenRound,
   classifyOpenRoundError,
@@ -101,6 +103,27 @@ interface CycleEscrowPanelProps {
    */
   memberNames?: Record<string, string>;
   /**
+   * The circle's admin address. Names come from join requests, and the
+   * admin who created the circle never files one, so without this their
+   * rows and sentences fall back to a raw 0x address. With it they read
+   * "Circle admin". No name is stored for them.
+   */
+  adminAddress?: string | null;
+  /**
+   * The signed-in member's part in the round this panel shows (paid, due,
+   * recipient, no round, …), read off the escrow. The page around the
+   * panel shows it in its own payment status instead of reading the
+   * legacy member row, which the escrow never writes.
+   */
+  onRoundStatusChange?: (status: RoundMemberStatus) => void;
+  /**
+   * The signed-in member's address as the page knows it. The status above
+   * falls back to it when the zkLogin signer is not loaded (a new tab drops
+   * it while the login itself stands), so a member who paid still reads
+   * "Contributed" there rather than "Couldn't check".
+   */
+  viewerAddress?: string | null;
+  /**
    * Render the admin-only "Open this round" button. Members never see
    * this; admins use it from the manage page. Default false so the
    * member-facing contribute page stays clean.
@@ -142,6 +165,9 @@ export function CycleEscrowPanel({
   circleName,
   isAdmin,
   memberNames,
+  adminAddress,
+  onRoundStatusChange,
+  viewerAddress,
   showAdminOpenButton = false,
   circleIsActive = true,
   autoOpenWhenReady = false,
@@ -186,7 +212,7 @@ export function CycleEscrowPanel({
   const [celebration, setCelebration] = useState<{
     digest: string;
     amount: string;
-    cycleNo: number | string;
+    roundNo: number | string;
   } | null>(null);
   // Gated round + no attestation on the caller's wallet: explain the
   // verification requirement instead of a dead-end error toast.
@@ -291,6 +317,34 @@ export function CycleEscrowPanel({
   const isUserRecipient =
     !!userAddress && !!recipient && userAddress.toLowerCase() === recipient.toLowerCase();
 
+  // The circle-wide round number (round-number.ts). The snapshot's cycle_no
+  // counts laps, so every round of a lap used to share one number. Its
+  // member list arrives with the live state; until then, and if it cannot
+  // be placed, no number is shown rather than a wrong one.
+  const roundLabel: number | string = useMemo(
+    () =>
+      roundNumber({
+        cycleNo: liveState?.cycleNo ?? summary?.cycleNo,
+        recipient,
+        members: liveState?.members,
+      }) ?? '—',
+    [liveState?.cycleNo, summary?.cycleNo, recipient, liveState?.members],
+  );
+
+  // Join-request name, else "Circle admin" for the admin's address, else
+  // the short address.
+  const nameFor = useCallback(
+    (addr: string): string => {
+      const name = memberNames?.[addr.toLowerCase()] ?? memberNames?.[addr];
+      if (name) return name;
+      if (adminAddress && adminAddress.toLowerCase() === addr.toLowerCase()) {
+        return t('escrow.member.circleAdmin');
+      }
+      return shortenAddress(addr);
+    },
+    [memberNames, adminAddress, t],
+  );
+
   const stage: EscrowStage = useMemo(
     () =>
       resolveEscrowStage({
@@ -302,6 +356,29 @@ export function CycleEscrowPanel({
       }),
     [loading, summary, liveState, paidSoFar, totalRequired, chainNowMs],
   );
+
+  // The viewer's own part in this round, for the page around the panel
+  // (round-member-status.ts). Without any signed-in address there is no
+  // viewer to place, which is unknown rather than "your share is due".
+  const statusViewer = (userAddress ?? viewerAddress ?? '').toLowerCase();
+  const roundMemberStatus: RoundMemberStatus = useMemo(() => {
+    if (!statusViewer) return stage === 'loading' ? 'checking' : 'unknown';
+    const members = liveState?.members;
+    return resolveRoundMemberStatus({
+      stage,
+      loadError,
+      userHasPaid: contributors.some((c) => c.toLowerCase() === statusViewer),
+      isUserRecipient: !!recipient && recipient.toLowerCase() === statusViewer,
+      isRoundMember:
+        members && members.length > 0
+          ? members.some((m) => m.toLowerCase() === statusViewer)
+          : null,
+    });
+  }, [stage, loadError, contributors, recipient, liveState?.members, statusViewer]);
+
+  useEffect(() => {
+    onRoundStatusChange?.(roundMemberStatus);
+  }, [roundMemberStatus, onRoundStatusChange]);
 
   // Who may send an expired round's contributions back: every member of the
   // round, the admin included, never only the admin. An unreadable member
@@ -356,12 +433,10 @@ export function CycleEscrowPanel({
         ? t('escrow.confirmingRound')
         : idleLabel;
 
-  const recipientLabel = useMemo(() => {
-    if (!recipient) return '—';
-    const name = memberNames?.[recipient.toLowerCase()] ?? memberNames?.[recipient];
-    if (name) return name;
-    return shortenAddress(recipient);
-  }, [recipient, memberNames]);
+  const recipientLabel = useMemo(
+    () => (recipient ? nameFor(recipient) : '—'),
+    [recipient, nameFor],
+  );
 
   const progressLabel = useMemo(() => {
     if (!summary || totalRequired === 0) return '';
@@ -390,15 +465,14 @@ export function CycleEscrowPanel({
       const lower = addr.toLowerCase();
       const isRecipient = !!recipientLower && lower === recipientLower;
       const hasContributed = paid.has(lower);
-      const name = memberNames?.[lower] ?? memberNames?.[addr];
       return {
         addr,
-        label: name ?? shortenAddress(addr),
+        label: nameFor(addr),
         isRecipient,
         hasContributed,
       };
     });
-  }, [liveState?.members, contributors, recipient, memberNames]);
+  }, [liveState?.members, contributors, recipient, nameFor]);
 
   // The round's own coin, read from its escrow snapshot. Not the circle's
   // current mode: that only decides what a NEW round opens in.
@@ -464,7 +538,7 @@ export function CycleEscrowPanel({
               potBase !== '0'
                 ? formatEscrowAmount(potBase, escrowCoin, unsupportedCoinLabel)
                 : friendlyAmount,
-            cycleNo: liveState?.cycleNo ?? summary?.cycleNo ?? '—',
+            roundNo: roundLabel,
           });
         }
         // Wait for the fullnode to finish indexing this tx so the
@@ -500,9 +574,8 @@ export function CycleEscrowPanel({
       rpcClient,
       t,
       friendlyAmount,
-      summary?.cycleNo,
+      roundLabel,
       potBase,
-      liveState?.cycleNo,
       escrowCoin,
       unsupportedCoinLabel,
     ],
@@ -936,9 +1009,9 @@ export function CycleEscrowPanel({
             {circleName
               ? t('escrow.header.withCircle', {
                   circle: circleName,
-                  cycle: summary?.cycleNo ?? '—',
+                  round: roundLabel,
                 })
-              : t('escrow.header.noCircle', { cycle: summary?.cycleNo ?? '—' })}
+              : t('escrow.header.noCircle', { round: roundLabel })}
           </h3>
           <p className="mt-1 text-sm text-slate-600">{t('escrow.headerBlurb')}</p>
         </div>
@@ -1253,7 +1326,7 @@ export function CycleEscrowPanel({
                 <div className="sm:max-w-md">
                   <p className="text-sm font-medium text-amber-700">
                     {t('escrow.claimExpired', {
-                      cycle: summary?.cycleNo ?? '—',
+                      round: roundLabel,
                       date: claimClosedOn,
                     })}
                   </p>
@@ -1285,7 +1358,7 @@ export function CycleEscrowPanel({
               <div className="flex w-full flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <p className="text-sm font-medium text-amber-700 sm:max-w-md">
                   {t(liveState?.finalized ? 'escrow.refundedExpired' : 'escrow.refunded', {
-                    cycle: summary?.cycleNo ?? '—',
+                    round: roundLabel,
                   })}
                 </p>
                 {showAdminRoundControls ? (
@@ -1322,7 +1395,7 @@ export function CycleEscrowPanel({
                 <div className="sm:max-w-md">
                   <p className="text-sm font-medium text-emerald-700">
                     {t(completedRoundCopyKey(nextRound.action), {
-                      cycle: summary?.cycleNo ?? '—',
+                      round: roundLabel,
                       recipient: recipientLabel,
                     })}
                   </p>
@@ -1402,7 +1475,7 @@ export function CycleEscrowPanel({
         open={celebration !== null}
         onClose={() => setCelebration(null)}
         amount={celebration?.amount ?? friendlyAmount}
-        cycleNo={celebration?.cycleNo ?? summary?.cycleNo ?? '—'}
+        roundNo={celebration?.roundNo ?? roundLabel}
         circleName={circleName}
         circleId={circleId}
         txDigest={celebration?.digest ?? null}

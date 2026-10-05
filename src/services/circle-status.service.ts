@@ -11,12 +11,19 @@ import joinRequestDatabase from './join-request-database';
 import { readObject, queryEventsCached } from '@/lib/sui-read';
 import { resolveCircleLifecycleState } from '@/lib/circle-chain';
 import { resolveCustodyWalletId } from '@/lib/custody-wallet-discovery';
+import { circleRoundNumber } from '@/lib/round-number';
 
 export interface CircleStatusData {
   name: string;
   admin: string;
   isActive: boolean;
+  /** The rotation LAP (on-chain current_cycle), shared by every round in it. */
   currentCycle: number;
+  /**
+   * The circle-wide round the rotation pointer stands on (round-number.ts);
+   * null before the circle starts or when it cannot be placed.
+   */
+  currentRound: number | null;
   maxMembers: number;
   currentMembers: number;
   contributionAmount: number; // in SUI
@@ -336,6 +343,14 @@ export async function getCircleStatus(circleId: string, network?: 'testnet' | 'm
     
     // Use current_position directly to get the beneficiary
     const currentBeneficiary = rotationOrder[currentPosition] || members[currentPosition]?.address;
+    // current_position indexes the raw rotation_order, empty seats included.
+    const currentRound = circleRoundNumber({
+      currentCycle,
+      currentPosition,
+      rotationOrder: Array.isArray(fields.rotation_order)
+        ? (fields.rotation_order as unknown[]).filter((a): a is string => typeof a === 'string')
+        : null,
+    });
     console.log('[CircleStatus] Current beneficiary at position', currentPosition, ':', currentBeneficiary?.slice(0, 15));
     
     // Upper bound, not a reading. This is contribution_amount x members x
@@ -379,6 +394,7 @@ export async function getCircleStatus(circleId: string, network?: 'testnet' | 'm
       admin: typeof fields.admin === 'string' ? fields.admin : '',
       isActive,
       currentCycle,
+      currentRound,
       maxMembers,
       currentMembers: members.length,
       contributionAmount,
@@ -408,6 +424,18 @@ export async function getCircleStatus(circleId: string, network?: 'testnet' | 'm
     });
     return null;
   }
+}
+
+/**
+ * The status reply's round line. current_cycle counts laps, so it used to
+ * print "Round 6" for every round of lap 6; the round is the circle-wide
+ * number (round-number.ts), with the lap beside it.
+ */
+export function formatRoundLine(status: Pick<CircleStatusData, 'currentCycle' | 'currentRound'>): string {
+  if (status.currentCycle <= 0) return '*Round:* Not started';
+  return status.currentRound !== null
+    ? `*Round:* ${status.currentRound} (lap ${status.currentCycle})`
+    : `*Lap:* ${status.currentCycle}`;
 }
 
 /**
@@ -532,7 +560,7 @@ export async function formatCircleStatusForWhatsAppWithNames(status: CircleStatu
   const message = `📊 *${status.name}* ${statusEmoji}
 
 *Status:* ${statusText}
-*Cycle:* ${status.currentCycle > 0 ? `Round ${status.currentCycle}` : 'Not started'}
+${formatRoundLine(status)}
 
 ━━━━━━━━━━━━━━━━━━
 👥 *Members* (${status.currentMembers}/${status.maxMembers})
@@ -655,7 +683,7 @@ export function formatCircleStatusForWhatsApp(status: CircleStatusData, circleId
   const message = `📊 *${status.name}* ${statusEmoji}
 
 *Status:* ${statusText}
-*Cycle:* ${status.currentCycle > 0 ? `Round ${status.currentCycle}` : 'Not started'}
+${formatRoundLine(status)}
 
 ━━━━━━━━━━━━━━━━━━
 👥 *Members* (${status.currentMembers}/${status.maxMembers})

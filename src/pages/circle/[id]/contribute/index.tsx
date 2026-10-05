@@ -27,6 +27,7 @@ import { getSuiRpcErrorMessage, isTransientSuiRpcError, logSuiReadError } from '
 import { readObject, invalidateObject } from '@/lib/sui-read';
 import type { NetworkType } from '@/services/whatsapp-registry-service';
 import { lookupMemberNames } from '@/lib/member-name-lookup';
+import { roundMemberStatusCopy, type RoundMemberStatus } from '@/lib/round-member-status';
 import { useTranslation } from '@/hooks/useTranslation';
 import {
   mapCurrencyCodeToIntent,
@@ -367,7 +368,13 @@ export default function ContributeToCircle() {
   const [currentCycle, setCurrentCycle] = useState<number>(1);
 
   // Add a state to track if the user has already contributed for the current cycle
+  // (legacy member row; the escrow never writes it, so it only guards the
+  // legacy deposit card — the page's status comes from `roundStatus`).
   const [userHasContributed, setUserHasContributed] = useState<boolean>(false);
+
+  // The signed-in member's part in the current round, reported by the
+  // CycleEscrowPanel from the escrow itself (round-member-status.ts).
+  const [roundStatus, setRoundStatus] = useState<RoundMemberStatus>('checking');
 
   // Add a state for tracking if user is current recipient
   const [isCurrentRecipient, setIsCurrentRecipient] = useState<boolean>(false);
@@ -3041,13 +3048,9 @@ export default function ContributeToCircle() {
   const mobileWorkspaceButtonClass =
     'rounded-[18px] border border-stone-200 bg-white px-3 py-3 text-left transition hover:border-stone-300 hover:bg-stone-50 sm:rounded-[20px]';
   const circleStatusLabel = circle?.pausedAfterCycle ? 'Paused' : circle?.isActive ? 'Active' : 'Inactive';
-  const paymentStatusLabel = !userDepositPaid
-    ? 'Deposit required'
-    : userHasContributed
-      ? 'Contributed'
-      : isCurrentRecipient
-        ? 'Recipient'
-        : 'Ready';
+  const roundStatusCopy = roundMemberStatusCopy(roundStatus);
+  const paymentStatusLabel = !userDepositPaid ? 'Deposit required' : roundStatusCopy.label;
+  const paymentStatusDetail = !userDepositPaid ? 'Deposit still required.' : roundStatusCopy.detail;
   const circleModeLabel = isSuiCircleModeEnabled ? 'SUI' : 'USDC';
   const walletSummaryLabel = fetchingBalance ? 'Refreshing' : userAddress ? 'Connected' : 'Not ready';
   const walletSummaryDetail = userAddress
@@ -3115,7 +3118,7 @@ export default function ContributeToCircle() {
   const cycleSummaryDetail = circle?.pausedAfterCycle
     ? 'Paused after payout'
     : circle?.isActive
-      ? 'Payments open'
+      ? roundStatusCopy.roundState
       : 'Waiting for activation';
   const mobilePaymentAmountLabel = !circle
     ? 'Unavailable'
@@ -4122,6 +4125,9 @@ export default function ContributeToCircle() {
                   circleName={circle.name}
                   isAdmin={!!userAddress && circle.admin === userAddress}
                   memberNames={memberNameMap}
+                  adminAddress={circle.admin}
+                  onRoundStatusChange={setRoundStatus}
+                  viewerAddress={userAddress}
                   openCoin={resolveCircleSettlementCoin(circle.autoSwapEnabled)}
                 />
               ) : null}
@@ -4304,7 +4310,7 @@ export default function ContributeToCircle() {
                       <p className={sectionEyebrowClass}>Payment Readiness</p>
                       <p className="mt-3 text-lg font-semibold text-slate-950">{paymentStatusLabel}</p>
                       <p className="mt-2 text-sm text-slate-500">
-                        {!userDepositPaid ? 'Deposit still required.' : userHasContributed ? 'This cycle is already complete for you.' : isCurrentRecipient ? 'No payment required this cycle.' : 'You can continue with payment.'}
+                        {paymentStatusDetail}
                       </p>
                     </div>
                   </div>

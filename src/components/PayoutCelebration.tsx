@@ -22,14 +22,18 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { CheckCircle2, Copy, MessageSquareQuote, PlusCircle, X } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { copyToClipboard, manualCopyMessage } from '@/lib/copy-to-clipboard';
+import { buildShareText } from '@/lib/payout-share-text';
 
 export interface PayoutCelebrationProps {
   open: boolean;
   onClose: () => void;
   /** Formatted amount, e.g. "50 USDC". Circle currency only — no local estimate. */
   amount: string;
-  /** Round number within the rotation, as shown elsewhere in the panel. */
-  cycleNo: number | string;
+  /**
+   * The circle-wide round number (round-number.ts), as the panel header
+   * shows it; '—' when it could not be worked out.
+   */
+  roundNo: number | string;
   circleName?: string;
   circleId: string;
   /** Transaction digest of the claim; used so the moment shows once per payout. */
@@ -39,23 +43,11 @@ export interface PayoutCelebrationProps {
 const QUOTE_MIN = 12;
 const QUOTE_MAX = 600;
 
-export function buildShareText(input: {
-  amount: string;
-  cycleNo: number | string;
-  circleName?: string;
-}): string {
-  const circle = input.circleName ? ` in ${input.circleName}` : '';
-  return (
-    `It's my turn: I just received my circle payout of ${input.amount}` +
-    `${circle}, round ${input.cycleNo}. Nobody held the pot. njangionchain.com`
-  );
-}
-
 export function PayoutCelebration({
   open,
   onClose,
   amount,
-  cycleNo,
+  roundNo,
   circleName,
   circleId,
 }: PayoutCelebrationProps) {
@@ -80,14 +72,14 @@ export function PayoutCelebration({
   }, [open]);
 
   const onCopyCard = useCallback(async () => {
-    const text = buildShareText({ amount, cycleNo, circleName });
+    const text = buildShareText({ amount, roundNo, circleName });
     const outcome = await copyToClipboard(text);
     if (outcome === 'failed') {
       toast(manualCopyMessage('Share text', text), { duration: 8000 });
     } else {
       toast.success('Copied. Paste it wherever you like.');
     }
-  }, [amount, cycleNo, circleName]);
+  }, [amount, roundNo, circleName]);
 
   const onSubmitStory = useCallback(async () => {
     const trimmed = quote.trim();
@@ -170,7 +162,7 @@ export function PayoutCelebration({
                 </div>
                 <div>
                   <dt className="text-[11px] uppercase tracking-[0.14em] text-[#8b8578]">Round</dt>
-                  <dd className="mt-1 text-lg font-semibold text-[#171923]">{cycleNo}</dd>
+                  <dd className="mt-1 text-lg font-semibold text-[#171923]">{roundNo}</dd>
                 </div>
                 {circleName ? (
                   <div className="col-span-2">

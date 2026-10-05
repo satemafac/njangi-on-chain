@@ -44,8 +44,8 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
   en: {
     // Escrow panel
     'escrow.sectionTitle': "This round's pot",
-    'escrow.header.withCircle': '{circle} · round {cycle}',
-    'escrow.header.noCircle': 'Round {cycle}',
+    'escrow.header.withCircle': '{circle} · round {round}',
+    'escrow.header.noCircle': 'Round {round}',
     'escrow.headerBlurb':
       'Everyone pays the same share into the pot. When the pot is full, the next member on the rotation list takes the payout.',
     'escrow.refresh': 'Refresh status',
@@ -67,12 +67,12 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'escrow.roundAlreadyOpen':
       'A pot for this round is already open on the blockchain. Refreshing so you can see it.',
     'escrow.refunded':
-      'Round {cycle} was cancelled and every contribution went back to the member who paid it. The circle admin can open this round again.',
+      'Round {round} was cancelled and every contribution went back to the member who paid it. The circle admin can open this round again.',
     'escrow.reopenRound': 'Open this round again',
     'escrow.refundedExpired':
-      "Round {cycle}'s payout wasn't collected within its 30-day window, so every contribution went back to the member who paid it. The circle admin can open this round again.",
+      "Round {round}'s payout wasn't collected within its 30-day window, so every contribution went back to the member who paid it. The circle admin can open this round again.",
     'escrow.claimExpired':
-      "The window to collect round {cycle}'s payout closed on {date}, so it can no longer be collected. Sending the contributions back gives each member back the share they paid in.",
+      "The window to collect round {round}'s payout closed on {date}, so it can no longer be collected. Sending the contributions back gives each member back the share they paid in.",
     'escrow.action.sendBack': 'Send the contributions back',
     'escrow.action.sendingBack': 'Sending back…',
     'escrow.sendBack.membershipUnknown':
@@ -108,14 +108,15 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
       "This round's pot has already been closed, but the claim that pays it out isn't in this wallet. If it was closed moments ago, refresh in a minute and try again. If it still isn't there, please contact support.",
     'escrow.prompt.someoneElseCollects':
       'The pot is full. {recipient} can collect their payout now.',
+    'escrow.member.circleAdmin': 'Circle admin',
     'escrow.completed.openNextRound':
-      '✓ Round {cycle} complete. {recipient} has collected the payout. The circle admin can open the next round whenever everyone is ready.',
+      '✓ Round {round} complete. {recipient} has collected the payout. The circle admin can open the next round whenever everyone is ready.',
     'escrow.completed.resumeCycle':
-      '✓ Round {cycle} complete. {recipient} has collected the payout, and that was the last member of this rotation, so everyone in it has now been paid once. To continue, the circle admin needs to resume the cycle to start the next lap, then open its first round. Security deposits already posted stay in place, so no one has to post one again.',
+      '✓ Round {round} complete. {recipient} has collected the payout, and that was the last member of this rotation, so everyone in it has now been paid once. To continue, the circle admin needs to resume the cycle to start the next lap, then open its first round. Security deposits already posted stay in place, so no one has to post one again.',
     'escrow.completed.advanceRotation':
-      '✓ Round {cycle} complete. {recipient} has collected the payout, but the circle has not yet moved on to the next member. The circle admin needs to advance the rotation before the next round can open.',
+      '✓ Round {round} complete. {recipient} has collected the payout, but the circle has not yet moved on to the next member. The circle admin needs to advance the rotation before the next round can open.',
     'escrow.completed.unknown':
-      "✓ Round {cycle} complete. {recipient} has collected the payout. We couldn't confirm this circle's next step, so none is shown yet.",
+      "✓ Round {round} complete. {recipient} has collected the payout. We couldn't confirm this circle's next step, so none is shown yet.",
     'escrow.lastTx': 'Last transaction: {digest}',
     // Toasts
     'toast.roundOpened': 'This round is now open — members can pay their share.',
@@ -136,7 +137,9 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
       'Everyone in {circle} has paid. Your payout of {amount} is ready — tap to send it to your wallet.',
     'alerts.adminOpenRound.title': 'Ready to start the next round?',
     'alerts.adminOpenRound.body':
-      'The previous round finished. Open round {cycle} in {circle} so members can start paying.',
+      'The previous round finished. Open round {round} in {circle} so members can start paying.',
+    'alerts.adminOpenRound.bodyNextRound':
+      'The previous round finished. Open the next round in {circle} so members can start paying.',
     // Shared navigation / chrome
     'nav.learn': 'Learn',
     'nav.faq': 'FAQ',
@@ -552,8 +555,8 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
   fr: {
     // Escrow panel
     'escrow.sectionTitle': 'La cagnotte de ce tour',
-    'escrow.header.withCircle': '{circle} · tour {cycle}',
-    'escrow.header.noCircle': 'Tour {cycle}',
+    'escrow.header.withCircle': '{circle} · tour {round}',
+    'escrow.header.noCircle': 'Tour {round}',
     'escrow.headerBlurb':
       "Chaque membre verse la même part dans la cagnotte. Quand la cagnotte est complète, c'est au tour du prochain membre de recevoir le versement.",
     'escrow.refresh': 'Actualiser',
@@ -575,12 +578,12 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'escrow.roundAlreadyOpen':
       'Une cagnotte est déjà ouverte pour ce tour sur la blockchain. Actualisation pour vous la montrer.',
     'escrow.refunded':
-      "Le tour {cycle} a été annulé et chaque versement est revenu au membre qui l'avait fait. L'administrateur du cercle peut rouvrir ce tour.",
+      "Le tour {round} a été annulé et chaque versement est revenu au membre qui l'avait fait. L'administrateur du cercle peut rouvrir ce tour.",
     'escrow.reopenRound': 'Rouvrir ce tour',
     'escrow.refundedExpired':
-      "Le versement du tour {cycle} n'a pas été récupéré dans le délai de 30 jours : chaque contribution est revenue au membre qui l'avait versée. L'administrateur du cercle peut rouvrir ce tour.",
+      "Le versement du tour {round} n'a pas été récupéré dans le délai de 30 jours : chaque contribution est revenue au membre qui l'avait versée. L'administrateur du cercle peut rouvrir ce tour.",
     'escrow.claimExpired':
-      "Le délai pour récupérer le versement du tour {cycle} a pris fin le {date} : il ne peut plus être récupéré. Renvoyer les contributions rend à chaque membre la part qu'il a versée.",
+      "Le délai pour récupérer le versement du tour {round} a pris fin le {date} : il ne peut plus être récupéré. Renvoyer les contributions rend à chaque membre la part qu'il a versée.",
     'escrow.action.sendBack': 'Renvoyer les contributions',
     'escrow.action.sendingBack': 'Renvoi en cours…',
     'escrow.sendBack.membershipUnknown':
@@ -618,14 +621,15 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
       "La cagnotte de ce tour a déjà été clôturée, mais le bon qui permet de la récupérer n'est pas dans ce portefeuille. Si elle vient d'être clôturée, actualisez dans une minute et réessayez. S'il n'y est toujours pas, contactez l'assistance.",
     'escrow.prompt.someoneElseCollects':
       'La cagnotte est complète. {recipient} peut récupérer son versement maintenant.',
+    'escrow.member.circleAdmin': "L'administrateur du cercle",
     'escrow.completed.openNextRound':
-      '✓ Tour {cycle} terminé. {recipient} a récupéré le versement. L\'administrateur peut ouvrir le prochain tour quand tout le monde est prêt.',
+      '✓ Tour {round} terminé. {recipient} a récupéré le versement. L\'administrateur peut ouvrir le prochain tour quand tout le monde est prêt.',
     'escrow.completed.resumeCycle':
-      "✓ Tour {cycle} terminé. {recipient} a récupéré le versement, et c'était le dernier membre de cette rotation, donc tous ses membres ont maintenant été payés une fois. Ensuite, l'administrateur doit reprendre le cycle pour démarrer une nouvelle rotation, puis en ouvrir le premier tour. Les dépôts de garantie déjà versés restent en place : personne n'a à en verser un autre.",
+      "✓ Tour {round} terminé. {recipient} a récupéré le versement, et c'était le dernier membre de cette rotation, donc tous ses membres ont maintenant été payés une fois. Ensuite, l'administrateur doit reprendre le cycle pour démarrer une nouvelle rotation, puis en ouvrir le premier tour. Les dépôts de garantie déjà versés restent en place : personne n'a à en verser un autre.",
     'escrow.completed.advanceRotation':
-      "✓ Tour {cycle} terminé. {recipient} a récupéré le versement, mais le cercle n'est pas encore passé au membre suivant. L'administrateur doit faire avancer la rotation avant que le prochain tour puisse être ouvert.",
+      "✓ Tour {round} terminé. {recipient} a récupéré le versement, mais le cercle n'est pas encore passé au membre suivant. L'administrateur doit faire avancer la rotation avant que le prochain tour puisse être ouvert.",
     'escrow.completed.unknown':
-      "✓ Tour {cycle} terminé. {recipient} a récupéré le versement. Nous n'avons pas pu confirmer la prochaine étape pour ce cercle, donc aucune n'est affichée pour le moment.",
+      "✓ Tour {round} terminé. {recipient} a récupéré le versement. Nous n'avons pas pu confirmer la prochaine étape pour ce cercle, donc aucune n'est affichée pour le moment.",
     'escrow.lastTx': 'Dernière transaction : {digest}',
     // Toasts
     'toast.roundOpened':
@@ -647,7 +651,9 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
       "Tous les membres de {circle} ont payé. Votre versement de {amount} est prêt — appuyez pour l'envoyer à votre portefeuille.",
     'alerts.adminOpenRound.title': 'Prêt à lancer le prochain tour ?',
     'alerts.adminOpenRound.body':
-      "Le tour précédent est terminé. Ouvrez le tour {cycle} dans {circle} pour que les membres puissent commencer à verser.",
+      "Le tour précédent est terminé. Ouvrez le tour {round} dans {circle} pour que les membres puissent commencer à verser.",
+    'alerts.adminOpenRound.bodyNextRound':
+      'Le tour précédent est terminé. Ouvrez le tour suivant dans {circle} pour que les membres puissent commencer à verser.',
     // Navigation partagée / habillage
     'nav.learn': 'Découvrir',
     'nav.faq': 'FAQ',
@@ -1058,8 +1064,8 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
   pcm: {
     // Escrow panel — Nigerian / Cameroonian Pidgin
     'escrow.sectionTitle': 'Di pot for dis round',
-    'escrow.header.withCircle': '{circle} · round {cycle}',
-    'escrow.header.noCircle': 'Round {cycle}',
+    'escrow.header.withCircle': '{circle} · round {round}',
+    'escrow.header.noCircle': 'Round {round}',
     'escrow.headerBlurb':
       'Everybody dey pay di same share inside di pot. When di pot don full, na di next person for di list go collect.',
     'escrow.refresh': 'Check again',
@@ -1094,14 +1100,15 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'escrow.action.collecting': 'Dey collect…',
     'escrow.prompt.someoneElseCollects':
       'Di pot don full. {recipient} go fit collect dem payout now.',
+    'escrow.member.circleAdmin': 'Circle admin',
     'escrow.completed.openNextRound':
-      '✓ Round {cycle} don finish. {recipient} don collect di payout. Admin fit open di next round when everybody ready.',
+      '✓ Round {round} don finish. {recipient} don collect di payout. Admin fit open di next round when everybody ready.',
     'escrow.completed.resumeCycle':
-      '✓ Round {cycle} don finish. {recipient} don collect di payout, and na di last person for dis rotation be dat: everybody for di rotation don collect one time. Now di admin need to resume di cycle make di next lap start, then open di first round. Security deposit wey people don already pay still dey dia, so nobody go need pay am again.',
+      '✓ Round {round} don finish. {recipient} don collect di payout, and na di last person for dis rotation be dat: everybody for di rotation don collect one time. Now di admin need to resume di cycle make di next lap start, then open di first round. Security deposit wey people don already pay still dey dia, so nobody go need pay am again.',
     'escrow.completed.advanceRotation':
-      '✓ Round {cycle} don finish. {recipient} don collect di payout, but di circle neva move go di next person. Di admin need to advance di rotation before di next round fit open.',
+      '✓ Round {round} don finish. {recipient} don collect di payout, but di circle neva move go di next person. Di admin need to advance di rotation before di next round fit open.',
     'escrow.completed.unknown':
-      '✓ Round {cycle} don finish. {recipient} don collect di payout. We no fit confirm di next step for dis circle, so we neva show any step.',
+      '✓ Round {round} don finish. {recipient} don collect di payout. We no fit confirm di next step for dis circle, so we neva show any step.',
     'escrow.lastTx': 'Last transaction: {digest}',
     'toast.roundOpened': 'Di round don open — members fit pay dem share now.',
     'toast.sharePaid': 'Thanks! Your share dey inside di pot.',
@@ -1116,13 +1123,15 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
       'Everybody for {circle} don pay. Your payout of {amount} don ready — tap make e enter your wallet.',
     'alerts.adminOpenRound.title': 'You ready to start di next round?',
     'alerts.adminOpenRound.body':
-      'Di last round don finish. Open round {cycle} for {circle} make members fit start to pay.',
+      'Di last round don finish. Open round {round} for {circle} make members fit start to pay.',
+    'alerts.adminOpenRound.bodyNextRound':
+      'Di last round don finish. Open di next round for {circle} make members fit start to pay.',
   },
   sw: {
     // Escrow panel — Kiswahili
     'escrow.sectionTitle': 'Kibanda cha raundi hii',
-    'escrow.header.withCircle': '{circle} · raundi {cycle}',
-    'escrow.header.noCircle': 'Raundi {cycle}',
+    'escrow.header.withCircle': '{circle} · raundi {round}',
+    'escrow.header.noCircle': 'Raundi {round}',
     'escrow.headerBlurb':
       'Kila mwanachama hulipa mchango sawa kwenye kibanda. Kibanda kikijaa, mwanachama anayefuata kwenye orodha huchukua malipo.',
     'escrow.refresh': 'Angalia tena',
@@ -1154,14 +1163,15 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'escrow.action.collecting': 'Inakusanya…',
     'escrow.prompt.someoneElseCollects':
       'Kibanda kimejaa. {recipient} anaweza kuchukua malipo yake sasa.',
+    'escrow.member.circleAdmin': 'Msimamizi wa duara',
     'escrow.completed.openNextRound':
-      '✓ Raundi {cycle} imekamilika. {recipient} amechukua malipo. Msimamizi anaweza kufungua raundi inayofuata wakati wote wako tayari.',
+      '✓ Raundi {round} imekamilika. {recipient} amechukua malipo. Msimamizi anaweza kufungua raundi inayofuata wakati wote wako tayari.',
     'escrow.completed.resumeCycle':
-      '✓ Raundi {cycle} imekamilika. {recipient} amechukua malipo, na huyo alikuwa mwanachama wa mwisho wa mzunguko huu, hivyo kila mwanachama wake sasa amelipwa mara moja. Hatua inayofuata: msimamizi anahitaji kuendeleza mzunguko ili mzunguko mpya uanze, kisha kufungua raundi yake ya kwanza. Dhamana za usalama zilizokwisha kuwekwa zinabaki palepale, kwa hivyo hakuna atakayehitaji kuweka dhamana tena.',
+      '✓ Raundi {round} imekamilika. {recipient} amechukua malipo, na huyo alikuwa mwanachama wa mwisho wa mzunguko huu, hivyo kila mwanachama wake sasa amelipwa mara moja. Hatua inayofuata: msimamizi anahitaji kuendeleza mzunguko ili mzunguko mpya uanze, kisha kufungua raundi yake ya kwanza. Dhamana za usalama zilizokwisha kuwekwa zinabaki palepale, kwa hivyo hakuna atakayehitaji kuweka dhamana tena.',
     'escrow.completed.advanceRotation':
-      '✓ Raundi {cycle} imekamilika. {recipient} amechukua malipo, lakini duara bado halijasonga kwa mwanachama anayefuata. Msimamizi anahitaji kusogeza mzunguko mbele kabla ya raundi inayofuata kufunguliwa.',
+      '✓ Raundi {round} imekamilika. {recipient} amechukua malipo, lakini duara bado halijasonga kwa mwanachama anayefuata. Msimamizi anahitaji kusogeza mzunguko mbele kabla ya raundi inayofuata kufunguliwa.',
     'escrow.completed.unknown':
-      '✓ Raundi {cycle} imekamilika. {recipient} amechukua malipo. Hatukuweza kuthibitisha hatua inayofuata ya duara hili, kwa hivyo hakuna hatua inayoonyeshwa bado.',
+      '✓ Raundi {round} imekamilika. {recipient} amechukua malipo. Hatukuweza kuthibitisha hatua inayofuata ya duara hili, kwa hivyo hakuna hatua inayoonyeshwa bado.',
     'escrow.lastTx': 'Muamala wa mwisho: {digest}',
     'toast.roundOpened': 'Raundi imefunguliwa — wanachama wanaweza kulipa mchango wao.',
     'toast.sharePaid': 'Asante! Mchango wako uko kwenye kibanda.',
@@ -1176,14 +1186,16 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
       'Wanachama wote wa {circle} wameshalipa. Malipo yako ya {amount} yako tayari — bofya yaende kwenye pochi yako.',
     'alerts.adminOpenRound.title': 'Uko tayari kuanza raundi inayofuata?',
     'alerts.adminOpenRound.body':
-      'Raundi iliyopita imekwisha. Fungua raundi {cycle} kwenye {circle} ili wanachama waanze kulipa.',
+      'Raundi iliyopita imekwisha. Fungua raundi {round} kwenye {circle} ili wanachama waanze kulipa.',
+    'alerts.adminOpenRound.bodyNextRound':
+      'Raundi iliyopita imekwisha. Fungua raundi inayofuata kwenye {circle} ili wanachama waanze kulipa.',
   },
   am: {
     // Escrow panel — Amharic (አማርኛ). LTR, Ge'ez script. Polish pass by
     // a native speaker encouraged before production rollout.
     'escrow.sectionTitle': 'የዚህ ዙር ገንዘብ',
-    'escrow.header.withCircle': '{circle} · ዙር {cycle}',
-    'escrow.header.noCircle': 'ዙር {cycle}',
+    'escrow.header.withCircle': '{circle} · ዙር {round}',
+    'escrow.header.noCircle': 'ዙር {round}',
     'escrow.headerBlurb':
       'እያንዳንዱ አባል ተመሳሳይ መጠን ወደ ገንዘቡ ያስገባል። ገንዘቡ ሲሞላ፣ በመዞሪያው ዝርዝር ላይ ያለው ቀጣይ አባል ክፍያውን ይወስዳል።',
     'escrow.refresh': 'እንደገና ያረጋግጡ',
@@ -1214,14 +1226,15 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'escrow.action.collecting': 'በመሰብሰብ ላይ…',
     'escrow.prompt.someoneElseCollects':
       'ገንዘቡ ሞልቷል። {recipient} አሁን ክፍያውን ሊወስድ ይችላል።',
+    'escrow.member.circleAdmin': 'የክበቡ አስተዳዳሪ',
     'escrow.completed.openNextRound':
-      '✓ ዙር {cycle} ተጠናቅቋል። {recipient} ክፍያውን ወስዷል። ሁሉም ሲዘጋጅ አስተዳዳሪው ቀጣዩን ዙር ሊከፍት ይችላል።',
+      '✓ ዙር {round} ተጠናቅቋል። {recipient} ክፍያውን ወስዷል። ሁሉም ሲዘጋጅ አስተዳዳሪው ቀጣዩን ዙር ሊከፍት ይችላል።',
     'escrow.completed.resumeCycle':
-      '✓ ዙር {cycle} ተጠናቅቋል። {recipient} ክፍያውን ወስዷል፣ እሱም የዚህ መዞሪያ የመጨረሻ አባል ነበር፤ በዚህም በዚህ መዞሪያ ውስጥ ያሉ ሁሉም አሁን አንድ ጊዜ ተከፍለዋል። በመቀጠል አስተዳዳሪው ቀጣዩን መዞሪያ ለመጀመር ዑደቱን መቀጠል፣ ከዚያም የመጀመሪያ ዙሩን መክፈት አለበት። አስቀድመው የገቡ የዋስትና ተቀማጮች ባሉበት ይቆያሉ፤ ስለዚህ ማንም እንደገና ተቀማጭ ማስገባት አያስፈልገውም።',
+      '✓ ዙር {round} ተጠናቅቋል። {recipient} ክፍያውን ወስዷል፣ እሱም የዚህ መዞሪያ የመጨረሻ አባል ነበር፤ በዚህም በዚህ መዞሪያ ውስጥ ያሉ ሁሉም አሁን አንድ ጊዜ ተከፍለዋል። በመቀጠል አስተዳዳሪው ቀጣዩን መዞሪያ ለመጀመር ዑደቱን መቀጠል፣ ከዚያም የመጀመሪያ ዙሩን መክፈት አለበት። አስቀድመው የገቡ የዋስትና ተቀማጮች ባሉበት ይቆያሉ፤ ስለዚህ ማንም እንደገና ተቀማጭ ማስገባት አያስፈልገውም።',
     'escrow.completed.advanceRotation':
-      '✓ ዙር {cycle} ተጠናቅቋል። {recipient} ክፍያውን ወስዷል፣ ነገር ግን ክበቡ ገና ወደ ቀጣዩ አባል አልተሸጋገረም። ቀጣዩ ዙር ከመከፈቱ በፊት አስተዳዳሪው መዞሪያውን ማራመድ አለበት።',
+      '✓ ዙር {round} ተጠናቅቋል። {recipient} ክፍያውን ወስዷል፣ ነገር ግን ክበቡ ገና ወደ ቀጣዩ አባል አልተሸጋገረም። ቀጣዩ ዙር ከመከፈቱ በፊት አስተዳዳሪው መዞሪያውን ማራመድ አለበት።',
     'escrow.completed.unknown':
-      '✓ ዙር {cycle} ተጠናቅቋል። {recipient} ክፍያውን ወስዷል። የዚህን ክበብ ቀጣይ እርምጃ ማረጋገጥ አልቻልንም፣ ስለዚህ ገና ምንም እርምጃ አልታየም።',
+      '✓ ዙር {round} ተጠናቅቋል። {recipient} ክፍያውን ወስዷል። የዚህን ክበብ ቀጣይ እርምጃ ማረጋገጥ አልቻልንም፣ ስለዚህ ገና ምንም እርምጃ አልታየም።',
     'escrow.lastTx': 'የመጨረሻ ግብይት: {digest}',
     'toast.roundOpened': 'ዙሩ ተከፍቷል — አባላት አሁን ድርሻቸውን ሊከፍሉ ይችላሉ።',
     'toast.sharePaid': 'እናመሰግናለን! ድርሻዎ በገንዘቡ ውስጥ ነው።',
@@ -1236,13 +1249,15 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
       'የ {circle} አባላት ሁሉ ከፍለዋል። የ {amount} ክፍያዎ ተዘጋጅቷል — ወደ ኪስ ቦርሳዎ ለመላክ ይጫኑ።',
     'alerts.adminOpenRound.title': 'ቀጣዩን ዙር ለመጀመር ዝግጁ ነዎት?',
     'alerts.adminOpenRound.body':
-      'ያለፈው ዙር ተጠናቅቋል። አባላት መክፈል እንዲጀምሩ በ {circle} ውስጥ ዙር {cycle}ን ይክፈቱ።',
+      'ያለፈው ዙር ተጠናቅቋል። አባላት መክፈል እንዲጀምሩ በ {circle} ውስጥ ዙር {round}ን ይክፈቱ።',
+    'alerts.adminOpenRound.bodyNextRound':
+      'ያለፈው ዙር ተጠናቅቋል። አባላት መክፈል እንዲጀምሩ በ {circle} ውስጥ ቀጣዩን ዙር ይክፈቱ።',
   },
   ar: {
     // Escrow panel — Arabic (العربية). RTL; LocaleDirSync flips html dir.
     'escrow.sectionTitle': 'صندوق هذه الجولة',
-    'escrow.header.withCircle': '{circle} · الجولة {cycle}',
-    'escrow.header.noCircle': 'الجولة {cycle}',
+    'escrow.header.withCircle': '{circle} · الجولة {round}',
+    'escrow.header.noCircle': 'الجولة {round}',
     'escrow.headerBlurb':
       'يدفع كل عضو الحصة نفسها في الصندوق. عندما يمتلئ الصندوق، يستلم العضو التالي في قائمة الدوران المبلغ.',
     'escrow.refresh': 'تحديث الحالة',
@@ -1272,14 +1287,15 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'escrow.action.collecting': 'جاري الاستلام…',
     'escrow.prompt.someoneElseCollects':
       'الصندوق ممتلئ. يمكن لـ {recipient} استلام مستحقاته الآن.',
+    'escrow.member.circleAdmin': 'مشرف الدائرة',
     'escrow.completed.openNextRound':
-      '✓ اكتملت الجولة {cycle}. لقد استلم {recipient} المستحقات. يمكن للمشرف فتح الجولة التالية عندما يكون الجميع جاهزاً.',
+      '✓ اكتملت الجولة {round}. لقد استلم {recipient} المستحقات. يمكن للمشرف فتح الجولة التالية عندما يكون الجميع جاهزاً.',
     'escrow.completed.resumeCycle':
-      '✓ اكتملت الجولة {cycle}. لقد استلم {recipient} المستحقات، وكان آخر عضو في هذا الدوران، لذا حصل كل أعضائه الآن على مستحقاتهم مرة واحدة. بعد ذلك، يحتاج المشرف إلى استئناف الدورة لبدء الدوران التالي، ثم فتح جولته الأولى. تبقى ودائع الضمان المدفوعة مسبقاً في مكانها، فلا يتعيّن على أحد دفع وديعة مرة أخرى.',
+      '✓ اكتملت الجولة {round}. لقد استلم {recipient} المستحقات، وكان آخر عضو في هذا الدوران، لذا حصل كل أعضائه الآن على مستحقاتهم مرة واحدة. بعد ذلك، يحتاج المشرف إلى استئناف الدورة لبدء الدوران التالي، ثم فتح جولته الأولى. تبقى ودائع الضمان المدفوعة مسبقاً في مكانها، فلا يتعيّن على أحد دفع وديعة مرة أخرى.',
     'escrow.completed.advanceRotation':
-      '✓ اكتملت الجولة {cycle}. لقد استلم {recipient} المستحقات، لكن الدائرة لم تنتقل بعد إلى العضو التالي. يحتاج المشرف إلى تقديم الدوران قبل أن يمكن فتح الجولة التالية.',
+      '✓ اكتملت الجولة {round}. لقد استلم {recipient} المستحقات، لكن الدائرة لم تنتقل بعد إلى العضو التالي. يحتاج المشرف إلى تقديم الدوران قبل أن يمكن فتح الجولة التالية.',
     'escrow.completed.unknown':
-      '✓ اكتملت الجولة {cycle}. لقد استلم {recipient} المستحقات. لم نتمكن من التأكد من الخطوة التالية لهذه الدائرة، لذا لا تُعرض أي خطوة بعد.',
+      '✓ اكتملت الجولة {round}. لقد استلم {recipient} المستحقات. لم نتمكن من التأكد من الخطوة التالية لهذه الدائرة، لذا لا تُعرض أي خطوة بعد.',
     'escrow.lastTx': 'آخر معاملة: {digest}',
     'toast.roundOpened': 'الجولة مفتوحة الآن — يمكن للأعضاء دفع حصتهم.',
     'toast.sharePaid': 'شكراً لك! حصتك في الصندوق.',
@@ -1294,13 +1310,15 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
       'لقد دفع جميع أعضاء {circle}. مستحقاتك البالغة {amount} جاهزة — اضغط لإرسالها إلى محفظتك.',
     'alerts.adminOpenRound.title': 'هل أنت جاهز لبدء الجولة التالية؟',
     'alerts.adminOpenRound.body':
-      'انتهت الجولة السابقة. افتح الجولة {cycle} في {circle} ليبدأ الأعضاء بالدفع.',
+      'انتهت الجولة السابقة. افتح الجولة {round} في {circle} ليبدأ الأعضاء بالدفع.',
+    'alerts.adminOpenRound.bodyNextRound':
+      'انتهت الجولة السابقة. افتح الجولة التالية في {circle} ليبدأ الأعضاء بالدفع.',
   },
   fa: {
     // Escrow panel — Persian / Farsi (فارسی). RTL.
     'escrow.sectionTitle': 'صندوق این دور',
-    'escrow.header.withCircle': '{circle} · دور {cycle}',
-    'escrow.header.noCircle': 'دور {cycle}',
+    'escrow.header.withCircle': '{circle} · دور {round}',
+    'escrow.header.noCircle': 'دور {round}',
     'escrow.headerBlurb':
       'هر عضو سهم یکسانی به صندوق پرداخت می‌کند. وقتی صندوق پر شد، نفر بعدی در لیست چرخش مبلغ را دریافت می‌کند.',
     'escrow.refresh': 'به‌روزرسانی وضعیت',
@@ -1330,14 +1348,15 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'escrow.action.collecting': 'در حال دریافت…',
     'escrow.prompt.someoneElseCollects':
       'صندوق پر است. {recipient} اکنون می‌تواند مبلغ خود را دریافت کند.',
+    'escrow.member.circleAdmin': 'مدیر حلقه',
     'escrow.completed.openNextRound':
-      '✓ دور {cycle} به پایان رسید. {recipient} مبلغ را دریافت کرده است. مدیر می‌تواند هر زمان که همه آماده بودند دور بعدی را باز کند.',
+      '✓ دور {round} به پایان رسید. {recipient} مبلغ را دریافت کرده است. مدیر می‌تواند هر زمان که همه آماده بودند دور بعدی را باز کند.',
     'escrow.completed.resumeCycle':
-      '✓ دور {cycle} به پایان رسید. {recipient} مبلغ را دریافت کرده است و آخرین عضو این چرخش بود، پس اکنون همه اعضای آن یک بار مبلغ خود را گرفته‌اند. در گام بعد، مدیر باید چرخه را از سر بگیرد تا چرخش بعدی آغاز شود و سپس نخستین دور آن را باز کند. سپرده‌های تضمینی که پیش‌تر گذاشته شده‌اند سر جای خود می‌مانند، بنابراین لازم نیست کسی دوباره سپرده بگذارد.',
+      '✓ دور {round} به پایان رسید. {recipient} مبلغ را دریافت کرده است و آخرین عضو این چرخش بود، پس اکنون همه اعضای آن یک بار مبلغ خود را گرفته‌اند. در گام بعد، مدیر باید چرخه را از سر بگیرد تا چرخش بعدی آغاز شود و سپس نخستین دور آن را باز کند. سپرده‌های تضمینی که پیش‌تر گذاشته شده‌اند سر جای خود می‌مانند، بنابراین لازم نیست کسی دوباره سپرده بگذارد.',
     'escrow.completed.advanceRotation':
-      '✓ دور {cycle} به پایان رسید. {recipient} مبلغ را دریافت کرده است، اما حلقه هنوز به عضو بعدی نرفته است. مدیر باید پیش از باز شدن دور بعدی، چرخش را جلو ببرد.',
+      '✓ دور {round} به پایان رسید. {recipient} مبلغ را دریافت کرده است، اما حلقه هنوز به عضو بعدی نرفته است. مدیر باید پیش از باز شدن دور بعدی، چرخش را جلو ببرد.',
     'escrow.completed.unknown':
-      '✓ دور {cycle} به پایان رسید. {recipient} مبلغ را دریافت کرده است. نتوانستیم گام بعدی این حلقه را مشخص کنیم، بنابراین هنوز گامی نمایش داده نمی‌شود.',
+      '✓ دور {round} به پایان رسید. {recipient} مبلغ را دریافت کرده است. نتوانستیم گام بعدی این حلقه را مشخص کنیم، بنابراین هنوز گامی نمایش داده نمی‌شود.',
     'escrow.lastTx': 'آخرین تراکنش: {digest}',
     'toast.roundOpened': 'دور باز شد — اعضا اکنون می‌توانند سهم خود را پرداخت کنند.',
     'toast.sharePaid': 'ممنون! سهم شما در صندوق است.',
@@ -1352,7 +1371,9 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
       'همه اعضای {circle} پرداخت کرده‌اند. مبلغ {amount} شما آماده است — برای ارسال به کیف‌پول بزنید.',
     'alerts.adminOpenRound.title': 'برای شروع دور بعدی آماده‌اید؟',
     'alerts.adminOpenRound.body':
-      'دور قبلی به پایان رسید. دور {cycle} را در {circle} باز کنید تا اعضا شروع به پرداخت کنند.',
+      'دور قبلی به پایان رسید. دور {round} را در {circle} باز کنید تا اعضا شروع به پرداخت کنند.',
+    'alerts.adminOpenRound.bodyNextRound':
+      'دور قبلی به پایان رسید. دور بعدی را در {circle} باز کنید تا اعضا شروع به پرداخت کنند.',
   },
 };
 

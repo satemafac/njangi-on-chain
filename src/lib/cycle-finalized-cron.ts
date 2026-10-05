@@ -274,6 +274,12 @@ export interface YourTurnEscrow {
   coinType: string;
   /** The round's scheduled payout recipient, from the snapshot. */
   recipient: string;
+  /**
+   * The snapshot's member list, in rotation order: with the recipient and
+   * the event's cycle_no it numbers the round (round-number.ts). Null when
+   * the node left it out; the nudge then names no round.
+   */
+  members: string[] | null;
   /** Payers the finalize gate requires: every member except the recipient. */
   requiredContributors: number;
   /** The recipient already collected (finalize_and_redeem or redeem_claim). */
@@ -335,7 +341,12 @@ export function parseYourTurnEscrow(objectResponse: unknown): YourTurnEscrow | n
   ) {
     return null;
   }
-  return { circleId, coinType, recipient, requiredContributors, claimed, refunded };
+  const membersRaw = snapshot?.members;
+  const members =
+    Array.isArray(membersRaw) && membersRaw.every((m) => typeof m === 'string')
+      ? (membersRaw as string[])
+      : null;
+  return { circleId, coinType, recipient, members, requiredContributors, claimed, refunded };
 }
 
 export type YourTurnSkipReason = 'not_pot_filling' | 'already_collected' | 'refunded';

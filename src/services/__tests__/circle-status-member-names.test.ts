@@ -25,6 +25,7 @@ jest.mock('@/services/join-request-database', () => ({
 import {
   formatCircleStatusForWhatsAppWithNames,
   type CircleStatusData,
+  formatRoundLine,
 } from '@/services/circle-status.service';
 import joinRequestDatabase from '@/services/join-request-database';
 
@@ -38,6 +39,7 @@ function status(): CircleStatusData {
     admin: NAMED,
     isActive: true,
     currentCycle: 1,
+    currentRound: 1,
     maxMembers: 5,
     currentMembers: 2,
     contributionAmount: 10,
@@ -90,5 +92,21 @@ describe('formatCircleStatusForWhatsAppWithNames', () => {
 
     expect(text).toContain('Susu');
     expect(text).not.toContain('Aminata');
+  });
+});
+
+describe('formatRoundLine', () => {
+  // current_cycle counts laps: the 3-member production circle's 17th round
+  // sits in lap 6 and used to print "Round 6" like every round of that lap.
+  it('prints the circle-wide round with its lap', () => {
+    expect(formatRoundLine({ currentCycle: 6, currentRound: 17 })).toBe('*Round:* 17 (lap 6)');
+  });
+
+  it('falls back to the lap alone, never calling it a round', () => {
+    expect(formatRoundLine({ currentCycle: 6, currentRound: null })).toBe('*Lap:* 6');
+  });
+
+  it('says a circle that has not started has not started', () => {
+    expect(formatRoundLine({ currentCycle: 0, currentRound: null })).toBe('*Round:* Not started');
   });
 });

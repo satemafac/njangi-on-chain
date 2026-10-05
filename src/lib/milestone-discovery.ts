@@ -13,6 +13,7 @@ import { getPublishedPackageMetadata } from './circle-chain';
 import { getPooledSuiClient } from '../services/sui-rpc-failover';
 import { getCircleConfigFields } from './circle-config';
 import { readCycleEscrowState } from './cycle-escrow-discovery';
+import { roundNumber } from './round-number';
 
 // Mirrors njangi_core::MILESTONE_TYPE_* (move/sources/njangi_core.move).
 export const MILESTONE_KIND_MONETARY = 0;
@@ -502,7 +503,10 @@ export interface CircleEscrowEventRef {
 /** A settled (claimed) escrow the goal tracker hasn't credited yet. */
 export interface UncountedEscrow {
   escrowId: string;
+  /** The snapshot's cycle_no: a lap, shared by every round in it. */
   cycleNo: number;
+  /** The circle-wide round number shown to people (round-number.ts). */
+  roundNo: number | null;
 }
 
 /**
@@ -608,9 +612,11 @@ export async function findUncountedEscrows(
     try {
       const live = await readCycleEscrowState(event.escrowId, network, client);
       if (!live?.claimed) continue;
+      const cycleNo = live.cycleNo || event.cycleNo;
       uncounted.push({
         escrowId: event.escrowId,
-        cycleNo: live.cycleNo || event.cycleNo,
+        cycleNo,
+        roundNo: roundNumber({ cycleNo, recipient: live.recipient, members: live.members }),
       });
     } catch (err) {
       console.warn(

@@ -635,7 +635,8 @@ describe('findUncountedEscrows', () => {
       '0xc1',
       '0xtable',
     );
-    expect(uncounted).toEqual([{ escrowId: '0xesc2', cycleNo: 2 }]);
+    // These states carry no seats, so the round cannot be numbered.
+    expect(uncounted).toEqual([{ escrowId: '0xesc2', cycleNo: 2, roundNo: null }]);
     // Credited escrows never get a state read.
     expect(readEscrowState).toHaveBeenCalledTimes(2);
     expect(readEscrowState).toHaveBeenNthCalledWith(1, '0xesc2', 'testnet', escrowClient);
@@ -660,9 +661,25 @@ describe('findUncountedEscrows', () => {
       '0xtable',
     );
     expect(uncounted).toEqual([
-      { escrowId: '0xesc1', cycleNo: 1 },
-      { escrowId: '0xesc2', cycleNo: 2 },
+      { escrowId: '0xesc1', cycleNo: 1, roundNo: null },
+      { escrowId: '0xesc2', cycleNo: 2, roundNo: null },
     ]);
+  });
+
+  it('numbers each straggler circle-wide, not by its lap', async () => {
+    const a = '0x' + 'a1'.repeat(32);
+    const b = '0x' + 'b2'.repeat(32);
+    const c = '0x' + 'c3'.repeat(32);
+    queryEvents.mockResolvedValueOnce({
+      data: [openedEvent('0xesc1', '2')],
+      hasNextPage: false,
+      nextCursor: null,
+    });
+    getDynamicFieldObject.mockResolvedValue({ error: { code: 'dynamicFieldNotFound' } });
+    // Lap 2, second of three seats: the circle's fifth round.
+    readEscrowState.mockResolvedValueOnce({ claimed: true, cycleNo: 2, recipient: b, members: [a, b, c] });
+    const uncounted = await findUncountedEscrows(escrowClient, 'testnet', '0xc1', '0xtable');
+    expect(uncounted).toEqual([{ escrowId: '0xesc1', cycleNo: 2, roundNo: 5 }]);
   });
 
   it('skips escrows with UNKNOWN credited status rather than inviting an abort', async () => {
@@ -702,7 +719,7 @@ describe('findUncountedEscrows', () => {
         '0xc1',
         '0xtable',
       );
-      expect(uncounted).toEqual([{ escrowId: '0xesc2', cycleNo: 2 }]);
+      expect(uncounted).toEqual([{ escrowId: '0xesc2', cycleNo: 2, roundNo: null }]);
     } finally {
       warn.mockRestore();
     }

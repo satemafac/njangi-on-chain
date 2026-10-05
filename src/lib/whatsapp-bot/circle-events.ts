@@ -37,6 +37,7 @@
 
 import type { WhatsAppTemplatePayload } from '../whatsapp-notifier';
 import { buildLinkConfirmation } from '../../content/whatsapp-updates';
+import { roundNumber } from '../round-number';
 
 // ---------------------------------------------------------------------------
 // Amount formatting (ported from the bot's formatTokenAmount helpers)
@@ -157,6 +158,22 @@ export interface EscrowSubject {
   coinType: string;
   /** Members who pay into the round (all but the recipient); null if unreadable. */
   requiredContributors: number | null;
+  /** The snapshot's recipient; null if unreadable. */
+  recipient: string | null;
+  /** The snapshot's member list in rotation order; null if unreadable. */
+  members: string[] | null;
+}
+
+/**
+ * The round's circle-wide number (round-number.ts) for an escrow event: the
+ * event's cycle_no counts laps, so it is placed with the snapshot's
+ * recipient and member list. Null leaves "Round N:" out of the message.
+ */
+function eventRound(cycleNo: unknown, escrow: EscrowSubject): number | null {
+  const lap = parseNumericField(cycleNo);
+  return lap === null
+    ? null
+    : roundNumber({ cycleNo: lap, recipient: escrow.recipient, members: escrow.members });
 }
 
 export interface CircleEventStream {
@@ -221,10 +238,17 @@ export function parseEscrowSubject(objectResponse: unknown): EscrowSubject | nul
   // Nested structs arrive as { type, fields }; u64s arrive as strings.
   const snapshot = asRecord(fields?.snapshot);
   const snapshotFields = asRecord(snapshot?.fields) ?? snapshot;
+  const recipient = snapshotFields ? stringField(snapshotFields, 'recipient') : null;
+  const membersRaw = snapshotFields?.members;
   return {
     circleId,
     coinType,
     requiredContributors: parseNumericField(snapshotFields?.required_contributors),
+    recipient,
+    members:
+      Array.isArray(membersRaw) && membersRaw.every((m) => typeof m === 'string')
+        ? (membersRaw as string[])
+        : null,
   };
 }
 
@@ -460,7 +484,7 @@ export const CIRCLE_EVENT_STREAMS: CircleEventStream[] = [
       if (!raw || !contributor || !escrow) return null;
       const { circleId } = escrow;
       const amount = formatEscrowAmount(raw.amount, escrow.coinType);
-      const round = parseNumericField(raw.cycle_no);
+      const round = eventRound(raw.cycle_no, escrow);
       // Count as of this contribution (the escrow's live count drops again
       // if the round is refunded); the target is frozen in the snapshot.
       const paid = parseNumericField(raw.contributors_so_far);
@@ -579,7 +603,7 @@ export const CIRCLE_EVENT_STREAMS: CircleEventStream[] = [
       if (!raw || !recipient || !escrow) return null;
       const { circleId } = escrow;
       const amount = formatEscrowAmount(raw.amount, escrow.coinType);
-      const round = parseNumericField(raw.cycle_no);
+      const round = eventRound(raw.cycle_no, escrow);
       return {
         circleId,
         memberAddress: recipient,
@@ -588,9 +612,9 @@ export const CIRCLE_EVENT_STREAMS: CircleEventStream[] = [
           `${round !== null ? `Round ${round}: ` : ''}` +
           `${memberDisplay(ctx, recipient)} received ${amount ?? 'their payout'}.\n` +
           `View circle: ${circleLink(ctx, circleId)}`,
-        // payout_processed body params: {{1}} circle, {{2}} cycle number,
-        // {{3}} recipient, {{4}} amount, {{5}} date (same approved template
-        // buildYourTurnTemplate reuses). Send only when amount + cycle parsed.
+        // payout_processed body params: {{1}} circle, {{2}} round number,
+        // {{3}} recipient, {{4}} amount, {{5}} date. Send only when the
+        // amount parsed and the round could be numbered.
         buildTemplate: (ctx) =>
           amount && round !== null
             ? legacyTemplate(

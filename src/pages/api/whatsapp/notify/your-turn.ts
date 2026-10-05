@@ -13,7 +13,11 @@
  * Payload shape:
  *   {
  *     circleId: string,                 // required
- *     cycleNo: number,                  // required
+ *     cycleNo: number,                  // required: the escrow's cycle_no
+ *                                       // (a lap), used only for dedupe
+ *     roundNo?: number,                 // the circle-wide round shown to
+ *                                       // the member (round-number.ts);
+ *                                       // without it the round is left out
  *     amount: string,                   // human-readable, e.g. "350 USDC"
  *     recipient: string,                // required Sui address of the payout
  *                                       // recipient. June 2026 audit: the
@@ -38,6 +42,7 @@ import type { NetworkType } from '../../../../services/whatsapp-registry-service
 interface RequestBody {
   circleId?: string;
   cycleNo?: number;
+  roundNo?: number;
   amount?: string;
   recipient?: string;
   recipientPhone?: string;
@@ -77,6 +82,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const result = await sendYourTurnNotification({
       circleId,
       cycleNo,
+      roundNo:
+        typeof body.roundNo === 'number' && Number.isSafeInteger(body.roundNo) && body.roundNo >= 1
+          ? body.roundNo
+          : null,
       amount,
       recipient,
       recipientPhone: body.recipientPhone,

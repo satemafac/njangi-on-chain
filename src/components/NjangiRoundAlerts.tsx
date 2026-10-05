@@ -6,6 +6,7 @@ import {
   findCurrentCycleEscrow,
   potBaseUnits,
   readCircleIsActive,
+  readCircleRotationPointer,
   readCycleEscrowState,
   listContributors,
 } from '@/lib/cycle-escrow-discovery';
@@ -15,6 +16,7 @@ import type { NetworkType } from '@/services/whatsapp-registry-service';
 import { readChainClockMs } from '@/lib/chain-clock';
 import { claimWindowClosed } from '@/lib/cycle-escrow-collect';
 import { formatEscrowAmount, resolveEscrowCoin } from '@/lib/escrow-coin';
+import { adminNextRoundAlert } from '@/lib/round-alerts';
 
 export interface CircleForAlerts {
   id: string;
@@ -28,15 +30,22 @@ interface NjangiRoundAlertsProps {
   network: NetworkType;
 }
 
-type AlertKind = 'share-due' | 'your-turn' | 'admin-open-round';
-
-interface ActionableAlert {
-  kind: AlertKind;
+interface MemberAlert {
+  kind: 'share-due' | 'your-turn';
   circleId: string;
   circleName: string;
-  cycleNo: number;
   amount: string;
 }
+
+interface AdminOpenRoundAlert {
+  kind: 'admin-open-round';
+  circleId: string;
+  circleName: string;
+  /** The round to open, circle-wide (round-number.ts); null if unnumbered. */
+  roundNo: number | null;
+}
+
+type ActionableAlert = MemberAlert | AdminOpenRoundAlert;
 
 /**
  * Dashboard card that scans every circle the user belongs to and surfaces
@@ -82,9 +91,31 @@ export function NjangiRoundAlerts({ circles, userAddress, network }: NjangiRound
           const escrow = await findCurrentCycleEscrow(network, circle.id);
           if (!escrow) continue;
           const state = await readCycleEscrowState(escrow.escrowId, network, client);
+          if (!state) continue;
+          // A collected round owes nothing. Its admin's step comes now, and
+          // only if the collect moved the rotation on (round-alerts.ts).
+          if (state.claimed) {
+            if (circle.admin.toLowerCase() === userAddress.toLowerCase()) {
+              const next = adminNextRoundAlert({
+                escrow: state,
+                pointer: await readCircleRotationPointer(circle.id, network, client),
+              });
+              if (next.kind === 'unreadable') {
+                failed += 1;
+              } else if (next.kind === 'open-next-round') {
+                collected.push({
+                  kind: 'admin-open-round',
+                  circleId: circle.id,
+                  circleName: circle.name,
+                  roundNo: next.roundNo,
+                });
+              }
+            }
+            continue;
+          }
           // Refunded: nothing is due until the admin opens the round again,
           // and paying into this escrow aborts. (An expired claim ends here.)
-          if (!state || state.claimed || state.refunded) continue;
+          if (state.refunded) continue;
 
           // Past its claim window a round is no longer ready to collect: its
           // pot can only go back to the contributors, which the round panel
@@ -121,24 +152,15 @@ export function NjangiRoundAlerts({ circles, userAddress, network }: NjangiRound
               kind: 'your-turn',
               circleId: circle.id,
               circleName: circle.name,
-              cycleNo: state.cycleNo,
               // The pot, not one share: it is what this member will collect.
               amount: formatEscrowAmount(potBaseUnits(state), coin, unsupported),
             });
             continue;
           }
 
-          if (fullyFunded && circle.admin.toLowerCase() === userAddress.toLowerCase()) {
-            // Admin can open the next round once the current one wraps up.
-            collected.push({
-              kind: 'admin-open-round',
-              circleId: circle.id,
-              circleName: circle.name,
-              cycleNo: state.cycleNo + 1,
-              amount: friendly,
-            });
-            continue;
-          }
+          // A full pot has every share it needs; until its recipient
+          // collects, nobody else has a step (the admin's comes after).
+          if (fullyFunded) continue;
 
           // Has the user already paid for this round?
           const contributors = await listContributors(escrow.escrowId, network);
@@ -150,7 +172,6 @@ export function NjangiRoundAlerts({ circles, userAddress, network }: NjangiRound
               kind: 'share-due',
               circleId: circle.id,
               circleName: circle.name,
-              cycleNo: state.cycleNo,
               amount: friendly,
             });
           }
@@ -172,9 +193,9 @@ export function NjangiRoundAlerts({ circles, userAddress, network }: NjangiRound
 
   const grouped = useMemo(() => {
     return {
-      yourTurn: alerts.filter((a) => a.kind === 'your-turn'),
-      shareDue: alerts.filter((a) => a.kind === 'share-due'),
-      adminOpen: alerts.filter((a) => a.kind === 'admin-open-round'),
+      yourTurn: alerts.filter((a): a is MemberAlert => a.kind === 'your-turn'),
+      shareDue: alerts.filter((a): a is MemberAlert => a.kind === 'share-due'),
+      adminOpen: alerts.filter((a): a is AdminOpenRoundAlert => a.kind === 'admin-open-round'),
     };
   }, [alerts]);
 
@@ -241,7 +262,7 @@ export function NjangiRoundAlerts({ circles, userAddress, network }: NjangiRound
         {grouped.adminOpen.map((a) => (
           <Link
             key={`admin-${a.circleId}`}
-            href={`/circle/${a.circleId}/contribute`}
+            href={`/circle/${a.circleId}/manage`}
             className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white p-3 shadow-sm transition hover:border-slate-300"
           >
             <div className="flex items-start gap-3">
@@ -251,7 +272,9 @@ export function NjangiRoundAlerts({ circles, userAddress, network }: NjangiRound
                   {t('alerts.adminOpenRound.title')}
                 </p>
                 <p className="mt-1 text-sm text-slate-700">
-                  {t('alerts.adminOpenRound.body', { circle: a.circleName, cycle: a.cycleNo })}
+                  {a.roundNo !== null
+                    ? t('alerts.adminOpenRound.body', { circle: a.circleName, round: a.roundNo })
+                    : t('alerts.adminOpenRound.bodyNextRound', { circle: a.circleName })}
                 </p>
               </div>
             </div>

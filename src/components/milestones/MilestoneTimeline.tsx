@@ -39,8 +39,12 @@ export interface MilestoneTimelineProps {
    * button anyone can click.
    */
   canRecordProgress: boolean;
-  /** Cycle number of the uncounted settled round, for friendlier copy. */
-  uncountedCycleNo?: number | null;
+  /**
+   * Circle-wide number of the next uncounted settled round
+   * (round-number.ts), for friendlier copy. Never the snapshot's cycle_no,
+   * which counts laps.
+   */
+  uncountedRoundNo?: number | null;
   /** Total settled rounds awaiting a progress update (>= 1 when
    *  `canRecordProgress`); rounds are credited oldest-first, one click
    *  per round. */
@@ -93,7 +97,7 @@ export function MilestoneTimeline({
   signerReady,
   busyAction,
   canRecordProgress,
-  uncountedCycleNo,
+  uncountedRoundNo,
   uncountedTotal,
   onRecordProgress,
   onCompleteMilestone,
@@ -326,12 +330,12 @@ export function MilestoneTimeline({
           <p className="text-sm leading-6 text-sky-900">
             {typeof uncountedTotal === 'number' && uncountedTotal > 1
               ? `${uncountedTotal} collected rounds haven't been counted toward the goal yet${
-                typeof uncountedCycleNo === 'number'
-                  ? ` — round ${uncountedCycleNo} is next`
+                typeof uncountedRoundNo === 'number'
+                  ? ` — round ${uncountedRoundNo} is next`
                   : ''
               }.`
-              : typeof uncountedCycleNo === 'number'
-                ? `Round ${uncountedCycleNo} was collected but hasn't been counted toward the goal yet.`
+              : typeof uncountedRoundNo === 'number'
+                ? `Round ${uncountedRoundNo} was collected but hasn't been counted toward the goal yet.`
                 : 'A collected round hasn’t been counted toward the goal yet.'}{' '}
             Anyone can update the tracker — it only reads the settled round.
           </p>

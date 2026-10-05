@@ -321,6 +321,8 @@ describe('your-turn trigger (ContributionRecorded)', () => {
     expect(sendMock).toHaveBeenCalledWith({
       circleId: CIRCLE,
       cycleNo: 5,
+      // Lap 5, recipient in the third seat of three: round 15, not "5".
+      roundNo: 15,
       amount: '0.2 USDC',
       recipient: RECIPIENT,
       network: 'testnet',
