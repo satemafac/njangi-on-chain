@@ -171,6 +171,22 @@ export const BARE_WORD_RULES: BareWordRule[] = [
       /^\s*[\w.]*\s*\(/.test(after) ||
       /\b(?:deposits?|batch|in|to)\s+$/i.test(before),
   },
+  {
+    word: /\bvaults?\b/gi,
+    why: 'vault wording implies Njangi holds members\' money (owner rule: never "vault")',
+    allowed: () => false,
+  },
+  {
+    word: /\btreasur(?:y|ies)\b/gi,
+    why: 'treasury wording implies Njangi holds members\' money (owner rule: never "treasury")',
+    // Only the proper nouns of citations and sanctions copy: "Treasury
+    // Committee", "Department of the Treasury", "HM Treasury", "U.S.
+    // Treasury", "treasury.gov".
+    allowed: (before, after) =>
+      /^\s+(?:Committee|Department)\b/.test(after) ||
+      /^\.gov\b/i.test(after) ||
+      /\b(?:Department of the|HM|U\.S\.|US)\s+$/.test(before),
+  },
 ];
 
 /** Line-level denials the phrase patterns already accept. */

@@ -10,7 +10,11 @@
 
 import type { SuiClient } from '@mysten/sui/client';
 import type { NetworkType } from '@/config/public-env';
-import { findCurrentCycleEscrow, readCircleEscrowHistory } from '@/lib/cycle-escrow-discovery';
+import { findCurrentCycleEscrow, readCircleEscrowHistory, readCircleStarted } from '@/lib/cycle-escrow-discovery';
+
+// Moved to cycle-escrow-discovery (round discovery uses it too); re-exported
+// so existing callers keep working.
+export { readCircleStarted };
 import { readBalanceField } from '@/lib/custody-wallet-balance';
 
 /** Is a round of this circle still open? `unknown` when the reads could not say. */
@@ -27,23 +31,6 @@ async function readMoveFields(client: Pick<SuiClient, 'getObject'>, objectId: st
   const response = await client.getObject({ id: objectId, options: { showContent: true } });
   const content = response.data?.content;
   return content && content.dataType === 'moveObject' ? (content.fields as Record<string, unknown>) : null;
-}
-
-/**
- * Has the circle ever started? `activate_circle` sets `current_cycle` to 1
- * (or, for a migrated circle, past it) and nothing resets it, so a circle
- * that is not active with `current_cycle` 0 has never started. `unknown`
- * when the circle could not be read.
- */
-export async function readCircleStarted(
-  client: Pick<SuiClient, 'getObject'>,
-  circleId: string,
-): Promise<'never-started' | 'started' | 'unknown'> {
-  const fields = await readMoveFields(client, circleId);
-  const cycle = u64Field(fields?.current_cycle);
-  const active = fields?.is_active;
-  if (cycle === null || typeof active !== 'boolean') return 'unknown';
-  return !active && cycle === 0n ? 'never-started' : 'started';
 }
 
 /**

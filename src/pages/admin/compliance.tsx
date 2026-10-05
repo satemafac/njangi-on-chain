@@ -556,7 +556,7 @@ export default function AdminCompliancePage() {
                 ? 'Checking which AttestorCap objects your wallet owns…'
                 : ownedCaps.length > 0
                   ? `Auto-detected ${ownedCaps.length} AttestorCap${ownedCaps.length === 1 ? '' : 's'} in your wallet. You can still paste a different id below.`
-                  : 'Issued once at deploy; store in ops vault.'
+                  : 'Issued once at deploy; keep its id in the ops password manager.'
             }
           >
             {ownedCaps.length > 1 ? (

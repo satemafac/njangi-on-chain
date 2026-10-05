@@ -15,6 +15,9 @@ import {
 const mockHistory = jest.fn();
 const mockFind = jest.fn();
 jest.mock('@/lib/cycle-escrow-discovery', () => ({
+  // Moved into discovery (round discovery uses it too); the real one, which
+  // reads the circle through the test client.
+  readCircleStarted: jest.requireActual('@/lib/cycle-escrow-discovery').readCircleStarted,
   readCircleEscrowHistory: (...args: unknown[]) => mockHistory(...args),
   findCurrentCycleEscrow: (...args: unknown[]) => mockFind(...args),
 }));

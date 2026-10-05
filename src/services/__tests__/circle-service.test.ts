@@ -71,6 +71,47 @@ describe('circle-service discovery helpers', () => {
     );
   });
 
+  describe('a package that keeps failing', () => {
+    // The retries back off 500ms then 1s; fake timers keep the test instant.
+    beforeEach(() => {
+      jest.useFakeTimers();
+      jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+      jest.spyOn(console, 'log').mockImplementation(() => undefined);
+    });
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    const queryEvents = () =>
+      jest.fn(async ({ query }: { query: { MoveEventType: string } }) => {
+        if (query.MoveEventType.startsWith('0xbad')) throw new Error('Unexpected status code: 429');
+        return { data: [{ id: { txDigest: '0xok', eventSeq: '0' } }], hasNextPage: false, nextCursor: null };
+      });
+
+    it('still returns the other packages\' events by default', async () => {
+      const pending = batchQueryEvents(
+        ['0xgood', '0xbad'],
+        'CircleCreated',
+        { queryEvents: queryEvents() } as unknown as Parameters<typeof batchQueryEvents>[2],
+        { maxConcurrent: 2 },
+      );
+      await jest.runAllTimersAsync();
+      await expect(pending).resolves.toHaveLength(1);
+    });
+
+    it('throws with throwOnFailure, so a partial scan is never read as the whole', async () => {
+      const pending = batchQueryEvents(
+        ['0xgood', '0xbad'],
+        'CircleCreated',
+        { queryEvents: queryEvents() } as unknown as Parameters<typeof batchQueryEvents>[2],
+        { maxConcurrent: 2, throwOnFailure: true },
+      );
+      const assertion = expect(pending).rejects.toThrow(/1 of 2 package/);
+      await jest.runAllTimersAsync();
+      await assertion;
+    });
+  });
+
   it('paginates user transaction history so older package IDs remain discoverable', async () => {
     const queryTransactionBlocks = jest
       .fn()
