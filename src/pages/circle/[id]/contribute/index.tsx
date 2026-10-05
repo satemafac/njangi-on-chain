@@ -15,6 +15,7 @@ import {
 } from '../../../../services/network-config';
 import { readCustodyBalances } from '@/lib/custody-wallet-balance';
 import { supportedCoinBySymbol } from '@/lib/supported-coins';
+import { useCircleCoinTerms } from '@/lib/circle-coin-terms';
 import { cetusService } from '../../../../lib/cetus-service';
 import { ZkLoginClient } from '@/services/zkLoginClient';
 import { resolveCustodyWalletId } from '@/lib/custody-wallet-discovery';
@@ -286,6 +287,12 @@ export default function ContributeToCircle() {
   const router = useRouter();
   const { id } = router.query;
   const { isAuthenticated, isLoading: authLoading, userAddress, account } = useAuth();
+  // The circle's pinned coin and amounts (v11), shown in that coin.
+  const { terms: coinTerms } = useCircleCoinTerms(
+    typeof id === 'string' ? id : null,
+    getCurrentNetwork() as NetworkType,
+    () => getSuiClientFromPool(getCurrentRpcUrl()),
+  );
   const { t } = useTranslation();
   const [loading, setLoading] = useState(true);
   const [circle, setCircle] = useState<Circle | null>(null);
@@ -2568,25 +2575,46 @@ export default function ContributeToCircle() {
   const CurrencyDisplay = ({ 
     localAmount, 
     sui, 
+    coin,
     currencyType = 'USD', 
     className = '' 
   }: { 
     localAmount?: number; // Renamed from usd for clarity - this is the amount in local currency
     sui?: number; 
+    /** Which pinned amount this is, for a circle with v11 terms. */
+    coin: 'contribution' | 'deposit';
     currencyType?: string;
     className?: string;
   }) => {
-    const isPriceUnavailable = suiPrice === null;
     const isPriceStale = priceService.isPriceStale();
-    
-    console.log('CurrencyDisplay inputs:', { localAmount, sui, currencyType, suiPrice, isPriceUnavailable });
+
+    // A pinned (v11) circle charges this amount in its own coin: show that,
+    // not a SUI conversion at today's price (which quoted "0.082 SUI" for a
+    // USDC circle whose members never pay SUI). Local amounts are in cents.
+    if (coinTerms.status === 'pinned') {
+      const pinnedLabel = coin === 'deposit' ? coinTerms.depositLabel : coinTerms.contributionLabel;
+      const local = formatCurrency(
+        localAmount !== undefined && !isNaN(localAmount) ? localAmount / 100 : 0,
+        currencyType,
+      );
+      return className.includes('inline') ? (
+        <span className={className}>
+          {local}
+          {pinnedLabel && ` (${pinnedLabel})`}
+        </span>
+      ) : (
+        <div className={`flex flex-col ${className}`}>
+          <span className="font-medium">{local}</span>
+          {pinnedLabel && <span className="text-sm text-gray-500">{pinnedLabel}</span>}
+        </div>
+      );
+    }
     
     // Check for invalid inputs and provide defaults
     let effectiveLocalAmount = localAmount;
     let effectiveSui = sui;
 
     if ((effectiveLocalAmount === undefined || isNaN(effectiveLocalAmount)) && (effectiveSui === undefined || isNaN(effectiveSui))) {
-      console.log('CurrencyDisplay: both localAmount and sui values are invalid, defaulting to 0');
       effectiveLocalAmount = 0;
       effectiveSui = 0;
     }
@@ -2597,17 +2625,10 @@ export default function ContributeToCircle() {
     
     if (effectiveLocalAmount !== undefined && !isNaN(effectiveLocalAmount)) {
       displayLocalAmount = effectiveLocalAmount; 
-      console.log('CurrencyDisplay: using provided local currency amount:', { 
-        local: displayLocalAmount, 
-        currencyType
-      });
     }
     
     if (effectiveSui !== undefined && !isNaN(effectiveSui)) {
       displaySuiAmount = effectiveSui; 
-      console.log('CurrencyDisplay: using provided SUI amount:', { 
-        sui: displaySuiAmount
-      });
     }
     
     // Default values if neither is provided or values are invalid
@@ -2618,12 +2639,7 @@ export default function ContributeToCircle() {
       displaySuiAmount = 0;
     }
     
-    console.log('CurrencyDisplay: final display values:', { 
-      local: displayLocalAmount, 
-      sui: displaySuiAmount,
-      currencyType 
-    });
-    
+
     // Special case for zero values
     if (displayLocalAmount === 0 && displaySuiAmount === 0) {
       return (
@@ -4186,6 +4202,7 @@ export default function ContributeToCircle() {
                     <div className="mt-3 text-lg font-semibold text-slate-950">
                       <CurrencyDisplay
                         localAmount={circle.contributionAmountLocal}
+                        coin="contribution"
                         sui={circle.contributionAmount}
                         currencyType={circle.currencyType}
                       />
@@ -4197,6 +4214,7 @@ export default function ContributeToCircle() {
                     <div className="mt-3 text-lg font-semibold text-slate-950">
                       <CurrencyDisplay
                         localAmount={circle.securityDepositLocal}
+                        coin="deposit"
                         sui={circle.securityDeposit}
                         currencyType={circle.currencyType}
                       />
@@ -4310,14 +4328,14 @@ export default function ContributeToCircle() {
                     <div className={mutedPanelClass}>
                       <p className={sectionEyebrowClass}>Contribution Amount</p>
                       <div className="mt-3 text-lg font-semibold text-slate-950">
-                        <CurrencyDisplay localAmount={circle.contributionAmountLocal} sui={circle.contributionAmount} currencyType={circle.currencyType} />
+                        <CurrencyDisplay coin="contribution" localAmount={circle.contributionAmountLocal} sui={circle.contributionAmount} currencyType={circle.currencyType} />
                       </div>
                     </div>
 
                     <div className={mutedPanelClass}>
                       <p className={sectionEyebrowClass}>Security Deposit</p>
                       <div className="mt-3 text-lg font-semibold text-slate-950">
-                        <CurrencyDisplay localAmount={circle.securityDepositLocal} sui={circle.securityDeposit} currencyType={circle.currencyType} />
+                        <CurrencyDisplay coin="deposit" localAmount={circle.securityDepositLocal} sui={circle.securityDeposit} currencyType={circle.currencyType} />
                       </div>
                     </div>
 

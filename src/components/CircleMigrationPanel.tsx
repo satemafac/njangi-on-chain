@@ -65,8 +65,11 @@ const CircleMigrationPanel: React.FC<CircleMigrationPanelProps> = ({
     [members],
   );
 
+  // Nothing recorded yet: the top of the rotation is next and nobody has
+  // collected. (A default of 1 pre-selected the second member and marked the
+  // first "Already collected" on every brand-new circle.)
   const [nextTurnIndex, setNextTurnIndex] = useState<number>(
-    ratification?.ledger.startPosition ?? 1,
+    ratification?.ledger.startPosition ?? 0,
   );
   const [priorRounds, setPriorRounds] = useState<string>(
     String(ratification?.ledger.priorRoundsCompleted ?? 0),

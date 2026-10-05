@@ -49,6 +49,8 @@ import { getPooledSuiClient } from '@/services/sui-rpc-failover';
 import { logSuiReadError } from '@/services/sui-rpc-failover';
 import { ZkLoginClient, ZkLoginError } from '../../../services/zkLoginClient';
 import { getCurrentCoinTypes, getCurrentNetwork, getCurrentRpcUrl } from '../../../services/network-config';
+import { waitForTxIndexed } from '@/lib/wait-for-tx-indexed';
+import { humanizeErrorMessage, moveAbortUserMessage } from '@/lib/user-error-messages';
 
 // Define a proper Circle type to fix linter errors
 interface Circle {
@@ -1280,13 +1282,15 @@ export default function CircleDetails() {
         try {
           toast.loading(`Submitting ${yesVote ? 'approval' : 'rejection'} vote...`, { id: toastId });
           const zkLoginClient = ZkLoginClient.getInstance();
-          await zkLoginClient.voteEmergencyStop(account, {
+          const { digest } = await zkLoginClient.voteEmergencyStop(account, {
             circleId: circle.id,
             yesVote,
             network: getCurrentNetwork(),
           });
 
           toast.success(`Your ${yesVote ? 'approval' : 'rejection'} vote was recorded.`, { id: toastId });
+          // Re-read once the node has the vote, or the tally shows the old count.
+          await waitForTxIndexed(getSuiClientFromPool(getCurrentRpcUrl()), digest);
           await Promise.all([
             fetchCircleDetails(),
             fetchRecoveryStatus(),
@@ -1299,7 +1303,10 @@ export default function CircleDetails() {
             router.push('/');
             return;
           }
-          toast.error(error instanceof Error ? error.message : 'Failed to cast vote', { id: toastId });
+          toast.error(
+            moveAbortUserMessage(error) ?? humanizeErrorMessage(error instanceof Error ? error.message : '', 'Failed to cast vote'),
+            { id: toastId },
+          );
         } finally {
           recoveryInFlightRef.current.vote = false;
           setIsSubmittingRecoveryVote(false);
@@ -1423,7 +1430,7 @@ export default function CircleDetails() {
         try {
           toast.loading('Executing the emergency stop...', { id: toastId });
           const zkLoginClient = ZkLoginClient.getInstance();
-          await zkLoginClient.executeRecovery(account, {
+          const { digest } = await zkLoginClient.executeRecovery(account, {
             circleId: circle.id,
             walletId,
             stablecoinType: resolvedStablecoinType,
@@ -1431,6 +1438,8 @@ export default function CircleDetails() {
           });
 
           toast.success('Emergency stop executed. Refunds are on their way to recorded owners.', { id: toastId });
+          // Re-read once the node has the stop, or the Execute button stays up.
+          await waitForTxIndexed(getSuiClientFromPool(getCurrentRpcUrl()), digest);
           await Promise.all([
             fetchCircleDetails(),
             fetchRecoveryStatus(),
@@ -1443,7 +1452,11 @@ export default function CircleDetails() {
             router.push('/');
             return;
           }
-          toast.error(error instanceof Error ? error.message : 'Failed to execute the emergency stop', { id: toastId });
+          toast.error(
+            moveAbortUserMessage(error)
+              ?? humanizeErrorMessage(error instanceof Error ? error.message : '', 'Failed to execute the emergency stop'),
+            { id: toastId },
+          );
         } finally {
           recoveryInFlightRef.current.execute = false;
           setIsExecutingRecovery(false);

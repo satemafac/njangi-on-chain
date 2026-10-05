@@ -462,6 +462,34 @@ describe('findCurrentCycleEscrow — event fallback', () => {
 
     await expect(findCurrentCycleEscrow('testnet', CIRCLE, { client })).rejects.toThrow(/429/);
   });
+
+  const circleObject = (fields: Record<string, unknown>) => ({
+    data: { content: { dataType: 'moveObject', fields } },
+  });
+
+  it('answers "no round" without the event scan for a circle that never started', async () => {
+    // No history and never activated: no round was ever opened, so a
+    // rate-limited scan must not turn a brand-new circle into "couldn't check".
+    const client = makeClient({ [CIRCLE]: circleObject({ is_active: false, current_cycle: '0' }) });
+    failover.mockClear();
+    failover.mockRejectedValue(new Error('Unexpected status code: 429'));
+
+    await expect(findCurrentCycleEscrow('testnet', CIRCLE, { client })).resolves.toBeNull();
+    expect(failover).not.toHaveBeenCalled();
+  });
+
+  it('still scans for a circle that started without an escrow history', async () => {
+    const client = makeClient({
+      [CIRCLE]: circleObject({ is_active: true, current_cycle: '3' }),
+      [ESCROW_3]: escrowObject({ id: ESCROW_3 }),
+    });
+    eventsResolvingTo([openedEvent(ESCROW_3)]);
+
+    const found = await findCurrentCycleEscrow('testnet', CIRCLE, { client });
+
+    expect(found?.escrowId).toBe(ESCROW_3);
+    expect(found?.source).toBe('events');
+  });
 });
 
 describe('findCurrentCycleEscrow — verification', () => {

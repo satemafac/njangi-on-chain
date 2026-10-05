@@ -637,6 +637,13 @@ export async function batchQueryEvents(
     order?: 'ascending' | 'descending';
     maxPagesPerPackage?: number;
     onProgress?: (processed: number, total: number) => void;
+    /**
+     * Throw once every package has been tried if any of them still failed,
+     * instead of returning the events of the rest as if they were all. A
+     * caller that renders the result as a list of the user's circles needs
+     * this: a rate-limited package otherwise reads as "no circles there".
+     */
+    throwOnFailure?: boolean;
   } = {}
 ): Promise<Array<Record<string, unknown>>> {
   const {
@@ -645,9 +652,11 @@ export async function batchQueryEvents(
     order = 'descending',
     maxPagesPerPackage = MAX_EVENT_QUERY_PAGES_PER_PACKAGE,
     onProgress,
+    throwOnFailure = false,
   } = options;
   
   const allEvents: Array<Record<string, unknown>> = [];
+  const failedPackages: string[] = [];
   const queue = [...packageIds];
   const inProgress = new Set<Promise<void>>();
   
@@ -698,7 +707,9 @@ export async function batchQueryEvents(
             
             if (retryCount >= maxRetries) {
               console.warn(`Failed to query ${eventType} for package ${packageId} after ${maxRetries} retries:`, errorMsg);
-              // Continue without throwing - graceful degradation
+              // Continue with the other packages; the failure is reported at
+              // the end when the caller asked for it (throwOnFailure).
+              failedPackages.push(packageId);
             } else {
               const delayMs = Math.pow(2, retryCount - 1) * 500; // 500ms, 1s, 2s backoff
               console.log(`⏳ Retrying query for ${packageId} in ${delayMs}ms...`);
@@ -722,6 +733,11 @@ export async function batchQueryEvents(
     }
   }
   
+  if (throwOnFailure && failedPackages.length > 0) {
+    throw new Error(
+      `Could not query ${eventType} for ${failedPackages.length} of ${packageIds.length} package(s); the result would be incomplete.`,
+    );
+  }
   return allEvents;
 }
 

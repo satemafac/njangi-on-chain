@@ -78,6 +78,8 @@ describe('readCustodyBalances', () => {
       suiMain: 7n,
       suiDeposits: 25_000_000_005n,
       usdc: 30_000_000n,
+      suiDepositRecords: 0n,
+      usdcDepositRecords: 0n,
     });
   });
 
@@ -87,6 +89,8 @@ describe('readCustodyBalances', () => {
       suiMain: 42n,
       suiDeposits: 0n,
       usdc: 0n,
+      suiDepositRecords: 0n,
+      usdcDepositRecords: 0n,
     });
   });
 
@@ -179,6 +183,8 @@ describe('readCustodyBalances — v11 deposit records', () => {
       suiMain: 0n,
       suiDeposits: 0n,
       usdc: 900_000n,
+      suiDepositRecords: 0n,
+      usdcDepositRecords: 900_000n,
     });
   });
 
@@ -197,6 +203,9 @@ describe('readCustodyBalances — v11 deposit records', () => {
     await expect(readCustodyBalances(client, WALLET, USDC)).resolves.toMatchObject({
       suiDeposits: 3_000_000_001n,
       usdc: 0n,
+      // Only the v11 record counts as a deposit record; the typed field is legacy.
+      suiDepositRecords: 3_000_000_000n,
+      usdcDepositRecords: 0n,
     });
   });
 
@@ -210,6 +219,8 @@ describe('readCustodyBalances — v11 deposit records', () => {
       suiMain: 0n,
       suiDeposits: 0n,
       usdc: 0n,
+      suiDepositRecords: 0n,
+      usdcDepositRecords: 0n,
     });
   });
 

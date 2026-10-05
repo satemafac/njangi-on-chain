@@ -34,6 +34,8 @@ import { resolveCustodyWalletId } from '@/lib/custody-wallet-discovery';
 import { recoveryCoinTypeErrorMessage, resolveRecoveryCoinType } from '@/lib/recovery-coin-type';
 import { resolveStablecoinMetadata } from '@/lib/stablecoin-metadata';
 import { readCustodyBalances, type CustodyBalances } from '@/lib/custody-wallet-balance';
+import { useCircleCoinTerms } from '@/lib/circle-coin-terms';
+import { waitForTxIndexed } from '@/lib/wait-for-tx-indexed';
 import { supportedCoinBySymbol, UNSUPPORTED_COIN_LABEL } from '@/lib/supported-coins';
 import { priceService } from '../../../../services/price-service';
 import { JoinRequest } from '../../../../services/database-service';
@@ -590,6 +592,13 @@ export default function ManageCircle() {
   const router = useRouter();
   const { id } = router.query;
   const { isAuthenticated, isLoading: authLoading, userAddress, account } = useAuth();
+  // The circle's pinned coin and amounts (v11). A pinned circle's coin cannot
+  // be switched, and its amounts are shown in that coin.
+  const { terms: coinTerms, reload: reloadCoinTerms } = useCircleCoinTerms(
+    typeof id === 'string' ? id : null,
+    getCurrentNetwork() as NetworkType,
+    () => getSuiClientFromPool(getCurrentRpcUrl()),
+  );
   const [loading, setLoading] = useState(true);
   const [circle, setCircle] = useState<Circle | null>(null);
   const [circlePackageId, setCirclePackageId] = useState<string | null>(null);
@@ -664,8 +673,11 @@ export default function ManageCircle() {
 
   // Both the first load and the refresh buttons read the wallet with
   // readCustodyBalances and show it through here, so they cannot disagree.
-  // USDC deposits are the paid members' recorded deposits, capped at what the
-  // wallet holds; the rest of the USDC is contributions.
+  // USDC deposits are the wallet's v11 deposit records (deposits only, by
+  // construction) plus, for USDC held the older way, the paid members'
+  // recorded deposits capped at what is left. v11 circles keep no deposit in
+  // the member records, so without the records every deposit read as a
+  // contribution. The rest of the USDC is contributions from the retired rail.
   const applyCustodyBalances = (
     walletId: string,
     balances: CustodyBalances,
@@ -675,7 +687,10 @@ export default function ManageCircle() {
     const suiDeposits = toDisplayAmount(balances.suiDeposits, 9);
     const suiContributions = toDisplayAmount(balances.suiMain, 9);
     const usdcTotal = toDisplayAmount(balances.usdc, 6);
-    const usdcDeposits = Math.min(toDisplayAmount(outstandingDepositRaw, 6), usdcTotal);
+    const usdcRecordDeposits = toDisplayAmount(balances.usdcDepositRecords, 6);
+    const usdcOlderStorage = Math.max(0, usdcTotal - usdcRecordDeposits);
+    const usdcDeposits =
+      usdcRecordDeposits + Math.min(toDisplayAmount(outstandingDepositRaw, 6), usdcOlderStorage);
     const usdcContributions = Math.max(0, usdcTotal - usdcDeposits);
 
     setCustodyBalancesUnreadable(false);
@@ -2559,29 +2574,35 @@ export default function ManageCircle() {
   const CurrencyDisplay = ({ 
     usd, 
     sui, 
+    coin,
     currencyType = 'USD', 
     className = "" 
   }: { 
     usd?: number; 
     sui?: number; 
+    /** Which pinned amount this is, for a circle with v11 terms. */
+    coin: 'contribution' | 'deposit';
     currencyType?: string;
     className?: string;
   }) => {
     const isPriceStale = priceService.isPriceStale();
-    
-    console.log('CurrencyDisplay received values:', { usd, sui, currencyType });
-    
-    // Debug logging for manage page
-    console.log('[MANAGE CURRENCY DEBUG] CurrencyDisplay called with:', {
-      usd, sui, currencyType,
-      usdType: typeof usd,
-      suiType: typeof sui,
-      currencyTypeType: typeof currencyType
-    });
+
+    // A pinned (v11) circle charges this amount in its own coin: show that,
+    // not a SUI conversion (v11 stores no SUI amounts for a USDC circle, so
+    // the conversion read "0.000 SUI").
+    if (coinTerms.status === 'pinned') {
+      const pinnedLabel = coin === 'deposit' ? coinTerms.depositLabel : coinTerms.contributionLabel;
+      const local = usd !== undefined && !isNaN(usd) ? usd : 0;
+      return (
+        <span className={className}>
+          {formatCurrency(local, currencyType)}
+          {pinnedLabel && <span className="text-gray-500 ml-1">({pinnedLabel})</span>}
+        </span>
+      );
+    }
     
     // Check for invalid inputs and provide defaults
     if ((usd === undefined || isNaN(usd)) && (sui === undefined || isNaN(sui))) {
-      console.log('CurrencyDisplay: both usd and sui values are invalid, defaulting to 0');
       usd = 0;
       sui = 0;
     }
@@ -2594,17 +2615,10 @@ export default function ManageCircle() {
     
     if (usd !== undefined && !isNaN(usd)) {
       displayLocalAmount = usd; // This is actually the local currency amount
-      console.log('CurrencyDisplay: using provided local currency amount:', { 
-        local: displayLocalAmount, 
-        currencyType
-      });
     }
     
     if (sui !== undefined && !isNaN(sui)) {
       displaySuiAmount = sui; // This is the actual SUI amount stored in the contract
-      console.log('CurrencyDisplay: using provided SUI amount:', { 
-        sui: displaySuiAmount
-      });
     }
     
     // Default values if neither is provided or values are invalid
@@ -2615,12 +2629,7 @@ export default function ManageCircle() {
       displaySuiAmount = 0;
     }
     
-    console.log('CurrencyDisplay: final display values:', { 
-      local: displayLocalAmount, 
-      sui: displaySuiAmount,
-      currencyType 
-    });
-    
+
     // Special case for zero values
     if (displayLocalAmount === 0 && displaySuiAmount === 0) {
       return (
@@ -2785,7 +2794,12 @@ export default function ManageCircle() {
       
       if (!response.ok) {
         console.error('Failed to update circle token mode:', result);
-        toast.error(result.error || 'Failed to update circle token mode', { id: 'toggle-native-sui-optin' });
+        // Contract refusals (85: the coin is fixed) read as plain language,
+        // never as a MoveAbort dump.
+        toast.error(
+          result.error ? parseMoveError(String(result.error)).message : 'Failed to update circle token mode',
+          { id: 'toggle-native-sui-optin' },
+        );
         return false;
       }
       
@@ -2812,7 +2826,10 @@ export default function ManageCircle() {
       return true;
     } catch (error) {
       console.error('Error updating circle token mode:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to update circle token mode', { id: 'toggle-native-sui-optin' });
+      toast.error(
+        error instanceof Error ? parseMoveError(error.message).message : 'Failed to update circle token mode',
+        { id: 'toggle-native-sui-optin' },
+      );
       return false;
     }
   };
@@ -3009,32 +3026,20 @@ export default function ManageCircle() {
       ? circle.custody.suiBalance
       : 0;
     const suiUsdEquivalent = suiTotalBalance * suiPrice;
-    const treasuryUsdTotal = usdcTotalBalance + suiUsdEquivalent;
-    const usdcTreasuryShare = treasuryUsdTotal > 0 ? (usdcTotalBalance / treasuryUsdTotal) * 100 : 0;
-    const usdcToSuiValueRatio = suiUsdEquivalent > 0 ? usdcTotalBalance / suiUsdEquivalent : null;
-    const activeMembersCount = contributionStatus.totalActiveInRotation > 0
-      ? contributionStatus.totalActiveInRotation
-      : members.filter((member) => member.status === 'active').length;
-    const expectedCycleUsdcContributions = activeMembersCount > 0 && circle.contributionAmountUsd > 0
-      ? activeMembersCount * circle.contributionAmountUsd
-      : 0;
-    const usdcContributedThisCycle = usdcContributionBalance ?? 0;
-    const usdcContributionProgress = expectedCycleUsdcContributions > 0
-      ? Math.min((usdcContributedThisCycle / expectedCycleUsdcContributions) * 100, 100)
-      : 0;
-    const treasuryHealth = usdcTreasuryShare >= 70
-      ? { label: 'Stable (USDC-heavy)', className: 'bg-emerald-100 text-emerald-700' }
-      : usdcTreasuryShare >= 40
-        ? { label: 'Balanced', className: 'bg-amber-100 text-amber-700' }
-        : { label: 'Volatile (SUI-heavy)', className: 'bg-rose-100 text-rose-700' };
+    // A pinned (v11) circle's coin is fixed on chain: show it, offer no switch.
+    // An unreadable policy keeps the switch locked rather than offering it.
+    const coinIsPinned = coinTerms.status === 'pinned';
+    const coinTermsUnknown = coinTerms.status === 'unknown' || coinTerms.status === 'loading';
 
-
-    
     return (
       <div className="space-y-4">
         <div className="rounded-[20px] border border-blue-100 bg-blue-50 px-3 py-3 sm:px-4 sm:py-4">
-          <h3 className="text-lg font-semibold text-blue-800">Circle Token Routing Settings</h3>
-          <p className="text-sm text-blue-600">Set one circle-wide token mode for active-cycle contributions and payouts. Once a cycle is active, this mode is locked until cycle completion and payouts finish.</p>
+          <h3 className="text-lg font-semibold text-blue-800">Circle coin</h3>
+          <p className="text-sm text-blue-600">
+            {coinIsPinned
+              ? 'Members pay in and collect in this coin. It was fixed when the circle was set up, so it can\u2019t be switched.'
+              : 'Set one circle-wide coin for contributions and payouts. Once a cycle is active, the coin is locked until the cycle completes and payouts finish.'}
+          </p>
         </div>
 
         <div className="space-y-4">
@@ -3045,6 +3050,20 @@ export default function ManageCircle() {
           ) : (
             <div className="space-y-4 sm:space-y-5">
               <div className="space-y-4">
+                {coinTerms.status === 'pinned' ? (
+                  <div className="rounded-[18px] border border-stone-200 bg-white p-3">
+                    <p className="text-xs text-gray-500 mb-1">This circle&rsquo;s coin</p>
+                    <p className="text-sm font-semibold text-gray-800">
+                      {coinTerms.symbol ?? UNSUPPORTED_COIN_LABEL}
+                    </p>
+                    {coinTerms.contributionLabel && coinTerms.depositLabel && (
+                      <p className="text-xs text-gray-500 mt-1">
+                        Contribution {coinTerms.contributionLabel} &middot; security deposit {coinTerms.depositLabel}
+                      </p>
+                    )}
+                  </div>
+                ) : (
+                <>
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div className="min-w-0">
                     <h4 className="font-medium text-gray-800">Use SUI For Active Circle</h4>
@@ -3054,8 +3073,8 @@ export default function ManageCircle() {
                     <button
                       type="button"
                       onClick={handleToggleNativeSuiOptIn}
-                      disabled={isConfiguring || isTokenModeLocked}
-                      className={`relative inline-flex h-6 w-11 items-center rounded-full ${allowNativeSui ? 'bg-blue-600' : 'bg-gray-200'} ${(isConfiguring || isTokenModeLocked) ? 'opacity-50 cursor-not-allowed' : ''}`}
+                      disabled={isConfiguring || isTokenModeLocked || coinTermsUnknown}
+                      className={`relative inline-flex h-6 w-11 items-center rounded-full ${allowNativeSui ? 'bg-blue-600' : 'bg-gray-200'} ${(isConfiguring || isTokenModeLocked || coinTermsUnknown) ? 'opacity-50 cursor-not-allowed' : ''}`}
                     >
                       <span className="sr-only">Enable SUI circle mode</span>
                       <span 
@@ -3064,6 +3083,17 @@ export default function ManageCircle() {
                     </button>
                   </div>
                 </div>
+
+                {coinTerms.status === 'unknown' && (
+                  <div className="rounded-[18px] border border-amber-200 bg-amber-50 p-3">
+                    <p role="status" className="text-sm text-amber-700">
+                      We couldn&rsquo;t check whether this circle&rsquo;s coin is fixed, so it can&rsquo;t be switched right now.{' '}
+                      <button type="button" onClick={reloadCoinTerms} className="font-medium underline">
+                        Try again
+                      </button>
+                    </p>
+                  </div>
+                )}
 
                 {tokenModeLock && (
                   <div className="rounded-[18px] border border-amber-200 bg-amber-50 p-3">
@@ -3080,6 +3110,8 @@ export default function ManageCircle() {
                     Enabling SUI mode increases exposure to token price volatility.
                   </p>
                 </div>
+                </>
+                )}
                 
                 {circle.custody && (
                   <div className="rounded-[20px] border border-stone-200 bg-stone-50/60 p-3 sm:rounded-[22px] sm:p-4">
@@ -3117,25 +3149,6 @@ export default function ManageCircle() {
                     )}
 
                     <div className="space-y-3">
-                      <div className="grid grid-cols-1 gap-2 sm:gap-3 md:grid-cols-2">
-                        <div className="rounded-[18px] border border-stone-200 bg-white p-3">
-                          <p className="text-xs text-gray-500 mb-1">USDC/SUI Value Ratio</p>
-                          <p className="text-sm font-semibold text-gray-800">
-                            {usdcToSuiValueRatio !== null ? `${usdcToSuiValueRatio.toFixed(2)}x` : 'USDC-only treasury'}
-                          </p>
-                          <p className="text-xs text-gray-500 mt-1">USDC share: {usdcTreasuryShare.toFixed(1)}%</p>
-                        </div>
-                        <div className="rounded-[18px] border border-stone-200 bg-white p-3">
-                          <p className="text-xs text-gray-500 mb-1">Treasury Health</p>
-                          <div className="flex items-center gap-2">
-                            <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${treasuryHealth.className}`}>
-                              {treasuryHealth.label}
-                            </span>
-                          </div>
-                          <p className="text-xs text-gray-500 mt-1">USDC value is prioritized for payout stability.</p>
-                        </div>
-                      </div>
-
                       {/* USDC Balance Section (Primary) */}
                       <div className="rounded-[20px] border border-blue-200 bg-blue-50 p-3 sm:p-4">
                         <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
@@ -3194,26 +3207,6 @@ export default function ManageCircle() {
                           <p className="text-sm text-gray-500 mt-1">No USDC balances available</p>
                         )}
 
-                        <div className="mt-3 border-t border-blue-200 pt-3 sm:rounded-[18px] sm:border sm:border-blue-100 sm:bg-white sm:p-3 sm:border-t-0">
-                          <div className="flex justify-between items-center mb-2">
-                            <p className="text-xs font-semibold text-blue-700">USDC Contribution Trend</p>
-                            <p className="text-xs text-blue-700">{usdcContributionProgress.toFixed(1)}%</p>
-                          </div>
-                          <div className="h-2 bg-blue-100 rounded-full overflow-hidden">
-                            <div
-                              className="h-full bg-blue-600 rounded-full transition-all duration-500"
-                              style={{ width: `${usdcContributionProgress}%` }}
-                            />
-                          </div>
-                          <div className="mt-2 flex flex-col gap-1 text-xs text-gray-500 sm:flex-row sm:items-center sm:justify-between">
-                            <span>{formatUSD(usdcContributedThisCycle)} tracked</span>
-                            <span>
-                              {expectedCycleUsdcContributions > 0
-                                ? `Target ${formatUSD(expectedCycleUsdcContributions)}`
-                                : 'Target unavailable'}
-                            </span>
-                          </div>
-                        </div>
                       </div>
 
                       {/* SUI Balance Section */}
@@ -4263,46 +4256,51 @@ export default function ManageCircle() {
     try {
       toast.loading(messages.loading, { id: toastId });
       const zkLoginClient = ZkLoginClient.getInstance();
+      let digest: string | undefined;
 
       switch (action) {
         case 'proposeEmergencyStop':
-          await zkLoginClient.proposeEmergencyStop(account, {
+          ({ digest } = await zkLoginClient.proposeEmergencyStop(account, {
             circleId: circle.id,
             network: getCurrentNetwork(),
-          });
+          }));
           break;
         case 'voteEmergencyStop':
-          await zkLoginClient.voteEmergencyStop(account, {
+          ({ digest } = await zkLoginClient.voteEmergencyStop(account, {
             circleId: circle.id,
             yesVote: Boolean(extraBody.yesVote),
             network: getCurrentNetwork(),
-          });
+          }));
           break;
         // No default coin type: callers pass the one resolveRecoveryCoinType
         // read from the wallet, and the builders refuse an empty one. The
         // display default (the network's USDC) used to stand in here even
         // when the wallet held another coin or could not be read.
         case 'executeRecovery':
-          await zkLoginClient.executeRecovery(account, {
+          ({ digest } = await zkLoginClient.executeRecovery(account, {
             circleId: circle.id,
             walletId: String(extraBody.walletId || ''),
             stablecoinType: String(extraBody.stablecoinType || ''),
             network: getCurrentNetwork(),
-          });
+          }));
           break;
         case 'triggerAutoRelease':
-          await zkLoginClient.triggerAutoRelease(account, {
+          ({ digest } = await zkLoginClient.triggerAutoRelease(account, {
             circleId: circle.id,
             walletId: String(extraBody.walletId || ''),
             stablecoinType: String(extraBody.stablecoinType || ''),
             network: getCurrentNetwork(),
-          });
+          }));
           break;
         default:
           throw new Error(`Unsupported recovery action: ${action}`);
       }
 
       toast.success(messages.success, { id: toastId });
+      // Re-read only once the node we read from has the transaction, or the
+      // panel shows the state from before it (the vote count unchanged, the
+      // Execute button still there).
+      await waitForTxIndexed(getSuiClientFromPool(getJsonRpcUrl()), digest);
       await Promise.all([
         fetchCircleDetails(),
         fetchRecoveryStatus(),
@@ -4862,6 +4860,9 @@ export default function ManageCircle() {
       }
 
       setCircle(prevCircle => prevCircle ? { ...prevCircle, paused: false } : null);
+      // A read before the node has the resume would put "paused" (and the
+      // Resume button) back.
+      await waitForTxIndexed(getSuiClientFromPool(getJsonRpcUrl()), result.digest);
       await fetchCircleDetails();
 
       toast.success('Successfully resumed to the next cycle', { id: toastId });
@@ -5507,6 +5508,7 @@ export default function ManageCircle() {
                       <div className="mt-3 text-lg font-semibold text-slate-950">
                         <CurrencyDisplay
                           usd={circle.contributionAmountUsd}
+                          coin="contribution"
                           sui={circle.contributionAmount}
                           currencyType={circle.currencyType}
                           className="font-semibold"
@@ -5595,6 +5597,7 @@ export default function ManageCircle() {
                           <div className="mt-2 text-sm font-semibold text-slate-950">
                             <CurrencyDisplay
                               usd={circle.contributionAmountUsd}
+                              coin="contribution"
                               sui={circle.contributionAmount}
                               currencyType={circle.currencyType}
                               className="font-semibold"
@@ -5608,6 +5611,7 @@ export default function ManageCircle() {
                           <div className="mt-2 text-sm font-semibold text-slate-950">
                             <CurrencyDisplay
                               usd={circle.securityDepositUsd}
+                              coin="deposit"
                               sui={circle.securityDeposit}
                               currencyType={circle.currencyType}
                               className="font-semibold"
@@ -5711,6 +5715,7 @@ export default function ManageCircle() {
                       <div className="mt-3 text-lg font-semibold text-slate-950">
                         <CurrencyDisplay
                           usd={circle.contributionAmountUsd}
+                          coin="contribution"
                           sui={circle.contributionAmount}
                           currencyType={circle.currencyType}
                           className="font-semibold"
@@ -5723,6 +5728,7 @@ export default function ManageCircle() {
                       <div className="mt-3 text-lg font-semibold text-slate-950">
                         <CurrencyDisplay
                           usd={circle.securityDepositUsd}
+                          coin="deposit"
                           sui={circle.securityDeposit}
                           currencyType={circle.currencyType}
                           className="font-semibold"
@@ -7471,6 +7477,7 @@ export default function ManageCircle() {
                       <div className="mt-2 text-sm font-semibold text-slate-950">
                         <CurrencyDisplay
                           usd={circle.contributionAmountUsd}
+                          coin="contribution"
                           sui={circle.contributionAmount}
                           currencyType={circle.currencyType}
                           className="font-semibold"
@@ -7483,6 +7490,7 @@ export default function ManageCircle() {
                       <div className="mt-2 text-sm font-semibold text-slate-950">
                         <CurrencyDisplay
                           usd={circle.securityDepositUsd}
+                          coin="deposit"
                           sui={circle.securityDeposit}
                           currencyType={circle.currencyType}
                           className="font-semibold"

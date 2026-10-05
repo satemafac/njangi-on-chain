@@ -2610,6 +2610,7 @@ export default function Dashboard() {
           maxConcurrent: 5,
           limit: 1000,
           order: 'descending',
+          throwOnFailure: true,
           onProgress: (processed, total) => {
             console.log(`Admin events: ${processed}/${total} packages queried`);
           }
@@ -2633,7 +2634,8 @@ export default function Dashboard() {
         {
           maxConcurrent: 5,
           limit: 1000,
-          order: 'descending'
+          order: 'descending',
+          throwOnFailure: true,
         }
       );
 
@@ -2654,7 +2656,8 @@ export default function Dashboard() {
         {
           maxConcurrent: 5,
           limit: 1000,
-          order: 'descending'
+          order: 'descending',
+          throwOnFailure: true,
         }
       );
 
@@ -3428,7 +3431,15 @@ export default function Dashboard() {
         const [initialResultsFromScan, transactionDiscoveredEvents] = await Promise.all([
           cachedApiCall(
             initialCacheKey,
-            () => queryInitialUserCircles(client, userAddress, currentPackageId, INITIAL_LOAD_SIZE),
+            async () => {
+              const scan = await queryInitialUserCircles(client, userAddress, currentPackageId, INITIAL_LOAD_SIZE);
+              // A degraded scan is not an answer. cachedApiCall caches whatever
+              // resolves, so returning it would serve "no circles" again on the
+              // next load and on Refresh; failing here keeps it out of the cache
+              // and lands in the handler below, which keeps the saved circles.
+              if (scan.degraded) throw new Error('Circle scan degraded: some event queries failed.');
+              return scan;
+            },
             CACHE_CONFIG.CIRCLES_TTL / 2, // Shorter cache for initial load to keep it fresh
           ),
           cachedApiCall(
@@ -3488,7 +3499,8 @@ export default function Dashboard() {
           });
         } else {
           console.warn('No cached initial data available, continuing with empty dataset');
-          initialResults = { circles: [], adminCursor: undefined, memberCursor: undefined, hasMoreAdmin: false, hasMoreMember: false, degraded: false };
+          // The load failed: an empty list here means "unknown", not "none".
+          initialResults = { circles: [], adminCursor: undefined, memberCursor: undefined, hasMoreAdmin: false, hasMoreMember: false, degraded: true };
           setPaginationState({
             adminCursor: undefined,
             memberCursor: undefined,
@@ -4067,17 +4079,36 @@ export default function Dashboard() {
         return;
       }
 
-      // Always update the circles state with fresh data and cache it
-      setCircles(freshCirclesArray);
-      setCacheItem(cacheKey, freshCirclesArray);
-      
-      // Store admin circle IDs in localStorage for use by the Navbar component
-      const adminCircleIds = freshCirclesArray
-        .filter(circle => circle.isAdmin)
-        .map(circle => circle.id);
-        
-      console.log('Storing admin circle IDs in localStorage:', adminCircleIds);
-      localStorage.setItem('adminCircles', JSON.stringify(adminCircleIds));
+      if (initialResults.degraded) {
+        // Part of the scan failed (other sources still found circles). Show
+        // what loaded next to what was already on screen, and keep both the
+        // saved list and the Navbar's admin ids as they were: a partial list
+        // is not the user's circles.
+        console.warn('[dashboard] circle scan degraded — merging, not replacing');
+        setNetworkError({
+          type: 'service_unavailable',
+          message: "We couldn't load all of your circles just now, so some may be missing. Try again in a moment.",
+          canRetry: true,
+          retryCount: networkError.retryCount + 1,
+        });
+        setCircles(prev => {
+          const byId = new Map(prev.map(circle => [circle.id, circle]));
+          freshCirclesArray.forEach(circle => byId.set(circle.id, circle));
+          return Array.from(byId.values());
+        });
+      } else {
+        // Always update the circles state with fresh data and cache it
+        setCircles(freshCirclesArray);
+        setCacheItem(cacheKey, freshCirclesArray);
+
+        // Store admin circle IDs in localStorage for use by the Navbar component
+        const adminCircleIds = freshCirclesArray
+          .filter(circle => circle.isAdmin)
+          .map(circle => circle.id);
+
+        console.log('Storing admin circle IDs in localStorage:', adminCircleIds);
+        localStorage.setItem('adminCircles', JSON.stringify(adminCircleIds));
+      }
       
       // Update progress to completed
       setLoadingProgress({ stage: 'completed', current: 3, total: 3, message: `Successfully loaded ${freshCirclesArray.length} circles` });

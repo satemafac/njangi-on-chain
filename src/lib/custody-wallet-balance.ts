@@ -72,6 +72,14 @@ export interface CustodyBalances {
    * `Balance<USDC>` field, and any legacy `Coin<USDC>`.
    */
   usdc: bigint;
+  /**
+   * The parts of `suiDeposits` and `usdc` held in v11 deposit records
+   * (`DepositBalanceKey`). Those records hold security deposits only, so
+   * callers can label them without estimating from member records (which v11
+   * circles no longer fill).
+   */
+  suiDepositRecords: bigint;
+  usdcDepositRecords: bigint;
 }
 
 type CustodyBalanceClient = Pick<SuiClient, 'getObject' | 'getDynamicFields'>;
@@ -176,7 +184,7 @@ export async function readCustodyBalances(
       : null;
   if (suiMain === null) throw new Error(`Custody wallet ${walletId} did not read`);
 
-  const reads: Array<{ coin: 'sui' | 'usdc'; objectId: string; key: 'value' | 'balance' }> = [];
+  const reads: Array<{ coin: 'sui' | 'usdc'; objectId: string; key: 'value' | 'balance'; record?: true }> = [];
   let cursor: string | null = null;
   for (let page = 0; ; page += 1) {
     if (page >= MAX_CUSTODY_FIELD_PAGES) {
@@ -196,8 +204,8 @@ export async function readCustodyBalances(
         if (!keyCoinType || !valueCoinType || keyCoinType !== valueCoinType) {
           throw new Error(`Custody wallet ${walletId} holds a deposit record that did not read`);
         }
-        if (keyCoinType === SUI_TYPE) reads.push({ coin: 'sui', objectId: entry.objectId, key: 'value' });
-        else if (keyCoinType === usdcType) reads.push({ coin: 'usdc', objectId: entry.objectId, key: 'value' });
+        if (keyCoinType === SUI_TYPE) reads.push({ coin: 'sui', objectId: entry.objectId, key: 'value', record: true });
+        else if (keyCoinType === usdcType) reads.push({ coin: 'usdc', objectId: entry.objectId, key: 'value', record: true });
       } else if (entry.type === 'DynamicField') {
         // A typed balance is stored under its own coin type's name.
         const coinType = frameworkTypeParam(entry.objectType, 'balance', 'Balance');
@@ -223,9 +231,16 @@ export async function readCustodyBalances(
   const values = await Promise.all(reads.map((read) => readObjectBalance(client, read.objectId, read.key)));
   let suiDeposits = 0n;
   let usdc = 0n;
+  let suiDepositRecords = 0n;
+  let usdcDepositRecords = 0n;
   reads.forEach((read, index) => {
-    if (read.coin === 'sui') suiDeposits += values[index];
-    else usdc += values[index];
+    if (read.coin === 'sui') {
+      suiDeposits += values[index];
+      if (read.record) suiDepositRecords += values[index];
+    } else {
+      usdc += values[index];
+      if (read.record) usdcDepositRecords += values[index];
+    }
   });
-  return { suiMain, suiDeposits, usdc };
+  return { suiMain, suiDeposits, usdc, suiDepositRecords, usdcDepositRecords };
 }

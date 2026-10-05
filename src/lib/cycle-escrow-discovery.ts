@@ -523,6 +523,37 @@ async function findCycleEscrowFromEvents(
 // ---------------------------------------------------------------------------
 
 /**
+ * Has the circle ever started? `activate_circle` sets `current_cycle` to 1
+ * (or, for a migrated circle, past it) and nothing resets it, so a circle
+ * that is not active with `current_cycle` 0 has never started. `unknown`
+ * when the circle could not be read: never a guess either way.
+ */
+export async function readCircleStarted(
+  client: Pick<SuiClient, 'getObject'>,
+  circleId: string,
+): Promise<'never-started' | 'started' | 'unknown'> {
+  try {
+    const response = await client.getObject({ id: circleId, options: { showContent: true } });
+    const content = response.data?.content;
+    const fields = content && content.dataType === 'moveObject'
+      ? (content.fields as Record<string, unknown>)
+      : null;
+    const rawCycle = fields?.current_cycle;
+    const cycle =
+      typeof rawCycle === 'string' && /^\d+$/.test(rawCycle)
+        ? BigInt(rawCycle)
+        : typeof rawCycle === 'number' && Number.isSafeInteger(rawCycle) && rawCycle >= 0
+          ? BigInt(rawCycle)
+          : null;
+    const active = fields?.is_active;
+    if (cycle === null || typeof active !== 'boolean') return 'unknown';
+    return !active && cycle === 0n ? 'never-started' : 'started';
+  } catch {
+    return 'unknown';
+  }
+}
+
+/**
  * The current round's escrow for a circle, or null when the circle has
  * genuinely not had a round opened. Optionally filters by cycle number; pass
  * `undefined` to pick the latest regardless.
@@ -590,6 +621,16 @@ export async function findCurrentCycleEscrow(
       '[cycle-escrow-discovery] escrow_history unreadable; falling back to CycleEscrowOpened events',
       { circleId },
     );
+  }
+
+  // A circle with no escrow history that has never started has opened no
+  // round, so there is nothing for the event scan to find. Skipping it keeps
+  // a brand-new circle from showing "couldn't reach the network" whenever the
+  // one endpoint that serves event queries rate-limits. A started circle
+  // without the history (rounds that predate it) still gets the scan, and so
+  // does a circle whose lifecycle could not be read.
+  if (history.kind === 'absent' && (await readCircleStarted(client, circleId)) === 'never-started') {
+    return null;
   }
 
   // Tier 2: the event scan, for circles the history cannot answer for.

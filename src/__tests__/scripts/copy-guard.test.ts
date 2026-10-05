@@ -54,6 +54,25 @@ describe('banned single words', () => {
     expect(asCopy(copy)).toEqual([]);
   });
 
+  // The owner's rule: nothing may read as Njangi holding members' money.
+  it.each([
+    'USDC-only treasury',
+    'Treasury Health',
+    'Your deposit sits in the circle vault.',
+    'Two vaults, one per coin.',
+  ])('flags custody wording: %p', (copy) => {
+    expect(asCopy(copy)).toHaveLength(1);
+  });
+
+  it.each([
+    'House of Commons Treasury Committee, Thirteenth Report of Session 2006-07',
+    "OFAC, part of the U.S. Department of the Treasury, publishes the list.",
+    'The list is downloaded from treasury.gov every week.',
+    'HM Treasury publishes the UK list.',
+  ])('allows the proper nouns of citations and sanctions copy: %p', (copy) => {
+    expect(asCopy(copy)).toEqual([]);
+  });
+
   it('allows a return label whose object is interpolated', () => {
     expect(inTsx('const label = `Return ${count} Deposits`;')).toEqual([]);
     expect(inTsx('const el = <button>Return {count} deposits</button>;')).toEqual([]);
