@@ -3030,6 +3030,21 @@ export default function ManageCircle() {
     // An unreadable policy keeps the switch locked rather than offering it.
     const coinIsPinned = coinTerms.status === 'pinned';
     const coinTermsUnknown = coinTerms.status === 'unknown' || coinTerms.status === 'loading';
+    // Shown whether or not the custody wallet has been found: the coin comes
+    // from the circle's own terms, not from the wallet.
+    const pinnedCoinBlock = coinTerms.status === 'pinned' ? (
+      <div className="rounded-[18px] border border-stone-200 bg-white p-3">
+        <p className="text-xs text-gray-500 mb-1">This circle&rsquo;s coin</p>
+        <p className="text-sm font-semibold text-gray-800">
+          {coinTerms.symbol ?? UNSUPPORTED_COIN_LABEL}
+        </p>
+        {coinTerms.contributionLabel && coinTerms.depositLabel && (
+          <p className="text-xs text-gray-500 mt-1">
+            Contribution {coinTerms.contributionLabel} &middot; security deposit {coinTerms.depositLabel}
+          </p>
+        )}
+      </div>
+    ) : null;
 
     return (
       <div className="space-y-4">
@@ -3044,25 +3059,16 @@ export default function ManageCircle() {
 
         <div className="space-y-4">
           {!circle.custody?.walletId ? (
-            <div className="rounded-[20px] border border-stone-200 bg-stone-50/80 p-4 text-center text-gray-500">
-              <p>Custody wallet information not available</p>
+            <div className="space-y-4">
+              {pinnedCoinBlock}
+              <div className="rounded-[20px] border border-stone-200 bg-stone-50/80 p-4 text-center text-gray-500">
+                <p>Custody wallet information not available</p>
+              </div>
             </div>
           ) : (
             <div className="space-y-4 sm:space-y-5">
               <div className="space-y-4">
-                {coinTerms.status === 'pinned' ? (
-                  <div className="rounded-[18px] border border-stone-200 bg-white p-3">
-                    <p className="text-xs text-gray-500 mb-1">This circle&rsquo;s coin</p>
-                    <p className="text-sm font-semibold text-gray-800">
-                      {coinTerms.symbol ?? UNSUPPORTED_COIN_LABEL}
-                    </p>
-                    {coinTerms.contributionLabel && coinTerms.depositLabel && (
-                      <p className="text-xs text-gray-500 mt-1">
-                        Contribution {coinTerms.contributionLabel} &middot; security deposit {coinTerms.depositLabel}
-                      </p>
-                    )}
-                  </div>
-                ) : (
+                {pinnedCoinBlock ?? (
                 <>
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div className="min-w-0">

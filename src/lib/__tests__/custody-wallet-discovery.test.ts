@@ -168,6 +168,62 @@ describe('resolveCustodyWalletId', () => {
   });
 });
 
+describe('resolveCustodyWalletId — v11 asset policy tier', () => {
+  const POLICY = '0x' + 'd0'.repeat(32);
+  const OTHER = '0x' + 'ee'.repeat(32);
+  const policyClient = (policyWallet: string, extra: Partial<Record<keyof SuiClient, unknown>> = {}) =>
+    makeClient({
+      // A pre-v9 circle: the wallet_id field still holds the placeholder.
+      getDynamicFieldObject: jest.fn(async () => fieldHolding(CIRCLE)),
+      getDynamicFields: jest.fn(async () => ({
+        data: [{ name: { type: `${PKG}::njangi_circles::AssetPolicyKey`, value: {} }, objectId: POLICY }],
+        hasNextPage: false,
+        nextCursor: null,
+      })),
+      getObject: jest.fn(async ({ id }: { id: string }) => {
+        if (id === POLICY) {
+          return {
+            data: {
+              content: {
+                dataType: 'moveObject',
+                fields: { value: { type: `${PKG}::njangi_circles::CircleAssetPolicy`, fields: { wallet_id: policyWallet } } },
+              },
+            },
+          };
+        }
+        return id === WALLET ? custodyWalletObject : someOtherObject;
+      }),
+      ...extra,
+    });
+
+  it('resolves through the asset policy, before the creation transaction and the events', async () => {
+    const getTransactionBlock = jest.fn();
+    const queryEvents = jest.fn();
+    const client = policyClient(WALLET, { getTransactionBlock });
+
+    const result = await resolveCustodyWalletId({ client, circleId: CIRCLE, packageId: PKG, queryEvents });
+
+    expect(result).toEqual({ walletId: WALLET, source: 'asset_policy' });
+    expect(getTransactionBlock).not.toHaveBeenCalled();
+    expect(queryEvents).not.toHaveBeenCalled();
+  });
+
+  it('does not trust a policy wallet that fails validation', async () => {
+    const queryEvents = jest.fn(async () => ({
+      data: [{ parsedJson: { circle_id: CIRCLE, wallet_id: WALLET } }],
+    }));
+    const client = policyClient(OTHER, {
+      // No creation-transaction answer, so the next tier that can is the events.
+      getTransactionBlock: jest.fn().mockRejectedValue(new Error('pruned')),
+    });
+    jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const result = await resolveCustodyWalletId({ client, circleId: CIRCLE, packageId: PKG, queryEvents });
+
+    expect(result).toEqual({ walletId: WALLET, source: 'events' });
+  });
+});
+
 describe('isCustodyWalletForCircle', () => {
   it('accepts only a CustodyWallet whose circle_id points back at the circle', async () => {
     const client = makeClient();
