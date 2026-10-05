@@ -52,3 +52,23 @@ export function normalizeRequiredObjectId(value: unknown, label: string): string
 
   return normalizeSuiObjectId(trimmed);
 }
+
+/**
+ * The custody wallet id a circle refresh should settle on. A circle's custody
+ * wallet never changes once created, so a resolved id the page already holds
+ * for the SAME circle outlives a later read that could not find it. A read
+ * failure is not a missing wallet: dropping to the placeholder disables every
+ * payment control and sets off the page's wallet retry (contribute page,
+ * 2026-10-05).
+ */
+export function keepKnownWalletId(
+  found: string,
+  circleId: string,
+  known: { circleId: string | null | undefined; walletId: string | null | undefined } | null,
+): string {
+  if (isResolvedSuiObjectId(found)) return found;
+  if (known && known.circleId === circleId && isResolvedSuiObjectId(known.walletId)) {
+    return known.walletId;
+  }
+  return found;
+}

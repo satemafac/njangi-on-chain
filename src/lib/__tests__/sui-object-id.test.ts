@@ -1,6 +1,7 @@
 import {
   ZERO_SUI_OBJECT_ID,
   isResolvedSuiObjectId,
+  keepKnownWalletId,
   normalizeRequiredObjectId,
 } from '@/lib/sui-object-id';
 
@@ -60,5 +61,31 @@ describe('normalizeRequiredObjectId', () => {
     expect(() => normalizeRequiredObjectId('not-an-id', 'Custody wallet ID')).toThrow(
       'Custody wallet ID is invalid.',
     );
+  });
+});
+
+describe('keepKnownWalletId', () => {
+  // Production circle 0xa3fada…675ed predates package v9, so its raw
+  // `wallet_id` is a placeholder. A refresh whose lookup missed fell back to
+  // it and dropped the wallet the page already had (2026-10-05).
+  const CIRCLE = '0x' + 'a3'.repeat(32);
+  const OTHER_CIRCLE = '0x' + 'b4'.repeat(32);
+  const WALLET = '0x' + '81'.repeat(32);
+  const FOUND = '0x' + '92'.repeat(32);
+
+  it('keeps the wallet this page already resolved for the circle', () => {
+    const known = { circleId: CIRCLE, walletId: WALLET };
+    expect(keepKnownWalletId('', CIRCLE, known)).toBe(WALLET);
+    expect(keepKnownWalletId('0x0', CIRCLE, known)).toBe(WALLET);
+  });
+
+  it('takes a freshly resolved id over the known one', () => {
+    expect(keepKnownWalletId(FOUND, CIRCLE, { circleId: CIRCLE, walletId: WALLET })).toBe(FOUND);
+  });
+
+  it("never borrows another circle's wallet, or an unresolved one", () => {
+    expect(keepKnownWalletId('', CIRCLE, { circleId: OTHER_CIRCLE, walletId: WALLET })).toBe('');
+    expect(keepKnownWalletId('', CIRCLE, { circleId: CIRCLE, walletId: '0x0' })).toBe('');
+    expect(keepKnownWalletId('', CIRCLE, null)).toBe('');
   });
 });
