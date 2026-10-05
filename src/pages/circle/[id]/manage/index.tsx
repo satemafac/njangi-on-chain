@@ -36,6 +36,7 @@ import { resolveStablecoinMetadata } from '@/lib/stablecoin-metadata';
 import { readCustodyBalances, type CustodyBalances } from '@/lib/custody-wallet-balance';
 import { useCircleCoinTerms } from '@/lib/circle-coin-terms';
 import { waitForTxIndexed } from '@/lib/wait-for-tx-indexed';
+import { lookupMemberNames } from '@/lib/member-name-lookup';
 import { supportedCoinBySymbol, UNSUPPORTED_COIN_LABEL } from '@/lib/supported-coins';
 import { priceService } from '../../../../services/price-service';
 import { JoinRequest } from '../../../../services/database-service';
@@ -746,9 +747,28 @@ export default function ManageCircle() {
   // first contribution round once it sees `isActive=true`. Cleared by
   // the panel's `onAutoOpenFired` callback after firing once.
   const [autoOpenFirstRound, setAutoOpenFirstRound] = useState(false);
-  // The Member type on this page is address-only; the panel falls back
-  // to shortened addresses when no display name is mapped.
-  const memberNameMap = useMemo<Record<string, string>>(() => ({}), []);
+  // Display names for the round and migration panels: the names members
+  // gave in their join requests (member-name-lookup.ts), as on the
+  // contribute page. The creator files none; the round panel labels the
+  // admin's address "Circle admin". A missing or failed lookup leaves the
+  // short address.
+  const [memberNameMap, setMemberNameMap] = useState<Record<string, string>>({});
+  const memberAddressKey = useMemo(
+    () => members.map((member) => member.address).sort().join(','),
+    [members],
+  );
+  useEffect(() => {
+    if (typeof id !== 'string' || !memberAddressKey) return;
+    let cancelled = false;
+    lookupMemberNames(id, memberAddressKey.split(','))
+      .then((names) => {
+        if (!cancelled) setMemberNameMap(names);
+      })
+      .catch((err) => console.warn('[manage] Failed to resolve member names', err));
+    return () => {
+      cancelled = true;
+    };
+  }, [id, memberAddressKey]);
 
   // Add state variables for max members editing
   const [isEditingMaxMembers, setIsEditingMaxMembers] = useState(false);
@@ -835,12 +855,15 @@ export default function ManageCircle() {
   // Add request deduplication
   const [isFetching, setIsFetching] = useState(false);
   
-  const fetchCircleDetails = async () => {
+  // `quiet` re-reads without the page's loading state, which swaps the
+  // page for a skeleton and unmounts the CycleEscrowPanel (and its payout
+  // celebration). Used after the panel's own transactions.
+  const fetchCircleDetails = async ({ quiet = false }: { quiet?: boolean } = {}) => {
     if (!id || !userAddress || isFetching) return;
     
     debugLog('Fetching circle details', { circleId: id });
     setIsFetching(true);
-    setLoading(true);
+    if (!quiet) setLoading(true);
 
     // This is the single refresh entry point (also called after every admin
     // write), so drop cached reads for this circle first — a refetch must
@@ -1381,7 +1404,7 @@ export default function ManageCircle() {
         toast.error('Could not load circle information');
       }
     } finally {
-      setLoading(false);
+      if (!quiet) setLoading(false);
       setIsFetching(false);
     }
   };
@@ -4836,7 +4859,7 @@ export default function ManageCircle() {
    *
    * Runs the transaction directly rather than opening a second dialog. The
    * button that reaches here already confirms, with strictly more detail (it
-   * spells out that deposits stay in custody across laps — since package v7
+   * spells out that deposits stay in place across laps — since package v7
    * `resume_cycle` no longer clears them); the dialog this used to chain only
    * restated it. Chaining was also what broke it: a dialog opened from inside
    * another dialog's confirm handler is closed again by the dialog that is
@@ -5906,8 +5929,8 @@ export default function ManageCircle() {
                         <p className="mt-4 flex items-start rounded-[18px] border border-amber-200 bg-white/70 p-3 text-sm font-medium text-amber-900">
                           <Info className="mr-2 h-4 w-4 flex-shrink-0 mt-0.5" />
                           <span>
-                            Security deposits stay in the custody wallet between cycles. Resuming starts the next cycle from
-                            the top of the rotation order; members keep their existing deposit and are not asked to pay it again.
+                            Security deposits stay in place between cycles. Resuming starts the next cycle from the top of
+                            the rotation order; members keep their existing deposit and are not asked to pay it again.
                           </span>
                         </p>
                       </div>
@@ -5920,7 +5943,7 @@ export default function ManageCircle() {
                               message: (
                                 <div>
                                   <p className="mb-2">Are you sure you want to resume the circle for the next cycle?</p>
-                                  <p className="text-amber-600 font-medium">The next cycle starts from the top of the rotation order. Security deposits stay in custody and members are not asked to pay them again; only members admitted while the circle was paused still owe theirs.</p>
+                                  <p className="text-amber-600 font-medium">The next cycle starts from the top of the rotation order. Security deposits stay in place, so members are not asked to pay them again; only members admitted while the circle was paused still owe theirs.</p>
                                 </div>
                               ),
                               onConfirm: () => handleResumeCycle(), // Use the existing handleResumeCycle function
@@ -5944,7 +5967,7 @@ export default function ManageCircle() {
                           Manage Deposits
                         </button>
                         <button
-                          onClick={fetchCircleDetails}
+                          onClick={() => void fetchCircleDetails()}
                           className={`${secondaryActionClass} w-full`}
                         >
                           <RefreshCw className="mr-2 h-4 w-4" />
@@ -5979,7 +6002,7 @@ export default function ManageCircle() {
                           Manage Deposits
                         </button>
                         <button
-                          onClick={fetchCircleDetails}
+                          onClick={() => void fetchCircleDetails()}
                           className={`${secondaryActionClass} w-full`}
                         >
                           <RefreshCw className="mr-2 h-4 w-4" />
@@ -7269,6 +7292,13 @@ export default function ManageCircle() {
                       autoOpenWhenReady={autoOpenFirstRound}
                       onAutoOpenFired={() => setAutoOpenFirstRound(false)}
                       openCoin={resolveCircleSettlementCoin(circle.autoSwapEnabled)}
+                      // A collect that ends the lap pauses the circle, and the
+                      // paused banner and Resume Cycle come from this page's
+                      // circle state: re-read it without unmounting the panel.
+                      onTransactionSettled={() => {
+                        void fetchCircleDetails({ quiet: true });
+                        void fetchContributionStatus();
+                      }}
                     />
                   </div>
                 ) : null}

@@ -931,13 +931,21 @@ export default function ContributeToCircle() {
     fetchCustodyWalletSuiBalance();
   };
 
-  const fetchCircleDetails = async () => {
+  // `quiet` re-reads without the page's loading state, which unmounts the
+  // CycleEscrowPanel (and its payout celebration) until the read finishes.
+  // Used after the panel's own transactions, see `onTransactionSettled`.
+  const fetchCircleDetails = async ({ quiet = false }: { quiet?: boolean } = {}) => {
     if (!id || !userAddress) return;
     console.log('Contribute - Fetching circle details for:', id);
     
-    setLoading(true);
-    setCurrentPositionInCycle(null); // Reset before fetching
-    setTotalMembersInRotation(null); // Reset before fetching
+    if (quiet) {
+      // A transaction just changed this circle; don't serve the cached read.
+      invalidateObject(id as string);
+    } else {
+      setLoading(true);
+      setCurrentPositionInCycle(null); // Reset before fetching
+      setTotalMembersInRotation(null); // Reset before fetching
+    }
     try {
       // Determine package ID for this circle
       const determinedPackageId = await getCirclePackageId(id as string, userAddress);
@@ -1383,7 +1391,7 @@ export default function ContributeToCircle() {
       console.error('Contribute - Error fetching circle details:', error);
       toast.error('Could not load circle information');
     } finally {
-      setLoading(false);
+      if (!quiet) setLoading(false);
     }
   };
 
@@ -3422,7 +3430,7 @@ export default function ContributeToCircle() {
                   </p>
                 )}
                 <p className="mt-3 text-sm text-amber-800">
-                  <span className="font-medium">Note:</span> Security deposits stay in the circle&apos;s custody wallet between cycles. If yours is already paid, you will not be asked for it again when the admin resumes the circle.
+                  <span className="font-medium">Note:</span> Security deposits stay in place between cycles. If yours is already paid, you will not be asked for it again when the admin resumes the circle.
                 </p>
               </div>
             </div>
@@ -3910,8 +3918,8 @@ export default function ContributeToCircle() {
                       before contributing.
                     </p>
                     <p className="text-xs text-amber-500 mt-2 italic">
-                      Note: You post the security deposit once. It stays in the circle&apos;s custody wallet for every
-                      cycle and is not collected again when the admin resumes the circle.
+                      Note: You post the security deposit once. It stays in place for every cycle and is not
+                      collected again when the admin resumes the circle.
                     </p>
                   </div>
                   
@@ -4128,6 +4136,13 @@ export default function ContributeToCircle() {
                   adminAddress={circle.admin}
                   onRoundStatusChange={setRoundStatus}
                   viewerAddress={userAddress}
+                  // A collect can end the lap and pause the circle, and every
+                  // pay or collect moves the wallet balance: re-read both
+                  // without unmounting the panel.
+                  onTransactionSettled={() => {
+                    void fetchCircleDetails({ quiet: true });
+                    void fetchUserWalletInfo();
+                  }}
                   openCoin={resolveCircleSettlementCoin(circle.autoSwapEnabled)}
                 />
               ) : null}

@@ -177,6 +177,19 @@ export const BARE_WORD_RULES: BareWordRule[] = [
     allowed: () => false,
   },
   {
+    word: /\bcustody\b/gi,
+    why: 'says members\' money sits "in custody", i.e. someone holds it (owner rule: no custody wording; deposits "stay in place")',
+    // Only money said to sit IN custody: "stay in custody", "held in the
+    // custody wallet", "kept in the circle's custody wallet", "in our
+    // custody". The noun stays legal everywhere else: "self-custody", "not
+    // custody", the "Custody" proof label, and "custody wallet" as the
+    // on-chain object's name.
+    allowed: (before) =>
+      !/\b(?:stays?|staying|stayed|held|holds?|holding|kept|keeps?|keeping|remains?|remaining|sits?|sitting|placed|put)\s+in\s+(?:\S+\s+){0,2}$/i.test(
+        before,
+      ) && !/\bin\s+(?:our|Njangi[’']?s?)\s+$/i.test(before),
+  },
+  {
     word: /\btreasur(?:y|ies)\b/gi,
     why: 'treasury wording implies Njangi holds members\' money (owner rule: never "treasury")',
     // Only the proper nouns of citations and sanctions copy: "Treasury

@@ -64,6 +64,29 @@ describe('banned single words', () => {
     expect(asCopy(copy)).toHaveLength(1);
   });
 
+  // The resume confirmation said deposits "stay in custody" (2026-10-05).
+  it.each([
+    'Security deposits stay in custody and members are not asked to pay them again.',
+    'Security deposits stay in the custody wallet between cycles.',
+    "Note: Security deposits stay in the circle's custody wallet between cycles.",
+    'Your share is held in custody until the round closes.',
+    'The pot sits in our custody until payout.',
+  ])('flags money said to sit in custody: %p', (copy) => {
+    expect(asCopy(copy)).toHaveLength(1);
+  });
+
+  it.each([
+    'Direct wallet settlement with self-custody',
+    'It is not financial advice, custody, or a guarantee of returns.',
+    'Provider-controlled custody and rules',
+    'Custody',
+    'Circle Custody Wallet',
+    "Step 2: Deposit the swapped USDC to the circle's custody wallet as your security deposit.",
+    'Security deposits stay in place, so members are not asked to pay them again.',
+  ])('leaves other uses of custody alone: %p', (copy) => {
+    expect(asCopy(copy)).toEqual([]);
+  });
+
   it.each([
     'House of Commons Treasury Committee, Thirteenth Report of Session 2006-07',
     "OFAC, part of the U.S. Department of the Treasury, publishes the list.",
