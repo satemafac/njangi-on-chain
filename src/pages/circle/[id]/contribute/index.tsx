@@ -43,7 +43,7 @@ import {
   type MigrationLedger,
 } from '@/lib/circle-migration';
 import { resolveCircleLifecycleState } from '@/lib/circle-chain';
-import { isResolvedSuiObjectId } from '@/lib/sui-object-id';
+import { isResolvedSuiObjectId, keepKnownWalletId } from '@/lib/sui-object-id';
 import type { CoinbaseAssetIntent } from '@/types/coinbase-onramp';
 
 // Add this helper function at the top level
@@ -1095,32 +1095,37 @@ export default function ContributeToCircle() {
             // Add any other inputs you stored this way
           }
         }
-        
-        // 3. Resolve the custody wallet id. Three-tier discovery (dynamic
-        // field -> events -> the member's own deposit history) so a per-node
-        // indexer gap or expired event retention no longer erases the wallet
-        // from the page — deposits build their transaction against this id.
-        try {
-          const custodyResolution = await resolveCustodyWalletId({
-            client,
-            circleId: id as string,
-            packageId: determinedPackageId,
-            userAddress,
-          });
-          if (custodyResolution) {
-            walletId = custodyResolution.walletId;
-            console.log('Contribute - custody wallet resolved via', custodyResolution.source);
-          } else {
-            console.warn('Contribute - custody wallet unresolved for circle:', id);
-          }
-        } catch (walletLookupErr) {
-          console.warn('Contribute - custody wallet lookup failed (non-fatal):', walletLookupErr);
-        }
 
       } catch (error) {
         logSuiReadError('Contribute - Error fetching event/transaction data:', error);
         // Continue even if this fails, rely on other data sources
         }
+
+      // 3. Resolve the custody wallet id: dynamic field, the circle's v11
+      // terms, its creation transaction, events, then the member's own
+      // deposit history (custody-wallet-discovery.ts). Deliberately outside
+      // the try above. The CircleCreated query there fails on endpoints
+      // without an event index (publicnode answers it with a JSON-RPC
+      // error), and nesting this step in it skipped the lookup whenever
+      // that happened. The page then fell back to the circle's raw
+      // `wallet_id`, a placeholder on circles from before package v9, and
+      // the wallet retry below re-ran the whole page (2026-10-05).
+      try {
+        const custodyResolution = await resolveCustodyWalletId({
+          client,
+          circleId: id as string,
+          packageId: determinedPackageId,
+          userAddress,
+        });
+        if (custodyResolution) {
+          walletId = custodyResolution.walletId;
+          console.log('Contribute - custody wallet resolved via', custodyResolution.source);
+        } else {
+          console.warn('Contribute - custody wallet unresolved for circle:', id);
+        }
+      } catch (walletLookupErr) {
+        console.warn('Contribute - custody wallet lookup failed (non-fatal):', walletLookupErr);
+      }
 
       // --- Process Extracted Data (Prioritize sources) ---
       const configValues = {
@@ -1319,6 +1324,13 @@ export default function ContributeToCircle() {
           walletId = fields.wallet_id;
           console.log('Contribute - Using wallet ID from direct field:', walletId);
       }
+      // A circle's custody wallet never changes: a resolved id this page
+      // already has outlives a read that could not find it.
+      walletId = keepKnownWalletId(
+        walletId,
+        id as string,
+        circle ? { circleId: circle.id, walletId: circle.walletId } : null,
+      );
         
       // Set the final circle state
       const finalCurrencyType = (transactionInput?.currency_type as string || circleCreationEventData?.currency_type || 'USD');
@@ -2989,7 +3001,10 @@ export default function ContributeToCircle() {
       console.log(
         `[contribute] custody wallet unresolved, retry ${attempt + 1}/${MAX_WALLET_RETRIES}`,
       );
-      void fetchCircleDetails();
+      // Quiet: the circle is already on screen. A full refresh shows the
+      // loading state, which unmounts the round panel (closing a payout
+      // celebration) for a lookup the page can retry in place.
+      void fetchCircleDetails({ quiet: true });
     }, delayMs);
 
     return () => clearTimeout(timer);
