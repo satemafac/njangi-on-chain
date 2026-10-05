@@ -52,6 +52,7 @@ const escrowFor = (circleId: string) => ({ escrowId: `${circleId}-escrow`, circl
 const gatedState = {
   cycleNo: 3,
   recipient: RECIPIENT,
+  members: [PAYER, RECIPIENT],
   requiresAttestation: true,
   claimed: false,
 };
@@ -74,6 +75,8 @@ describe('buildStaleReport', () => {
       [PAYER, RECIPIENT].sort(),
     );
     expect(report.stale[0]).toMatchObject({ circleId: CIRCLE_A, cycleNo: 3, reason: 'no_attestation' });
+    // Lap 3, recipient in the second of two seats: round 6, not "round 3".
+    expect(report.stale[0].roundNo).toBe(6);
   });
 
   it('keeps sweeping when one circle’s escrow state read throws, and lists that circle as unchecked', async () => {

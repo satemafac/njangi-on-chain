@@ -181,11 +181,14 @@ describe('completedRoundCopyKey', () => {
   // EN lacks it too — a typo here would print "escrow.completed.resumeCycle"
   // on screen. Every locale carried the old string, so every locale carries
   // all four variants, with the placeholders the panel interpolates.
-  it.each(locales)('defines every variant in %s with {cycle} and {recipient}', (locale) => {
+  // {round} is the circle-wide round number (round-number.ts), not the
+  // snapshot's cycle_no, which counts laps and repeats within one.
+  it.each(locales)('defines every variant in %s with {round} and {recipient}', (locale) => {
     for (const action of actions) {
       const value = DICTIONARIES[locale][completedRoundCopyKey(action)];
       expect(value).toBeDefined();
-      expect(value).toContain('{cycle}');
+      expect(value).toContain('{round}');
+      expect(value).not.toContain('{cycle}');
       expect(value).toContain('{recipient}');
     }
   });

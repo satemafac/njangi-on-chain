@@ -75,7 +75,13 @@ export default function AdminCompliancePage() {
   // notification audit log so ops have everything in one console.
   const [staleCircleIdsInput, setStaleCircleIdsInput] = useState('');
   const [staleEntries, setStaleEntries] = useState<
-    Array<{ circleId: string; cycleNo: number; memberAddress: string; reason: string }>
+    Array<{
+      circleId: string;
+      cycleNo: number;
+      roundNo?: number | null;
+      memberAddress: string;
+      reason: string;
+    }>
   >([]);
   // Circles the last sweep could not read. Their members are unknown, so the
   // list below must not read as "nobody is blocked" while this is non-empty.
@@ -761,7 +767,9 @@ export default function AdminCompliancePage() {
                 >
                   <p className="font-medium text-slate-900 break-all">{entry.memberAddress}</p>
                   <p className="text-[11px] text-slate-500">
-                    {entry.circleId.slice(0, 10)}… · round {entry.cycleNo} · {entry.reason}
+                    {entry.circleId.slice(0, 10)}… ·{' '}
+                    {entry.roundNo != null ? `round ${entry.roundNo}` : `lap ${entry.cycleNo}`} ·{' '}
+                    {entry.reason}
                   </p>
                 </li>
               ))}

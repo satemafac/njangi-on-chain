@@ -139,8 +139,9 @@ interface FakeEventPage {
 
 /**
  * getObject response for the round's CycleEscrow<USDC>, in the shape
- * testnet returns: the escrow names its circle; the round target sits in
- * the frozen snapshot.
+ * testnet returns: the escrow names its circle; the round target and the
+ * seats sit in the frozen snapshot. cycle_no 5 is a lap; with the recipient
+ * in the second of three seats this is round (5 − 1) × 3 + 2 = 14.
  */
 const ESCROW_OBJECT = {
   data: {
@@ -153,7 +154,12 @@ const ESCROW_OBJECT = {
         circle_id: CIRCLE,
         snapshot: {
           type: '0xcore::njangi_cycle_escrow::CycleSnapshot',
-          fields: { cycle_no: '5', recipient: RECIPIENT, required_contributors: '2' },
+          fields: {
+            cycle_no: '5',
+            recipient: RECIPIENT,
+            members: [MEMBER, RECIPIENT, '0x' + 'df'.repeat(32)],
+            required_contributors: '2',
+          },
         },
       },
     },
@@ -268,7 +274,7 @@ describe('ported event dispatch (smoke)', () => {
     // (6 decimals, from the escrow's type) + round progress.
     expect(call.body).toBe(
       'Contribution received in Bamenda Savers.\n' +
-        `Round 5: Aminata (0xabab...abab) paid 0.10 USDC. ` +
+        `Round 14: Aminata (0xabab...abab) paid 0.10 USDC. ` +
         '1 of 2 members have paid in for this round.\n' +
         `View progress: https://njangionchain.com/circle/${CIRCLE}`,
     );
@@ -342,11 +348,11 @@ describe('ported event dispatch (smoke)', () => {
     expect(call.memberAddress).toBe(CIRCLE);
     expect(call.dedupeKey).toBe('claim_redeemed:tx-claim:1');
     expect(call.body).toContain('Payout collected in Bamenda Savers.');
-    expect(call.body).toContain('Round 5: Aminata (0x1f1f...1f1f) received 0.20 USDC.');
+    expect(call.body).toContain('Round 14: Aminata (0x1f1f...1f1f) received 0.20 USDC.');
     expect(call.template.name).toBe('payout_processed');
     expect(call.template.components[0].parameters.map((p: { text: string }) => p.text)).toEqual([
       'Bamenda Savers',
-      '5',
+      '14',
       'Aminata',
       '0.20 USDC',
       expect.any(String),

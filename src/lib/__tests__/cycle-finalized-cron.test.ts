@@ -346,6 +346,7 @@ const OPEN_ESCROW: YourTurnEscrow = {
   circleId: CIRCLE,
   coinType: USDC,
   recipient: RECIPIENT,
+  members: [PAYER_1, PAYER_2, RECIPIENT],
   requiredContributors: 2,
   claimed: false,
   refunded: false,
@@ -402,6 +403,18 @@ describe('parseYourTurnEscrow', () => {
       ...OPEN_ESCROW,
       claimed: true,
     });
+  });
+
+  it('keeps the member list for numbering the round, and does without it', () => {
+    expect(parseYourTurnEscrow(escrowResponse())?.members).toEqual([PAYER_1, PAYER_2, RECIPIENT]);
+    // A node that leaves the list out still yields an escrow: only the
+    // round number in the message depends on it.
+    expect(
+      parseYourTurnEscrow(escrowResponse({ snapshot: { members: undefined } }))?.members,
+    ).toBeNull();
+    expect(
+      parseYourTurnEscrow(escrowResponse({ snapshot: { members: [PAYER_1, 7] } }))?.members,
+    ).toBeNull();
   });
 
   it("takes the coin from the object's type argument, SUI included", () => {

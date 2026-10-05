@@ -262,7 +262,9 @@ export default function CircleGoalsPage() {
         escrowId: nextPendingEscrow.escrowId,
       }),
       60_000_000,
-      `Round ${nextPendingEscrow.cycleNo} counted toward the goal.`,
+      nextPendingEscrow.roundNo !== null
+        ? `Round ${nextPendingEscrow.roundNo} counted toward the goal.`
+        : 'The round was counted toward the goal.',
     );
   }, [summary, nextPendingEscrow, runAction, network, settlement.coinType]);
 
@@ -493,7 +495,7 @@ export default function CircleGoalsPage() {
                       signerReady={signerReady}
                       busyAction={busyAction}
                       canRecordProgress={Boolean(nextPendingEscrow)}
-                      uncountedCycleNo={nextPendingEscrow?.cycleNo ?? null}
+                      uncountedRoundNo={nextPendingEscrow?.roundNo ?? null}
                       uncountedTotal={pendingEscrows.length}
                       onRecordProgress={onRecordProgress}
                       onCompleteMilestone={onCompleteMilestone}

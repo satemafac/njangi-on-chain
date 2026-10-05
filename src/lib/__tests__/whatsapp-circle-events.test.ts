@@ -29,11 +29,19 @@ const PKG = '0x' + 'aa'.repeat(32);
 const USDC = '0x' + '26'.repeat(32) + '::usdc::USDC';
 const SUI = '0x2::sui::SUI';
 
-/** What the cron hands escrow-rail parsers after reading the escrow. */
+const THIRD_MEMBER = '0x' + 'df'.repeat(32);
+
+/**
+ * What the cron hands escrow-rail parsers after reading the escrow. Its
+ * events carry cycle_no 5 (a lap); the recipient sits in the second of three
+ * seats, so the round is (5 − 1) × 3 + 2 = 14.
+ */
 const USDC_ESCROW: EscrowSubject = {
   circleId: CIRCLE,
   coinType: USDC,
   requiredContributors: 2,
+  recipient: RECIPIENT,
+  members: [MEMBER, RECIPIENT, THIRD_MEMBER],
 };
 
 /**
@@ -67,7 +75,7 @@ function escrowObjectResponse(coinType: string = USDC) {
             fields: {
               cycle_no: '5',
               recipient: RECIPIENT,
-              members: [MEMBER, RECIPIENT, '0x' + 'df'.repeat(32)],
+              members: [MEMBER, RECIPIENT, THIRD_MEMBER],
               required_contributors: '2',
               contribution_amount: '100000',
               due_at_ms: '1792540800000',
@@ -198,12 +206,8 @@ describe('stream registry', () => {
 });
 
 describe('parseEscrowSubject (the escrow-rail object read)', () => {
-  it('reads circle id, coin type and round target off a CycleEscrow<USDC>', () => {
-    expect(parseEscrowSubject(escrowObjectResponse())).toEqual({
-      circleId: CIRCLE,
-      coinType: USDC,
-      requiredContributors: 2,
-    });
+  it('reads circle id, coin type, round target and seats off a CycleEscrow<USDC>', () => {
+    expect(parseEscrowSubject(escrowObjectResponse())).toEqual(USDC_ESCROW);
   });
 
   it('reads the coin type of a SUI-settled escrow', () => {
@@ -228,6 +232,8 @@ describe('parseEscrowSubject (the escrow-rail object read)', () => {
       circleId: CIRCLE,
       coinType: USDC,
       requiredContributors: null,
+      recipient: null,
+      members: null,
     });
   });
 
@@ -341,7 +347,7 @@ describe('security_deposit (CustodyDeposited)', () => {
 
 describe('contribution_recorded (njangi_cycle_escrow::ContributionRecorded)', () => {
   const contribution = stream('contribution_recorded');
-  // Round 5 of testnet circle 0xa3fada…: the second of two payers.
+  // Lap 5 of testnet circle 0xa3fada…: the second of two payers.
   const EVENT = {
     escrow_id: ESCROW,
     cycle_no: '5',
@@ -364,7 +370,7 @@ describe('contribution_recorded (njangi_cycle_escrow::ContributionRecorded)', ()
       .buildBody(ctx({ memberName: 'Aminata' }));
     expect(body).toBe(
       'Contribution received in Bamenda Savers.\n' +
-        `Round 5: Aminata (${shortAddress(MEMBER)}) paid 0.10 USDC. ` +
+        `Round 14: Aminata (${shortAddress(MEMBER)}) paid 0.10 USDC. ` +
         '2 of 2 members have paid in for this round.\n' +
         `View progress: https://njangionchain.com/circle/${CIRCLE}`,
     );
@@ -392,6 +398,17 @@ describe('contribution_recorded (njangi_cycle_escrow::ContributionRecorded)', ()
     expect(body).not.toMatch(/\d\.\d+ WETH/);
   });
 
+  it('numbers the round circle-wide, never by the lap in cycle_no', () => {
+    const body = contribution.parse(EVENT, USDC_ESCROW)!.buildBody(ctx());
+    expect(body).not.toContain('Round 5:');
+    // Without the seats the round cannot be placed, and none is named.
+    const unplaced = contribution
+      .parse(EVENT, { ...USDC_ESCROW, members: null })!
+      .buildBody(ctx());
+    expect(unplaced).not.toMatch(/Round \d/);
+    expect(unplaced).toContain(`${shortAddress(MEMBER)} paid 0.10 USDC.`);
+  });
+
   it('drops the progress clause when the round target is unreadable', () => {
     const body = contribution
       .parse(EVENT, { ...USDC_ESCROW, requiredContributors: null })!
@@ -412,7 +429,7 @@ describe('contribution_recorded (njangi_cycle_escrow::ContributionRecorded)', ()
 
 describe('claim_redeemed (njangi_cycle_escrow::ClaimRedeemed)', () => {
   const payout = stream('claim_redeemed');
-  // Round 5 of testnet circle 0xa3fada…: two 0.10 USDC shares collected.
+  // Lap 5 of testnet circle 0xa3fada…: two 0.10 USDC shares collected.
   const EVENT = { escrow_id: ESCROW, cycle_no: '5', recipient: RECIPIENT, amount: '200000' };
 
   it('reports the collection to the recipient display name', () => {
@@ -421,7 +438,7 @@ describe('claim_redeemed (njangi_cycle_escrow::ClaimRedeemed)', () => {
     expect(parsed!.memberAddress).toBe(RECIPIENT);
     expect(parsed!.buildBody(ctx({ memberName: 'Aminata' }))).toBe(
       'Payout collected in Bamenda Savers.\n' +
-        `Round 5: Aminata (${shortAddress(RECIPIENT)}) received 0.20 USDC.\n` +
+        `Round 14: Aminata (${shortAddress(RECIPIENT)}) received 0.20 USDC.\n` +
         `View circle: https://njangionchain.com/circle/${CIRCLE}`,
     );
   });
@@ -580,7 +597,7 @@ describe('buildTemplate (Meta-approved business-initiated sends)', () => {
     const params = bodyParams(t);
     expect(params).toHaveLength(5);
     expect(params[0]).toBe('Bamenda Savers');
-    expect(params[1]).toBe('5');
+    expect(params[1]).toBe('14');
     expect(params[2]).toBe('Aminata');
     expect(params[3]).toBe('0.20 USDC');
     expect(params[4]).not.toHaveLength(0); // send-time date with weekday
@@ -607,6 +624,8 @@ describe('buildTemplate (Meta-approved business-initiated sends)', () => {
     expect(
       template('claim_redeemed', { ...event, cycle_no: undefined }, {}, USDC_ESCROW),
     ).toBeNull();
+    // A round that cannot be numbered is missing too: never the lap.
+    expect(template('claim_redeemed', event, {}, { ...USDC_ESCROW, members: null })).toBeNull();
   });
 
   it('keeps aggregate-heavy streams on the freeform text fallback (no template)', () => {

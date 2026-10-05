@@ -14,13 +14,20 @@
 // and the recipient's collection. The cron sends it in that window (it
 // reads the escrow first and skips a claimed or refunded one).
 //
+// The round is the circle-wide round number (round-number.ts), never the
+// escrow's cycle_no: that counts laps, so every round of a lap used to say
+// the same number. It stays the dedupe key's cycle part, which only has to
+// be stable. Without a round number the message says the pot is full
+// without one.
+//
 // Template: `payout_ready` (Utility, English `en`, approved in WhatsApp
 // Manager 2026-10-03). Its body is the English copy below with {{1}} the
 // circle's short id, {{2}} the round and {{3}} the payout, plus a dynamic
 // URL button `https://njangionchain.com/circle/{{1}}` whose suffix we set
 // to `<circleId>/contribute` (Meta only allows the variable at the end of
-// the URL). It is attached only when the payout figure is known ({{3}} is
-// required) and the recipient's locale is English (the template is
+// the URL). It is attached only when the round and the payout figure are
+// both known ({{2}} and {{3}} are required) and the recipient's locale is
+// English (the template is
 // English-only; other locales keep their localized freeform body until
 // localized templates are approved). The dispatcher sends a template only
 // when WHATSAPP_TEMPLATES_ENABLED=true; otherwise the freeform body goes
@@ -35,55 +42,70 @@ export type SupportedLocale = 'en' | 'fr' | 'pcm' | 'sw' | 'am' | 'ar' | 'fa';
 
 interface YourTurnMessageVars {
   circleShort: string;
-  cycleNo: number;
+  /** Circle-wide round number; null leaves the round out of the line. */
+  round: number | null;
   /** Null when the payout cannot be stated exactly; the line omits it. */
   amount: string | null;
 }
 
 const TEMPLATE_BY_LOCALE: Record<SupportedLocale, (vars: YourTurnMessageVars) => string> = {
-  en: ({ circleShort, cycleNo, amount }) =>
+  en: ({ circleShort, round, amount }) =>
     `🎉 *It's your turn!*\n\n` +
-    `The pot for circle ${circleShort}… is full for round ${cycleNo}.\n` +
+    (round !== null
+      ? `The pot for circle ${circleShort}… is full for round ${round}.\n`
+      : `The pot for circle ${circleShort}… is full.\n`) +
     (amount
       ? `Your payout of ${amount} is ready to collect.`
       : `Your payout is ready to collect.`) +
     `\n\n` +
     `Open the Njangi app and tap "Collect my payout".`,
-  fr: ({ circleShort, cycleNo, amount }) =>
+  fr: ({ circleShort, round, amount }) =>
     `🎉 *C'est votre tour !*\n\n` +
-    `La cagnotte du cercle ${circleShort}… est complète pour le tour ${cycleNo}.\n` +
+    (round !== null
+      ? `La cagnotte du cercle ${circleShort}… est complète pour le tour ${round}.\n`
+      : `La cagnotte du cercle ${circleShort}… est complète.\n`) +
     (amount
       ? `Votre versement de ${amount} est prêt à être récupéré.`
       : `Votre versement est prêt à être récupéré.`) +
     `\n\n` +
     `Ouvrez l'application Njangi et appuyez sur "Récupérer mon versement".`,
-  pcm: ({ circleShort, cycleNo, amount }) =>
+  pcm: ({ circleShort, round, amount }) =>
     `🎉 *Na your turn!*\n\n` +
-    `Di pot for circle ${circleShort}… don full for round ${cycleNo}.\n` +
+    (round !== null
+      ? `Di pot for circle ${circleShort}… don full for round ${round}.\n`
+      : `Di pot for circle ${circleShort}… don full.\n`) +
     (amount ? `Your payout of ${amount} don ready.` : `Your payout don ready.`) +
     `\n\n` +
     `Open di Njangi app and tap "Collect my payout".`,
-  sw: ({ circleShort, cycleNo, amount }) =>
+  sw: ({ circleShort, round, amount }) =>
     `🎉 *Ni zamu yako!*\n\n` +
-    `Kibanda cha duara ${circleShort}… kimejaa kwa raundi ${cycleNo}.\n` +
+    (round !== null
+      ? `Kibanda cha duara ${circleShort}… kimejaa kwa raundi ${round}.\n`
+      : `Kibanda cha duara ${circleShort}… kimejaa.\n`) +
     (amount ? `Malipo yako ya ${amount} yako tayari.` : `Malipo yako yako tayari.`) +
     `\n\n` +
     `Fungua programu ya Njangi na bonyeza "Chukua malipo yangu".`,
-  am: ({ circleShort, cycleNo, amount }) =>
+  am: ({ circleShort, round, amount }) =>
     `🎉 *የእርስዎ ተራ ነው!*\n\n` +
-    `የክበቡ ${circleShort}… ገንዘብ ለዙር ${cycleNo} ሞልቷል።\n` +
+    (round !== null
+      ? `የክበቡ ${circleShort}… ገንዘብ ለዙር ${round} ሞልቷል።\n`
+      : `የክበቡ ${circleShort}… ገንዘብ ሞልቷል።\n`) +
     (amount ? `${amount} የእርስዎ ክፍያ ተዘጋጅቷል።` : `የእርስዎ ክፍያ ተዘጋጅቷል።`) +
     `\n\n` +
     `Njangi መተግበሪያን ይክፈቱ እና "ክፍያዬን ውሰድ" ይጫኑ።`,
-  ar: ({ circleShort, cycleNo, amount }) =>
+  ar: ({ circleShort, round, amount }) =>
     `🎉 *إنه دورك!*\n\n` +
-    `صندوق الدائرة ${circleShort}… ممتلئ للجولة ${cycleNo}.\n` +
+    (round !== null
+      ? `صندوق الدائرة ${circleShort}… ممتلئ للجولة ${round}.\n`
+      : `صندوق الدائرة ${circleShort}… ممتلئ.\n`) +
     (amount ? `مستحقاتك البالغة ${amount} جاهزة.` : `مستحقاتك جاهزة.`) +
     `\n\n` +
     `افتح تطبيق Njangi واضغط على "استلم مستحقاتي".`,
-  fa: ({ circleShort, cycleNo, amount }) =>
+  fa: ({ circleShort, round, amount }) =>
     `🎉 *نوبت شماست!*\n\n` +
-    `صندوق حلقه ${circleShort}… برای دور ${cycleNo} پر شد.\n` +
+    (round !== null
+      ? `صندوق حلقه ${circleShort}… برای دور ${round} پر شد.\n`
+      : `صندوق حلقه ${circleShort}… پر شد.\n`) +
     (amount ? `مبلغ ${amount} شما آماده است.` : `مبلغ شما آماده است.`) +
     `\n\n` +
     `برنامه Njangi را باز کنید و روی "مبلغ خود را دریافت کن" بزنید.`,
@@ -92,11 +114,11 @@ const TEMPLATE_BY_LOCALE: Record<SupportedLocale, (vars: YourTurnMessageVars) =>
 export function buildYourTurnMessage(
   locale: SupportedLocale,
   circleId: string,
-  cycleNo: number,
+  round: number | null,
   amount: string | null,
 ): string {
   const fn = TEMPLATE_BY_LOCALE[locale] ?? TEMPLATE_BY_LOCALE.en;
-  return fn({ circleShort: circleId.slice(0, 8), cycleNo, amount });
+  return fn({ circleShort: circleId.slice(0, 8), round, amount });
 }
 
 /**
@@ -105,7 +127,7 @@ export function buildYourTurnMessage(
  */
 export function buildYourTurnTemplate(
   circleId: string,
-  cycleNo: number,
+  round: number,
   amount: string,
 ): WhatsAppTemplatePayload {
   return {
@@ -117,7 +139,7 @@ export function buildYourTurnTemplate(
         type: 'body',
         parameters: [
           { type: 'text', text: `${circleId.slice(0, 8)}…` },
-          { type: 'text', text: String(cycleNo) },
+          { type: 'text', text: String(round) },
           { type: 'text', text: amount },
         ],
       },
@@ -133,7 +155,15 @@ export function buildYourTurnTemplate(
 
 export interface YourTurnNotificationInput {
   circleId: string;
+  /** The escrow's cycle_no (a lap). Only the default dedupe key uses it. */
   cycleNo: number;
+  /**
+   * The circle-wide round number shown to the member (round-number.ts).
+   * Null or absent when it could not be worked out: the message then omits
+   * the round, and the `payout_ready` template (whose {{2}} is the round)
+   * is not attached.
+   */
+  roundNo?: number | null;
   /**
    * Human-readable payout, e.g. "350 USDC". Null when it cannot be stated
    * exactly (the cron passes null for a coin whose decimals it does not
@@ -175,15 +205,16 @@ export async function sendYourTurnNotification(
   input: YourTurnNotificationInput,
 ): Promise<SendMemberNotificationResult> {
   const locale = input.locale ?? 'en';
+  const round = input.roundNo ?? null;
   return sendMemberNotification({
     memberAddress: input.recipient,
     phoneOverride: input.recipientPhone,
-    body: buildYourTurnMessage(locale, input.circleId, input.cycleNo, input.amount),
-    // `payout_ready` only for a known payout in English; see the header.
-    // The dispatcher ignores it unless WHATSAPP_TEMPLATES_ENABLED=true.
+    body: buildYourTurnMessage(locale, input.circleId, round, input.amount),
+    // `payout_ready` only for a known round and payout in English; see the
+    // header. The dispatcher ignores it unless WHATSAPP_TEMPLATES_ENABLED=true.
     template:
-      input.amount && locale === 'en'
-        ? buildYourTurnTemplate(input.circleId, input.cycleNo, input.amount)
+      input.amount && round !== null && locale === 'en'
+        ? buildYourTurnTemplate(input.circleId, round, input.amount)
         : undefined,
     kind: 'cycle_finalized',
     network: input.network,

@@ -20,10 +20,14 @@ import { getNetworkConfig } from '../services/network-config';
 import { getPooledSuiClient } from '../services/sui-rpc-failover';
 import { sendMemberNotification } from './whatsapp-notifier';
 import type { NetworkType } from '../services/whatsapp-registry-service';
+import { roundNumber } from './round-number';
 
 export interface StaleMember {
   circleId: string;
+  /** The escrow's cycle_no: a lap. Keys the nudge dedupe only. */
   cycleNo: number;
+  /** The circle-wide round shown to operators (round-number.ts). */
+  roundNo: number | null;
   memberAddress: string;
   reason: 'no_attestation' | 'expired_attestation' | 'revoked';
   expiresAtMs?: number;
@@ -163,6 +167,7 @@ export async function buildStaleReport(
             stale.push({
               circleId,
               cycleNo: state.cycleNo,
+              roundNo: roundNumber(state),
               memberAddress: member,
               reason: 'no_attestation',
             });
