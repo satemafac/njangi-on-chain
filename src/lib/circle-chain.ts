@@ -11,6 +11,14 @@ export interface PublishedPackageMetadata {
    * published v1.1 yet (mainnet today).
    */
   timedEntriesPackageId?: string | null;
+  /**
+   * Package version that DEFINED the v11 asset-terms types and events
+   * (CircleAssetPolicySet, SecurityDepositPosted, AssetRefundCompleted,
+   * RegistryBlessed, AssetFlagsSet, and the deposit-record keys). Same rule
+   * as `timedEntriesPackageId`: it stays here after published-at moves on.
+   * Null on lineages without v11 (mainnet today).
+   */
+  assetTermsPackageId?: string | null;
   publishedAt: string | null;
   originalId: string | null;
 }
@@ -70,6 +78,7 @@ const PACKAGE_LINEAGE_BY_NETWORK: Record<NetworkType, PublishedPackageMetadata> 
     publishedAt: '0x7bf5274804a6008ebfbd9bfe766defb7fd5aa5fe6777419c2b6531ec99120b55',
     originalId: '0x7bf5274804a6008ebfbd9bfe766defb7fd5aa5fe6777419c2b6531ec99120b55',
     timedEntriesPackageId: null,
+    assetTermsPackageId: null,
   },
   // Testnet lineage. Original published 2026-06-12; v2 (2026-06-15) added
   // njangi_goal_pool; v3 (2026-06-15) added combined "amount by date" goals;
@@ -88,7 +97,10 @@ const PACKAGE_LINEAGE_BY_NETWORK: Record<NetworkType, PublishedPackageMetadata> 
   // wallet from the `wallet_id` field alone; v10 (2026-10-03) lets
   // `finalize_and_redeem*` collect a round that is already finalized (PR #83)
   // — a body-only change that defines no new types, so nothing new is
-  // anchored to it.
+  // anchored to it; v11 (2026-10-05, PR #109) pins each circle's coin and
+  // amounts, keeps security deposits as per-member records in the circle's
+  // custody wallet, refunds per coin, and guards round opens — it defines
+  // new types and events (`assetTermsPackageId`).
   //
   // published-at = latest package (move-call target); original-id stays v1
   // (type identity + event filters). Every version since has been an UPGRADE,
@@ -99,12 +111,15 @@ const PACKAGE_LINEAGE_BY_NETWORK: Record<NetworkType, PublishedPackageMetadata> 
   // Either would have been upgrade-incompatible and forced a new lineage,
   // stranding every existing circle.
   testnet: {
-    publishedAt: '0x1ee9995cae5c5e6c5aab75b278733511889b2a67f8dad53773ac36f3215f86b3',
+    publishedAt: '0x5f71b5c82f167be517a09604a1f911a642e037ce0ae2e8f9e004f67eb52893ee',
     originalId: '0x89cddf4dfe654e7c7b16333096d9e750cf04bb96f7de934403a512d460594f02',
     // v6 introduced the timed-escrow types; they stay anchored here even
     // after future upgrades move published-at.
     timedEntriesPackageId:
       '0x859e3add80ce891423d49702b2b3350addf1726ca634000c7394748c0c416c8e',
+    // v11 introduced the asset-terms types and events.
+    assetTermsPackageId:
+      '0x5f71b5c82f167be517a09604a1f911a642e037ce0ae2e8f9e004f67eb52893ee',
   },
 };
 
@@ -138,6 +153,9 @@ export function getPublishedPackageMetadata(
     originalId: normalizePackageId(metadata.originalId),
     timedEntriesPackageId: metadata.timedEntriesPackageId
       ? normalizePackageId(metadata.timedEntriesPackageId)
+      : null,
+    assetTermsPackageId: metadata.assetTermsPackageId
+      ? normalizePackageId(metadata.assetTermsPackageId)
       : null,
   };
 }
@@ -182,7 +200,7 @@ export function getPackageLookupIds(args: {
   const { network, packageId, currentPackageId } = args;
   const normalizedPackageId = normalizePackageId(packageId);
   const normalizedCurrentPackageId = normalizePackageId(currentPackageId);
-  const { publishedAt, originalId, timedEntriesPackageId } =
+  const { publishedAt, originalId, timedEntriesPackageId, assetTermsPackageId } =
     getPublishedPackageMetadata(network);
   const lookupIds = new Set<string>();
   const add = (value: string | null | undefined) => {
@@ -197,7 +215,8 @@ export function getPackageLookupIds(args: {
     normalizedPackageId === normalizedCurrentPackageId ||
     normalizedPackageId === publishedAt ||
     normalizedPackageId === originalId ||
-    normalizedPackageId === timedEntriesPackageId;
+    normalizedPackageId === timedEntriesPackageId ||
+    normalizedPackageId === assetTermsPackageId;
 
   if (isCurrentLineagePackage) {
     add(normalizedCurrentPackageId);
@@ -207,6 +226,8 @@ export function getPackageLookupIds(args: {
     // v6). Event filters key on the defining package, so a lineage lookup
     // must keep returning it after published-at moves past it.
     add(timedEntriesPackageId);
+    // Same for the version that defined the asset-terms types (v11).
+    add(assetTermsPackageId);
   } else {
     add(normalizedPackageId);
   }
