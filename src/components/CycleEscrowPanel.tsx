@@ -124,6 +124,15 @@ interface CycleEscrowPanelProps {
    */
   viewerAddress?: string | null;
   /**
+   * Called once a transaction this panel signed (pay, collect, open, send
+   * back, advance) has landed and the panel has re-read its round. The page
+   * re-reads the circle with it: a collect that ends a lap pauses the
+   * circle, and the page's own tags, tiles and Resume control come from the
+   * circle, not from this panel. Keep that refresh quiet: a full reload
+   * unmounts this panel and closes its payout celebration.
+   */
+  onTransactionSettled?: () => void;
+  /**
    * Render the admin-only "Open this round" button. Members never see
    * this; admins use it from the manage page. Default false so the
    * member-facing contribute page stays clean.
@@ -168,6 +177,7 @@ export function CycleEscrowPanel({
   adminAddress,
   onRoundStatusChange,
   viewerAddress,
+  onTransactionSettled,
   showAdminOpenButton = false,
   circleIsActive = true,
   autoOpenWhenReady = false,
@@ -202,6 +212,10 @@ export function CycleEscrowPanel({
   // the CURRENT lock, not the one rendered when it was created.
   const [openLock, setOpenLock] = useState<OpenRoundLock>(IDLE_OPEN_ROUND_LOCK);
   const openLockRef = useRef<OpenRoundLock>(IDLE_OPEN_ROUND_LOCK);
+  // The page's latest callback, read when a transaction settles, so the
+  // signing handlers need not be rebuilt whenever the page re-renders.
+  const onTransactionSettledRef = useRef(onTransactionSettled);
+  onTransactionSettledRef.current = onTransactionSettled;
   // Bumped after every refresh, successful or not, so the confirm-poll
   // effect re-evaluates even when a re-read leaves the summary identical
   // (null again, most often) and React skips the re-render.
@@ -555,6 +569,7 @@ export function CycleEscrowPanel({
           console.warn('[CycleEscrowPanel] waitForTransaction timed out', waitErr);
         }
         await refresh();
+        onTransactionSettledRef.current?.();
         // Belt-and-braces: a second refresh after a short pause covers
         // the case where one RPC indexes faster than another in the
         // failover pool.
@@ -676,6 +691,7 @@ export function CycleEscrowPanel({
         console.warn('[CycleEscrowPanel] waitForTransaction timed out', waitErr);
       }
       await refresh();
+      onTransactionSettledRef.current?.();
     } catch (err) {
       const refusal = classifyOpenRoundError(err);
       toast.error(
