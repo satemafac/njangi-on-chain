@@ -50,7 +50,7 @@ import BillingUpsellModal, {
   parseUpgradeRequired,
   type UpgradeRequiredDetails,
 } from '@/components/BillingUpsellModal';
-import { humanizeErrorMessage } from '@/lib/user-error-messages';
+import { humanizeErrorMessage, moveAbortUserMessage } from '@/lib/user-error-messages';
 import { JOIN_REQUESTS_LOAD_FAILED, joinRequestAccessMessage } from '@/lib/join-request-access-copy';
 import {
   ZkLoginClient,
@@ -352,6 +352,11 @@ const parseMoveError = (error: string): { code: number; message: string } => {
          console.error("[parseMoveError] Failed to parse code number.");
          // Fall through to generic error if parsing fails
       } else {
+        // Refusals with copy shared across the app (user-error-messages.ts):
+        // the v11 round guard, pinned coin terms, retired actions.
+        const sharedRefusal = moveAbortUserMessage(error);
+        if (sharedRefusal) return { code, message: sharedRefusal };
+
         // Specific error mapping based on module/function and code
         if (moduleName === 'njangi_circles' && (functionName === 'admin_approve_member' || functionName === 'admin_approve_members')) {
             switch (code) {
@@ -420,6 +425,10 @@ const parseMoveError = (error: string): { code: number; message: string } => {
             || functionName === 'vote_emergency_stop'
             || functionName === 'execute_recovery'
             || functionName === 'trigger_auto_release'
+            || functionName === 'stop_for_recovery'
+            || functionName === 'stop_for_auto_release'
+            || functionName === 'execute_recovery_asset'
+            || functionName === 'trigger_auto_release_asset'
           )
         ) {
           switch (code) {

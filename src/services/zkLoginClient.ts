@@ -31,6 +31,16 @@ import {
 } from '@/lib/zklogin-tx-builders';
 import { getCircleTransactionPackageId } from './circle-service';
 import { getCurrentNetwork, getCurrentPackageId, getNetworkConfig } from './network-config';
+import { isV11AssetTermsEnabled } from '@/config/feature-flags';
+import {
+  buildAdminRemoveMemberAssetTx,
+  buildCreateCircleWithAssetTx,
+  buildPostSecurityDepositTx,
+  getAssetRegistryId,
+  isSuiCoinType,
+  nativeTermsForCreate,
+  readCircleAssetPolicy,
+} from '@/lib/v11-circle-tx';
 
 /**
  * Non-React helper that returns a client-side signer wrapper when the
@@ -187,6 +197,104 @@ export class ZkLoginError extends Error {
     this.stage = metadata.stage;
     this.operation = metadata.operation;
   }
+}
+
+async function rpcClientFor(network: NetworkOverride) {
+  const { SuiClient } = await import('@mysten/sui/client');
+  return new SuiClient({ url: getNetworkConfig(network).rpcUrl });
+}
+
+/**
+ * v11 create: `create_circle_with_asset<T>`, pinning the circle's coin and its
+ * native amounts. USDC pins the USD amounts at the peg; SUI pins the SUI
+ * amounts the create form computed.
+ */
+function buildV11CreateCircleTx(circleData: CircleData, network: NetworkOverride): Transaction {
+  const registryId = getAssetRegistryId(network);
+  if (!registryId) {
+    throw new ZkLoginError('Circle creation is not configured on this network yet.', false);
+  }
+  const settlement = circleData.settlement_asset === 'SUI' ? 'SUI' : 'USDC';
+  const coinTypes = getNetworkConfig(network).coinTypes;
+  const toBig = (value: string | number | bigint | undefined) => BigInt(value ?? 0);
+  const { contributionNative, depositNative } = nativeTermsForCreate({
+    settlement,
+    contributionUsdCents: toBig(circleData.contribution_amount_usd),
+    depositUsdCents: toBig(circleData.security_deposit_usd),
+    suiContributionMist: toBig(circleData.contribution_amount),
+    suiDepositMist: toBig(circleData.security_deposit),
+  });
+  return buildCreateCircleWithAssetTx({
+    packageId: getCurrentPackageId(),
+    registryId,
+    coinType: settlement === 'SUI' ? coinTypes.SUI : coinTypes.USDC,
+    circleData,
+    contributionNative,
+    depositNative,
+  });
+}
+
+/**
+ * v11 deposit: `post_security_deposit<T>` — the circle's pinned coin at its
+ * pinned amount, into the circle's bound custody wallet, all read from the
+ * circle itself. Sponsored first when the coin is not SUI (a SUI deposit
+ * draws on the gas coin and must not be sponsored), self-paid otherwise.
+ */
+async function payV11SecurityDeposit(args: {
+  account: AccountData;
+  circleId: string;
+  packageId: string;
+  signer: NonNullable<Awaited<ReturnType<typeof tryClientSideSigner>>>;
+  network: NetworkOverride;
+  acknowledgeMigrationVersion?: number;
+}): Promise<{ digest: string; requireRelogin?: boolean }> {
+  const registryId = getAssetRegistryId(args.network);
+  if (!registryId) {
+    throw new ZkLoginError('Security deposits are not configured on this network yet.', false);
+  }
+  const policy = await readCircleAssetPolicy(await rpcClientFor(args.network), args.circleId);
+  if (!policy) {
+    throw new ZkLoginError(
+      'This circle has not moved to its pinned coin terms yet. Ask the admin to refresh the circle, then try again.',
+      false,
+    );
+  }
+
+  const build = async (
+    txb: Transaction,
+    client: import('@mysten/sui/client').SuiClient,
+  ) => {
+    if (typeof args.acknowledgeMigrationVersion === 'number') {
+      buildAcknowledgeMigrationStateTx({
+        packageId: args.packageId,
+        circleId: args.circleId,
+        version: args.acknowledgeMigrationVersion,
+        txb,
+      });
+    }
+    await buildPostSecurityDepositTx(txb, client, {
+      packageId: args.packageId,
+      registryId,
+      circleId: args.circleId,
+      userAddress: args.account.userAddr,
+      policy,
+    });
+  };
+
+  const sponsored = await trySponsoredGas({
+    action: 'paySecurityDeposit',
+    build,
+    network: args.network,
+    context: {
+      circleId: args.circleId,
+      coinType: policy.settlement.coinType,
+      usesGasCoinForValue: isSuiCoinType(policy.settlement.coinType),
+    },
+  });
+  if (sponsored) return { digest: sponsored.digest };
+
+  const { digest } = await args.signer.signAndExecute({ build, gasBudget: 120_000_000 });
+  return { digest };
 }
 
 export interface CircleData extends CreateCircleTransactionData {
@@ -495,10 +603,12 @@ export class ZkLoginClient {
     circleData: CircleData,
     network?: NetworkOverride,
   ): Promise<{ digest: string; requireRelogin?: boolean }> {
-    const tx = buildCreateCircleTx({
-      packageId: getCurrentPackageId(),
-      circleData,
-    });
+    const tx = isV11AssetTermsEnabled()
+      ? buildV11CreateCircleTx(circleData, network ?? getCurrentNetwork())
+      : buildCreateCircleTx({
+        packageId: getCurrentPackageId(),
+        circleData,
+      });
 
     return this.sendSerializedTransaction(account, tx, network);
   }
@@ -684,6 +794,18 @@ export class ZkLoginClient {
     }
 
     const packageId = await getCircleTransactionPackageId(circleId, account.userAddr);
+
+    if (isV11AssetTermsEnabled()) {
+      return payV11SecurityDeposit({
+        account,
+        circleId,
+        packageId,
+        signer,
+        network: opts.network ?? getCurrentNetwork(),
+        acknowledgeMigrationVersion: opts.acknowledgeMigrationVersion,
+      });
+    }
+
     const { buildSecurityDepositTx } = await import('@/lib/security-deposit-tx');
 
     const build = (
@@ -848,11 +970,27 @@ export class ZkLoginClient {
     memberAddress: string,
     walletId: string,
   ): Promise<{ digest: string; requireRelogin?: boolean }> {
+    // v11: a circle with pinned terms returns the removed member's deposit
+    // in the coin it was paid in, to them, in the same transaction.
+    const policy = isV11AssetTermsEnabled()
+      ? await readCircleAssetPolicy(
+        await rpcClientFor(getCurrentNetwork()),
+        circleId,
+      )
+      : null;
     return signLocallyWithBuilder({
       account,
       resolvePackageId: () => getCircleTransactionPackageId(circleId, account.userAddr),
       build: (packageId) =>
-        buildAdminRemoveMemberTx({ packageId, circleId, memberAddress, walletId }),
+        policy
+          ? buildAdminRemoveMemberAssetTx({
+            packageId,
+            circleId,
+            memberAddress,
+            walletId: policy.walletId,
+            coinType: policy.settlement.coinType,
+          })
+          : buildAdminRemoveMemberTx({ packageId, circleId, memberAddress, walletId }),
     });
   }
 

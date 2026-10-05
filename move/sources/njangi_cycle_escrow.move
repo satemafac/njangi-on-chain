@@ -11,6 +11,7 @@ module njangi::njangi_cycle_escrow {
     use njangi::njangi_circles::{Self as circles, Circle};
     use njangi::njangi_circle_config as config;
     use njangi::njangi_compliance::{Self as compliance, ComplianceAttestation, ComplianceConfig};
+    use njangi::njangi_price_validator::{Self as price_validator, AssetRegistry};
 
     // ----------------------------------------------------------
     // Phase 2 per-cycle escrow primitive.
@@ -87,6 +88,22 @@ module njangi::njangi_cycle_escrow {
     // (not refunded, and not an empty escrow past its cancel window), so
     // releasing its round would invite exactly the duplicate above.
     const E_ROUND_STILL_OPEN: u64 = 235;
+    // v11 round guard: rounds open only on a running circle. A paused
+    // circle's rotation pointer still sits on the member just paid.
+    const E_CIRCLE_NOT_ACTIVE: u64 = 236;
+    const E_CIRCLE_PAUSED: u64 = 237;
+    // v11: the round's coin is not the circle's pinned settlement asset.
+    const E_ASSET_NOT_ALLOWED: u64 = 239;
+    // v11: the escrow is not a valid round under the circle's pinned terms.
+    const E_ROUND_NOT_VALIDATED: u64 = 240;
+    // v11: the escrow is not the circle's current round.
+    const E_ROUND_NOT_CURRENT: u64 = 241;
+    // v11: `release_invalid_round` refused — the round is valid.
+    const E_ROUND_STILL_VALID: u64 = 242;
+    // v11: caller-supplied decimals differ from the circle's pinned decimals.
+    const E_DECIMALS_MISMATCH: u64 = 243;
+    // Mirrors njangi_circles::E_POLICY_MISSING (83).
+    const E_POLICY_MISSING: u64 = 83;
 
     const CLAIM_WINDOW_MS: u64 = 30 * 24 * 60 * 60 * 1000; // 30 days
     /// Grace period after the cycle's snapshot due date before anyone may
@@ -117,6 +134,14 @@ module njangi::njangi_cycle_escrow {
     /// "not recorded", never as "not contributed" — the `contributed`
     /// table remains the authority on THAT question.
     public struct ContributionTimeKey has copy, drop, store { member: address }
+
+    /// v11: present on every escrow opened by v11 code for a circle with
+    /// pinned asset terms; the value is the terms' `set_at_ms`. The open
+    /// that writes it has checked the running/paused guard, the coin and
+    /// the amount against those terms. Escrows of such a circle opened
+    /// after the terms were pinned WITHOUT it are not valid rounds
+    /// (`is_valid_round`).
+    public struct RoundTermsKey has copy, drop, store {}
 
     public struct CycleEscrow<phantom T> has key {
         id: UID,
@@ -267,7 +292,7 @@ module njangi::njangi_cycle_escrow {
         clock: &Clock,
         ctx: &mut TxContext
     ) {
-        let amount = circles::get_contribution_amount_raw(circle);
+        let amount = round_amount(circle, option::none());
         let _ = open_cycle_internal<T>(circle, amount, clock, option::none(), ctx);
     }
 
@@ -286,7 +311,7 @@ module njangi::njangi_cycle_escrow {
         clock: &Clock,
         ctx: &mut TxContext
     ) {
-        let amount = circles::get_contribution_amount_raw(circle);
+        let amount = round_amount(circle, option::none());
         let _ = open_cycle_internal<T>(
             circle, amount, clock, option::some(object::id(compliance_config)), ctx
         );
@@ -306,7 +331,7 @@ module njangi::njangi_cycle_escrow {
         clock: &Clock,
         ctx: &mut TxContext
     ) {
-        let amount = stable_contribution_amount(circle, stable_decimals);
+        let amount = round_amount(circle, option::some(stable_decimals));
         let _ = open_cycle_internal<T>(circle, amount, clock, option::none(), ctx);
     }
 
@@ -319,7 +344,7 @@ module njangi::njangi_cycle_escrow {
         clock: &Clock,
         ctx: &mut TxContext
     ) {
-        let amount = stable_contribution_amount(circle, stable_decimals);
+        let amount = round_amount(circle, option::some(stable_decimals));
         let _ = open_cycle_internal<T>(
             circle, amount, clock, option::some(object::id(compliance_config)), ctx
         );
@@ -346,7 +371,7 @@ module njangi::njangi_cycle_escrow {
         clock: &Clock,
         ctx: &mut TxContext
     ) {
-        let amount = circles::get_contribution_amount_raw(circle);
+        let amount = round_amount(circle, option::none());
         let escrow_id = open_cycle_internal<T>(circle, amount, clock, option::none(), ctx);
         index_open(circle, escrow_id);
     }
@@ -357,7 +382,7 @@ module njangi::njangi_cycle_escrow {
         clock: &Clock,
         ctx: &mut TxContext
     ) {
-        let amount = stable_contribution_amount(circle, stable_decimals);
+        let amount = round_amount(circle, option::some(stable_decimals));
         let escrow_id = open_cycle_internal<T>(circle, amount, clock, option::none(), ctx);
         index_open(circle, escrow_id);
     }
@@ -368,7 +393,7 @@ module njangi::njangi_cycle_escrow {
         clock: &Clock,
         ctx: &mut TxContext
     ) {
-        let amount = circles::get_contribution_amount_raw(circle);
+        let amount = round_amount(circle, option::none());
         let escrow_id = open_cycle_internal<T>(
             circle, amount, clock, option::some(object::id(compliance_config)), ctx
         );
@@ -382,7 +407,7 @@ module njangi::njangi_cycle_escrow {
         clock: &Clock,
         ctx: &mut TxContext
     ) {
-        let amount = stable_contribution_amount(circle, stable_decimals);
+        let amount = round_amount(circle, option::some(stable_decimals));
         let escrow_id = open_cycle_internal<T>(
             circle, amount, clock, option::some(object::id(compliance_config)), ctx
         );
@@ -396,6 +421,146 @@ module njangi::njangi_cycle_escrow {
     fun index_open(circle: &mut Circle, escrow_id: ID) {
         circles::record_escrow_opened(circle, escrow_id);
         circles::record_round_opened(circle, escrow_id);
+    }
+
+    // ----------------------------------------------------------
+    // v11 rounds — pinned terms
+    //
+    // `open_round` / `contribute_round` are the entrypoints for circles
+    // with pinned asset terms (njangi_circles::CircleAssetPolicy). The
+    // CycleEscrow itself is unchanged: the same snapshot, the same
+    // contribute / finalize / redeem / refund rules. v11 adds checks
+    // around it — the circle is running, the coin and amount are the
+    // pinned ones, and a contribution only lands in the circle's current,
+    // valid round.
+    // ----------------------------------------------------------
+
+    /// Opens the circle's current round in its pinned settlement asset `T`
+    /// (still allowed for settlement in the canonical registry), at the
+    /// pinned contribution amount. Indexed like the `*_indexed` opens
+    /// (escrow history + open-round marker).
+    public fun open_round<T>(
+        circle: &mut Circle,
+        registry: &AssetRegistry,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        assert!(circles::has_asset_policy(circle), E_POLICY_MISSING);
+        price_validator::assert_usable<T>(registry, price_validator::flag_settlement());
+        let amount = round_amount(circle, option::none());
+        let escrow_id = open_cycle_internal<T>(circle, amount, clock, option::none(), ctx);
+        index_open(circle, escrow_id);
+    }
+
+    /// Compliance-gated twin of `open_round` (see `open_cycle_with_gate`).
+    public fun open_round_with_gate<T>(
+        circle: &mut Circle,
+        registry: &AssetRegistry,
+        compliance_config: &ComplianceConfig,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        assert!(circles::has_asset_policy(circle), E_POLICY_MISSING);
+        price_validator::assert_usable<T>(registry, price_validator::flag_settlement());
+        let amount = round_amount(circle, option::none());
+        let escrow_id = open_cycle_internal<T>(
+            circle, amount, clock, option::some(object::id(compliance_config)), ctx
+        );
+        index_open(circle, escrow_id);
+    }
+
+    /// Pays the sender's share into `escrow`, which must be the circle's
+    /// current and valid round: the circle is running, the escrow belongs
+    /// to it and snapshots its current lap and recipient, and (pinned
+    /// terms) it was opened under those terms or was already open before
+    /// they were pinned, in the pinned coin and amount. Otherwise the same
+    /// rules as `contribute_timed`.
+    public fun contribute_round<T>(
+        circle: &Circle,
+        escrow: &mut CycleEscrow<T>,
+        payment: Coin<T>,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        assert!(!escrow.requires_attestation, E_COMPLIANCE_ATTESTATION_REQUIRED);
+        assert_current_valid_round(circle, escrow);
+        let sender = tx_context::sender(ctx);
+        contribute_internal<T>(escrow, payment, ctx);
+        record_contribution_time(escrow, sender, clock::timestamp_ms(clock));
+    }
+
+    /// Gated twin of `contribute_round` (attestation semantics as in
+    /// `contribute_with_attestation`).
+    public fun contribute_round_with_attestation<T>(
+        circle: &Circle,
+        escrow: &mut CycleEscrow<T>,
+        payment: Coin<T>,
+        attestation: &ComplianceAttestation,
+        config: &ComplianceConfig,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        let sender = tx_context::sender(ctx);
+        assert_attestation_valid(
+            attestation, config, sender, escrow.compliance_config_id, clock
+        );
+        assert_current_valid_round(circle, escrow);
+        contribute_internal<T>(escrow, payment, ctx);
+        record_contribution_time(escrow, sender, clock::timestamp_ms(clock));
+    }
+
+    /// Clears the circle's open-round marker when it names `escrow` and the
+    /// escrow is not a valid round under the circle's pinned terms (see
+    /// `is_valid_round`), so the round can be opened properly. Permissionless
+    /// and moves no coins: anyone who paid into such an escrow is refunded
+    /// through the usual cancel paths. Idempotent when the marker names
+    /// another escrow. Aborts E_ROUND_STILL_VALID for a valid round.
+    public fun release_invalid_round<T>(
+        circle: &mut Circle,
+        escrow: &CycleEscrow<T>,
+        _clock: &Clock
+    ) {
+        assert!(escrow.circle_id == circles::get_id(circle), E_CYCLE_MISMATCH);
+        assert!(circles::has_asset_policy(circle), E_POLICY_MISSING);
+        assert!(!is_valid_round(circle, escrow), E_ROUND_STILL_VALID);
+        circles::clear_open_round(circle, object::uid_to_inner(&escrow.id));
+    }
+
+    /// True when `escrow` is a valid round of `circle` under its pinned
+    /// terms: opened by v11 under those terms (`RoundTermsKey`), or already
+    /// open before they were pinned, AND in the pinned coin at the pinned
+    /// amount. Always true for a circle without pinned terms.
+    public fun is_valid_round<T>(circle: &Circle, escrow: &CycleEscrow<T>): bool {
+        let policy_opt = circles::asset_policy(circle);
+        if (option::is_none(&policy_opt)) {
+            return true
+        };
+        let policy = option::borrow(&policy_opt);
+        let terms = circles::policy_settlement_terms(policy);
+        let tagged = df::exists_with_type<RoundTermsKey, u64>(&escrow.id, RoundTermsKey {});
+        let opened_before_terms = escrow.snapshot.opened_at_ms < circles::policy_set_at_ms(policy);
+        (tagged || opened_before_terms)
+            && escrow.snapshot.asset_type == circles::terms_asset(&terms)
+            && escrow.snapshot.contribution_amount == circles::terms_contribution_amount(&terms)
+    }
+
+    /// Whether v11 opened this escrow under pinned terms.
+    public fun has_round_terms<T>(escrow: &CycleEscrow<T>): bool {
+        df::exists_with_type<RoundTermsKey, u64>(&escrow.id, RoundTermsKey {})
+    }
+
+    fun assert_current_valid_round<T>(circle: &Circle, escrow: &CycleEscrow<T>) {
+        assert!(escrow.circle_id == circles::get_id(circle), E_CYCLE_MISMATCH);
+        assert!(circles::is_circle_active(circle), E_CIRCLE_NOT_ACTIVE);
+        assert!(!circles::is_paused_after_cycle(circle), E_CIRCLE_PAUSED);
+        let recipient = circles::get_next_payout_recipient(circle);
+        assert!(
+            escrow.snapshot.cycle_no == circles::get_current_cycle(circle)
+                && option::is_some(&recipient)
+                && *option::borrow(&recipient) == escrow.snapshot.recipient,
+            E_ROUND_NOT_CURRENT
+        );
+        assert!(is_valid_round(circle, escrow), E_ROUND_NOT_VALIDATED);
     }
 
     /// `contribute`, plus a per-member timestamp so "paid on time" can be
@@ -470,6 +635,21 @@ module njangi::njangi_cycle_escrow {
         opener_gate_config_id: Option<ID>,
         ctx: &mut TxContext
     ): ID {
+        // v11 round guard. Only a running circle opens rounds: an inactive
+        // one has no live rotation, and a paused one (end of a lap) still
+        // points at the member who was just paid.
+        assert!(circles::is_circle_active(circle), E_CIRCLE_NOT_ACTIVE);
+        assert!(!circles::is_paused_after_cycle(circle), E_CIRCLE_PAUSED);
+        // v11 pinned terms: the round pays in the circle's settlement asset
+        // (the amount came from the same terms, see `round_amount`).
+        let policy_opt = circles::asset_policy(circle);
+        if (option::is_some(&policy_opt)) {
+            assert!(
+                canonical_type_bytes<T>() == circles::policy_settlement_asset(option::borrow(&policy_opt)),
+                E_ASSET_NOT_ALLOWED
+            );
+        };
+
         // Authoritative compliance gate (June 2026 audit fix): the
         // circle-level on-chain flag is OR'd into whatever the caller
         // asked for. Opening a cycle is permissionless, so without this a
@@ -557,7 +737,7 @@ module njangi::njangi_cycle_escrow {
             opened_at_ms,
         };
 
-        let escrow = CycleEscrow<T> {
+        let mut escrow = CycleEscrow<T> {
             id: object::new(ctx),
             circle_id,
             snapshot,
@@ -570,6 +750,14 @@ module njangi::njangi_cycle_escrow {
             compliance_config_id,
             refunded: false,
             claim_expires_at_ms: 0,
+        };
+        // v11: mark the round as opened under the circle's pinned terms.
+        if (option::is_some(&policy_opt)) {
+            df::add(
+                &mut escrow.id,
+                RoundTermsKey {},
+                circles::policy_set_at_ms(option::borrow(&policy_opt))
+            );
         };
 
         let escrow_id = object::uid_to_inner(&escrow.id);
@@ -1235,6 +1423,29 @@ module njangi::njangi_cycle_escrow {
     /// Both the decimals range and the final multiplication are guarded
     /// so a hostile caller-supplied `stable_decimals` aborts instead of
     /// wrapping into a tiny (or huge) contribution target.
+    /// The per-member amount of the round an open is about to mint. A
+    /// circle with pinned asset terms always pays its pinned contribution,
+    /// and any caller-supplied decimals must equal the pinned decimals; a
+    /// circle without pinned terms keeps the legacy derivation (SUI config
+    /// amount, or USD cents at the caller's stablecoin decimals).
+    fun round_amount(circle: &Circle, stable_decimals: Option<u8>): u64 {
+        let policy_opt = circles::asset_policy(circle);
+        if (option::is_some(&policy_opt)) {
+            let terms = circles::policy_settlement_terms(option::borrow(&policy_opt));
+            if (option::is_some(&stable_decimals)) {
+                assert!(
+                    *option::borrow(&stable_decimals) == circles::terms_decimals(&terms),
+                    E_DECIMALS_MISMATCH
+                );
+            };
+            circles::terms_contribution_amount(&terms)
+        } else if (option::is_some(&stable_decimals)) {
+            stable_contribution_amount(circle, *option::borrow(&stable_decimals))
+        } else {
+            circles::get_contribution_amount_raw(circle)
+        }
+    }
+
     fun stable_contribution_amount(circle: &Circle, stable_decimals: u8): u64 {
         assert!(
             stable_decimals >= 2 && stable_decimals <= MAX_STABLE_DECIMALS,
@@ -1262,6 +1473,58 @@ module njangi::njangi_cycle_escrow {
 
     fun is_member(members: &vector<address>, candidate: address): bool {
         vector::contains(members, &candidate)
+    }
+
+    /// Test-only: mints an indexed escrow without the v11 open checks
+    /// (running/paused guard, pinned terms), the shape of rounds opened
+    /// before a circle's terms were pinned.
+    #[test_only]
+    public fun open_round_as_pre_v11_for_testing<T>(
+        circle: &mut Circle,
+        contribution_amount: u64,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ): ID {
+        let cycle_no = circles::get_current_cycle(circle);
+        let recipient = option::destroy_some(circles::get_next_payout_recipient(circle));
+        let live_round = circles::open_round(circle);
+        if (option::is_some(&live_round)) {
+            let live = option::borrow(&live_round);
+            assert!(
+                !(circles::open_round_cycle_no(live) == cycle_no
+                    && circles::open_round_recipient(live) == recipient),
+                E_ROUND_ALREADY_OPEN
+            );
+        };
+        let members = filter_active_members(&circles::get_rotation_order(circle));
+        let required_contributors = vector::length(&members) - 1;
+        let escrow = CycleEscrow<T> {
+            id: object::new(ctx),
+            circle_id: circles::get_id(circle),
+            snapshot: CycleSnapshot {
+                cycle_no,
+                recipient,
+                members,
+                required_contributors,
+                contribution_amount,
+                asset_type: canonical_type_bytes<T>(),
+                due_at_ms: circles::get_next_payout_time(circle),
+                opened_at_ms: clock::timestamp_ms(clock),
+            },
+            contributed: table::new<address, bool>(ctx),
+            contributors_count: 0,
+            balance: balance::zero<T>(),
+            finalized: false,
+            claimed: false,
+            requires_attestation: false,
+            compliance_config_id: option::none(),
+            refunded: false,
+            claim_expires_at_ms: 0,
+        };
+        let escrow_id = object::uid_to_inner(&escrow.id);
+        transfer::share_object(escrow);
+        index_open(circle, escrow_id);
+        escrow_id
     }
 
     #[test_only]
@@ -2857,7 +3120,7 @@ module njangi::njangi_cycle_escrow {
         let mut circle = ts::take_shared<Circle>(scenario);
         let mut wallet = ts::take_shared<CustodyWallet>(scenario);
         let deposit = coin::mint_for_testing<SUI>(TEST_DEPOSIT, ts::ctx(scenario));
-        circles::member_deposit_security_deposit<SUI>(
+        circles::legacy_deposit_for_testing<SUI>(
             &mut circle, &mut wallet, deposit, clock, ts::ctx(scenario)
         );
         ts::return_shared(circle);

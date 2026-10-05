@@ -124,3 +124,112 @@ describe('readCustodyBalances', () => {
     ).rejects.toThrow(/did not read/);
   });
 });
+
+describe('readCustodyBalances — v11 deposit records', () => {
+  // Shapes as JSON-RPC returns them (checked live on testnet 2026-10-04
+  // against a struct-keyed escrow field): a struct key renders as
+  // `{ type: '<defining package>::module::Key', value: { ...fields } }`, a
+  // vector<u8> inside it as an array of byte numbers, and the field object's
+  // content as `{ id, name: { type, fields }, value }` with a Balance<T>
+  // value rendered as a plain string.
+  const V11 = `0x${'1f'.repeat(32)}`;
+  const KEY_TYPE = `${V11}::njangi_custody::DepositBalanceKey`;
+  const bytes = (text: string) => Array.from(text).map((c) => c.charCodeAt(0));
+
+  function depositRecord(id: string, coinType: string, assetName: string): Entry {
+    return {
+      name: { type: KEY_TYPE, value: { asset: bytes(assetName) } },
+      bcsEncoding: 'base64',
+      bcsName: 'AA==',
+      type: 'DynamicField',
+      objectType: `0x2::balance::Balance<${coinType}>`,
+      objectId: id,
+      version: 1006075124,
+      digest: '9hXECbeti9DV1apzQ2o7XkxyNsGNYUQuMdDyomG4y96',
+    };
+  }
+
+  function recordObject(assetName: string, value: string): Record<string, unknown> {
+    return {
+      id: { id: '0xfield' },
+      name: { type: KEY_TYPE, fields: { asset: bytes(assetName) } },
+      value,
+    };
+  }
+
+  /** The marker v11 leaves at a converted asset's legacy String key. */
+  const migratedMarker = (name: string): Entry => ({
+    name: { type: '0x1::string::String', value: name },
+    type: 'DynamicField',
+    objectType: `${V11}::njangi_custody::LegacySlotMigrated`,
+    objectId: '0xmarker',
+  });
+
+  it('counts v11 deposit records next to the migrated legacy slot (a converted circle)', async () => {
+    const client = fakeClient({
+      walletBalance: '0',
+      pages: [[
+        migratedMarker(USDC.slice(2)),
+        depositRecord('0xrec-usdc', USDC, USDC.slice(2)),
+        { type: 'DynamicField', objectId: '0xtypes', objectType: 'vector<0x1::string::String>', name: { type: '0x1::string::String', value: 'registered_types' } },
+      ]],
+      objects: { '0xrec-usdc': recordObject(USDC.slice(2), '900000') },
+    });
+    await expect(readCustodyBalances(client, WALLET, USDC)).resolves.toEqual({
+      suiMain: 0n,
+      suiDeposits: 0n,
+      usdc: 900_000n,
+    });
+  });
+
+  it('counts a SUI deposit record and adds it to legacy SUI deposits', async () => {
+    const client = fakeClient({
+      walletBalance: '0',
+      pages: [[
+        depositRecord('0xrec-sui', '0x2::sui::SUI', SUI_NAME),
+        typedField('0xsui', '0x2::sui::SUI', SUI_NAME),
+      ]],
+      objects: {
+        '0xrec-sui': recordObject(SUI_NAME, '3000000000'),
+        '0xsui': { value: '1' },
+      },
+    });
+    await expect(readCustodyBalances(client, WALLET, USDC)).resolves.toMatchObject({
+      suiDeposits: 3_000_000_001n,
+      usdc: 0n,
+    });
+  });
+
+  it('leaves out a deposit record for a coin that is neither SUI nor the network USDC', async () => {
+    const client = fakeClient({
+      walletBalance: '0',
+      pages: [[depositRecord('0xrec-other', LOOKALIKE, LOOKALIKE.slice(2))]],
+      objects: { '0xrec-other': recordObject(LOOKALIKE.slice(2), '5') },
+    });
+    await expect(readCustodyBalances(client, WALLET, USDC)).resolves.toEqual({
+      suiMain: 0n,
+      suiDeposits: 0n,
+      usdc: 0n,
+    });
+  });
+
+  it('throws, never reads zero, when a deposit record does not decode or disagrees with its balance', async () => {
+    const undecodable = { ...depositRecord('0xrec', USDC, USDC.slice(2)), name: { type: KEY_TYPE, value: { asset: 'not-bytes' } } };
+    await expect(
+      readCustodyBalances(fakeClient({ walletBalance: '0', pages: [[undecodable]], objects: {} }), WALLET, USDC),
+    ).rejects.toThrow(/deposit record that did not read/);
+
+    const mismatched = depositRecord('0xrec', '0x2::sui::SUI', USDC.slice(2));
+    await expect(
+      readCustodyBalances(fakeClient({ walletBalance: '0', pages: [[mismatched]], objects: {} }), WALLET, USDC),
+    ).rejects.toThrow(/deposit record that did not read/);
+
+    await expect(
+      readCustodyBalances(
+        fakeClient({ walletBalance: '0', pages: [[depositRecord('0xrec', USDC, USDC.slice(2))]], objects: { '0xrec': 'throw' } }),
+        WALLET,
+        USDC,
+      ),
+    ).rejects.toThrow('429');
+  });
+});

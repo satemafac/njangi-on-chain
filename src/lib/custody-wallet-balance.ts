@@ -50,16 +50,27 @@ export function isDeleteCircleWalletFundsAbort(message: string): boolean {
 // so it read 0 whenever the RPC returned the plain string, and both paths
 // counted a SUI security deposit only as a legacy `Coin<SUI>` object.
 // Security deposits are stored as typed `dynamic_field<String, Balance<T>>`
-// fields (`internal_store_security_deposit_without_validation`,
-// njangi_custody.move), SUI included, so a SUI deposit showed on neither
-// path. Both paths now use this reader.
+// fields (the pre-v11 deposit path, njangi_custody.move), SUI included, so a
+// SUI deposit showed on neither path. Both paths now use this reader.
+//
+// From package v11 on, a circle's security deposits are v11 deposit records
+// in the same wallet: `dynamic_field<DepositBalanceKey { asset }, Balance<T>>`
+// (njangi_custody::DepositBalanceKey). A circle created on v11 keeps its
+// deposits only there, and converting an older circle moves its deposits
+// there, so the reader counts both shapes.
 
 export interface CustodyBalances {
   /** `CustodyWallet.balance`: SUI from the retired contribution rail. */
   suiMain: bigint;
-  /** SUI held as security deposits: the typed `Balance<SUI>` field plus any legacy `Coin<SUI>`. */
+  /**
+   * SUI held as security deposits: the v11 deposit record for SUI, the typed
+   * `Balance<SUI>` field, and any legacy `Coin<SUI>`.
+   */
   suiDeposits: bigint;
-  /** The network's USDC: the typed `Balance<USDC>` field plus any legacy `Coin<USDC>`. */
+  /**
+   * The network's USDC: the v11 deposit record for USDC, the typed
+   * `Balance<USDC>` field, and any legacy `Coin<USDC>`.
+   */
   usdc: bigint;
 }
 
@@ -82,6 +93,39 @@ function frameworkTypeParam(objectType: unknown, module: string, name: string): 
   } catch {
     return null;
   }
+}
+
+/**
+ * True for the name type of a v11 deposit record:
+ * `<package>::njangi_custody::DepositBalanceKey`. The package is the version
+ * of this lineage that defined the key (v11), which is a different id from
+ * the lineage's original one. Only this lineage's njangi_custody module can
+ * add fields to a CustodyWallet, so a field on the wallet whose name has this
+ * type is one of its deposit records whatever the package address reads.
+ */
+function isDepositBalanceKeyType(value: unknown): boolean {
+  if (typeof value !== 'string') return false;
+  try {
+    const tag = parseStructTag(normalizeStructTag(value));
+    return tag.module === 'njangi_custody' && tag.name === 'DepositBalanceKey' && tag.typeParams.length === 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The coin type a v11 deposit record is keyed by. JSON-RPC renders the key as
+ * `{ asset: [..bytes] }`, the bytes of the canonical type name without `0x`
+ * (a `vector<u8>` inside a struct is an array of byte numbers). Null when it
+ * does not decode to a coin type.
+ */
+function depositBalanceKeyCoinType(nameValue: unknown): string | null {
+  if (!nameValue || typeof nameValue !== 'object' || Array.isArray(nameValue)) return null;
+  const record = nameValue as { asset?: unknown; fields?: { asset?: unknown } };
+  const asset = record.asset ?? record.fields?.asset;
+  if (!Array.isArray(asset) || asset.length === 0) return null;
+  if (!asset.every((byte) => Number.isInteger(byte) && byte >= 0 && byte <= 0x7f)) return null;
+  return normalizeCoinType(String.fromCharCode(...(asset as number[])));
 }
 
 function isMoveStringType(value: unknown): boolean {
@@ -143,7 +187,18 @@ export async function readCustodyBalances(
       cursor,
     });
     for (const entry of listing.data) {
-      if (entry.type === 'DynamicField') {
+      if (entry.type === 'DynamicField' && isDepositBalanceKeyType(entry.name?.type)) {
+        // A v11 deposit record: the asset in its key and the Balance<T> it
+        // holds must name the same coin. A record that does not read that
+        // way is an unreadable balance, never zero.
+        const keyCoinType = depositBalanceKeyCoinType(entry.name?.value);
+        const valueCoinType = frameworkTypeParam(entry.objectType, 'balance', 'Balance');
+        if (!keyCoinType || !valueCoinType || keyCoinType !== valueCoinType) {
+          throw new Error(`Custody wallet ${walletId} holds a deposit record that did not read`);
+        }
+        if (keyCoinType === SUI_TYPE) reads.push({ coin: 'sui', objectId: entry.objectId, key: 'value' });
+        else if (keyCoinType === usdcType) reads.push({ coin: 'usdc', objectId: entry.objectId, key: 'value' });
+      } else if (entry.type === 'DynamicField') {
         // A typed balance is stored under its own coin type's name.
         const coinType = frameworkTypeParam(entry.objectType, 'balance', 'Balance');
         if (!coinType || !isMoveStringType(entry.name?.type)) continue;

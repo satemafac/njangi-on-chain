@@ -55,6 +55,15 @@ const CUSTODY_TOUCHING_FUNCTIONS = new Set([
   'member_deposit_security_deposit',
   'execute_recovery',
   'trigger_auto_release',
+  // v11 (njangi_circles): deposit, refunds, removal and conversion all take
+  // the circle's custody wallet.
+  'post_security_deposit',
+  'refund_asset',
+  'claim_own_refund',
+  'execute_recovery_asset',
+  'trigger_auto_release_asset',
+  'admin_remove_member_asset',
+  'adopt_asset_policy',
 ]);
 
 export type CustodyDiscoverySource =

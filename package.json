@@ -14,6 +14,7 @@
     "bootstrap:sanctions": "ts-node --compiler-options {\"module\":\"commonjs\",\"target\":\"es2020\",\"esModuleInterop\":true,\"moduleResolution\":\"node\"} scripts/bootstrap-sanctions.ts",
     "generate:secrets": "node scripts/generate-secrets.mjs",
     "bootstrap:package": "node scripts/bootstrap-package.mjs",
+    "v11:convert": "node scripts/v11-convert-circles.mjs",
     "smoke:testnet": "node scripts/smoke-testnet.mjs",
     "notifier:cycle-finalized": "node scripts/cycle-finalized-notifier.mjs",
     "check:copy": "node scripts/check-marketing-copy.mjs",

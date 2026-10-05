@@ -887,7 +887,13 @@ const getTransactionHistoryLabel = (
     (event: any): string => String(event.type || ''),
   );
 
-  if (functions.some((value) => value.endsWith('::member_deposit_security_deposit'))) {
+  if (
+    functions.some(
+      (value) =>
+        value.endsWith('::member_deposit_security_deposit') ||
+        value.endsWith('::post_security_deposit'),
+    )
+  ) {
     return 'Security Deposit';
   }
 
@@ -896,13 +902,22 @@ const getTransactionHistoryLabel = (
       (value) =>
         value.endsWith('::contribute') ||
         value.endsWith('::contribute_stablecoin') ||
-        value.endsWith('::contribute_to_circle'),
+        value.endsWith('::contribute_to_circle') ||
+        value.endsWith('::contribute_round') ||
+        value.endsWith('::contribute_round_with_attestation'),
     )
   ) {
     return 'Contribution';
   }
 
-  if (eventTypes.some((value) => value.includes('SecurityDepositReturned'))) {
+  if (
+    eventTypes.some((value) => value.includes('SecurityDepositReturned')) ||
+    functions.some(
+      (value) =>
+        value.endsWith('::refund_asset') ||
+        value.endsWith('::claim_own_refund'),
+    )
+  ) {
     return 'Deposit Return';
   }
 
@@ -916,7 +931,13 @@ const getTransactionHistoryLabel = (
     return 'Payout';
   }
 
-  if (functions.some((value) => value.endsWith('::create_circle'))) {
+  if (
+    functions.some(
+      (value) =>
+        value.endsWith('::create_circle') ||
+        value.endsWith('::create_circle_with_asset'),
+    )
+  ) {
     return 'Create Circle';
   }
 

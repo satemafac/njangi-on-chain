@@ -102,6 +102,25 @@ export const SPONSORABLE_MOVE_FUNCTIONS: readonly string[] = Object.freeze([
   'njangi_circles::acknowledge_migration_state',
   'njangi_circles::execute_recovery',
   'njangi_circles::trigger_auto_release',
+  // v11 (behind NEXT_PUBLIC_V11_ENABLED; listing them before the publish is
+  // harmless, Enoki refuses unknown targets). The deposit that joins a circle,
+  // the round open/contribute pair, and every refund path, so a gas-less
+  // member can join, pay and always get their own deposit back. None of them
+  // lets a caller move coins they could not move themselves: deposits and
+  // contributions spend the signer's own coin, and refunds pay only the
+  // recorded member.
+  'njangi_circles::post_security_deposit',
+  'njangi_circles::stop_for_recovery',
+  'njangi_circles::stop_for_auto_release',
+  'njangi_circles::refund_asset',
+  'njangi_circles::claim_own_refund',
+  'njangi_circles::execute_recovery_asset',
+  'njangi_circles::trigger_auto_release_asset',
+  'njangi_cycle_escrow::open_round',
+  'njangi_cycle_escrow::open_round_with_gate',
+  'njangi_cycle_escrow::contribute_round',
+  'njangi_cycle_escrow::contribute_round_with_attestation',
+  'njangi_cycle_escrow::release_invalid_round',
 ]);
 
 /**
