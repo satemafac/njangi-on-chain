@@ -78,10 +78,11 @@ Phase 1 ships three subsystems:
   (gas sponsorship is ON for the testnet pilot, behind
   `GAS_SPONSORSHIP_ENABLED`: Enoki pays the network fee for the USDC
   security deposit and, through the round panel's sponsor-first signer
-  (`src/lib/sponsored-first-signer.ts`), for opening a USDC round, paying a
-  USDC share, collecting, advancing and expired-claim refunds. A SUI share
-  is never sponsored: it is split from the gas coin, which under sponsorship
-  is the sponsor's. Every decline falls back to the member's own gas; verify
+  (`src/lib/sponsored-first-signer.ts`), for opening a round (SUI or USDC,
+  including the re-open after a refunded round), paying a USDC share,
+  collecting, advancing and expired-claim refunds. A SUI share is never
+  sponsored: it is split from the gas coin, which under sponsorship is the
+  sponsor's. Every decline falls back to the member's own gas; verify
   with gas owner != sender. The plan is to launch on mainnet with
   sponsorship billed to the admin's subscription, after counsel's advice.
   Everything else is paid by the user's own zkLogin account. The Enoki

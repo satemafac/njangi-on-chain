@@ -97,6 +97,20 @@ export const SPONSORABLE_MOVE_FUNCTIONS: readonly string[] = Object.freeze([
   'njangi_cycle_escrow::open_cycle_stable_with_gate',
   'njangi_cycle_escrow::open_cycle_stable_indexed',
   'njangi_cycle_escrow::open_cycle_stable_indexed_with_gate',
+  // The same opens for a circle that settles in SUI. They differ from the
+  // stable ones above only in how the share is computed (SUI MIST rather
+  // than USD cents); they mint the round's escrow and move no coins. An
+  // open never draws on the gas coin, so the SUI rule for shares does not
+  // apply to it.
+  'njangi_cycle_escrow::open_cycle',
+  'njangi_cycle_escrow::open_cycle_with_gate',
+  'njangi_cycle_escrow::open_cycle_indexed',
+  'njangi_cycle_escrow::open_cycle_indexed_with_gate',
+  // Chained ahead of a re-open when the previous round's escrow was
+  // refunded or abandoned (buildOpenCycleTx). Permissionless and
+  // fact-checked on chain: it clears the round marker only for an escrow
+  // that can no longer pay out, and moves no coins.
+  'njangi_cycle_escrow::release_open_round',
   // Membership + recovery so a gas-less member is never trapped.
   'njangi_circles::member_deposit_security_deposit',
   // Confirming a migrated circle's recorded history moves no funds and is

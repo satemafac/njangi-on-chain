@@ -108,14 +108,28 @@ describe('every round transaction the panel asks about is sponsorable end to end
       coinType: BASE.coinType,
       stableDecimals: 6,
     });
+  const openSuiRound = () =>
+    buildOpenCycleTx({ network: 'testnet', circleId: BASE.circleId, coinType: '0x2::sui::SUI' });
+  // The open the panel builds when the previous round's escrow was refunded.
+  const reopenAfterRefund = () =>
+    buildOpenCycleTx({
+      network: 'testnet',
+      circleId: BASE.circleId,
+      coinType: BASE.coinType,
+      stableDecimals: 6,
+      releaseEscrowId: BASE.escrowId,
+      releaseCoinType: BASE.coinType,
+    });
 
   afterEach(() => {
     delete process.env.NEXT_PUBLIC_ESCROW_TIMED_ENTRIES_ENABLED;
+    delete process.env.NEXT_PUBLIC_ESCROW_ROUND_GUARD_ENABLED;
   });
 
   it.each([
     ['pay a USDC share', payShare, ['contribute']],
     ['open a USDC round', openRound, ['open_cycle_stable']],
+    ['open a SUI round', openSuiRound, ['open_cycle']],
     ['send the contributions back after the claim window', () => buildRefundExpiredClaimTx(BASE), ['refund_expired_claim']],
   ])('%s', async (_route, makeBuild, expectedFunctions) => {
     const targets = await moveCallTargets(makeBuild());
@@ -124,12 +138,28 @@ describe('every round transaction the panel asks about is sponsorable end to end
     expect(targets.filter((target) => !allowed.has(target))).toEqual([]);
   });
 
+  it('re-open a round whose escrow was refunded (release chained ahead of the open)', async () => {
+    process.env.NEXT_PUBLIC_ESCROW_ROUND_GUARD_ENABLED = 'true';
+    const targets = await moveCallTargets(reopenAfterRefund());
+    expect(targets.map((target) => target.split('::')[2])).toEqual([
+      'release_open_round',
+      'open_cycle_stable',
+    ]);
+    const allowed = new Set(allowedMoveCallTargets(TESTNET_PKG));
+    expect(targets.filter((target) => !allowed.has(target))).toEqual([]);
+  });
+
   it('covers the timed and indexed entries production builds', async () => {
     process.env.NEXT_PUBLIC_ESCROW_TIMED_ENTRIES_ENABLED = 'true';
-    const targets = [...(await moveCallTargets(payShare())), ...(await moveCallTargets(openRound()))];
+    const targets = [
+      ...(await moveCallTargets(payShare())),
+      ...(await moveCallTargets(openRound())),
+      ...(await moveCallTargets(openSuiRound())),
+    ];
     expect(targets.map((target) => target.split('::')[2])).toEqual([
       'contribute_timed',
       'open_cycle_stable_indexed',
+      'open_cycle_indexed',
     ]);
     const allowed = new Set(allowedMoveCallTargets(TESTNET_PKG));
     expect(targets.filter((target) => !allowed.has(target))).toEqual([]);
