@@ -362,10 +362,14 @@ class SuiFailoverTransport implements SuiTransport {
         const hasNextCandidate = index < orderedTransports.length - 1;
         const isRetriable = isRetriableSuiRpcError(error);
 
-        if (isRetriable) {
-          this.markCooldown(candidate.rpcUrl, error);
-        }
-
+        // Fail over, but never cool the endpoint down: a subscription runs
+        // over a WebSocket, which says nothing about the endpoint's HTTP
+        // reads. publicnode accepts the socket and closes it on the first
+        // `suix_subscribeEvent` (close 1013), so the SDK's subscribe times out
+        // after 30s. Benching publicnode for that sent every object read to
+        // blockvision for 10s, its 429s benched it too, and the round panel
+        // read "couldn't reach the network" after a Resume Cycle (production
+        // 2026-10-06).
         if (!hasNextCandidate || !isRetriable) {
           throw error;
         }

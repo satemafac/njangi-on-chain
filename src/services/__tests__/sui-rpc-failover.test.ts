@@ -2,6 +2,7 @@ const mockGetNetworkConfig = jest.fn();
 const mockGetCurrentNetwork = jest.fn(() => 'testnet');
 const mockSuiClient = jest.fn();
 const transportRequestMocks = new Map<string, jest.Mock>();
+const transportSubscribeMocks = new Map<string, jest.Mock>();
 const clientInstances = new Map<
   string,
   {
@@ -19,10 +20,12 @@ jest.mock('@mysten/sui/client', () => ({
   SuiHTTPTransport: function MockSuiHTTPTransport({ url }: { url: string }) {
     const request = jest.fn(async () => ({ url }));
     transportRequestMocks.set(url, request);
+    const subscribe = jest.fn(async () => async () => true);
+    transportSubscribeMocks.set(url, subscribe);
     return {
       url,
       request,
-      subscribe: jest.fn(async () => async () => true),
+      subscribe,
     };
   },
   SuiClient: function MockSuiClient({
@@ -74,6 +77,7 @@ describe('sui-rpc-failover', () => {
     clearSuiRpcClientPool();
     clientInstances.clear();
     transportRequestMocks.clear();
+    transportSubscribeMocks.clear();
     mockGetNetworkConfig.mockReturnValue({
       rpcUrl: 'https://primary.rpc',
       rpcAltUrl: 'https://alt.rpc',
@@ -320,6 +324,43 @@ describe('sui-rpc-failover', () => {
     expect(transportRequestMocks.get('https://alt.rpc')).toHaveBeenCalledTimes(1);
     expect(transportRequestMocks.get('https://sui-testnet-endpoint.blockvision.org')).toHaveBeenCalledTimes(1);
     expect(transportRequestMocks.get('https://sui-testnet-rpc.publicnode.com')).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails a subscription over without benching the endpoint for requests', async () => {
+    // Production 2026-10-06: publicnode closes the socket on the first
+    // suix_subscribeEvent, so the SDK's subscribe times out after 30s. That
+    // timeout cooled publicnode down for every object read, blockvision's
+    // 429s benched the rest, and the round panel read "couldn't reach the
+    // network" after a Resume Cycle.
+    const client = getPooledSuiClient({
+      network: 'testnet',
+      rpcUrl: 'https://primary.rpc',
+    }) as unknown as {
+      transport: {
+        request: (input: { method: string; params: unknown[] }) => Promise<unknown>;
+        subscribe: (input: { method: string; unsubscribe: string; params: unknown[]; onMessage: () => void }) => Promise<unknown>;
+      };
+    };
+
+    transportSubscribeMocks.get('https://primary.rpc')!.mockRejectedValueOnce(
+      new Error('Request timeout: suix_subscribeEvent'),
+    );
+
+    await expect(
+      client.transport.subscribe({
+        method: 'suix_subscribeEvent',
+        unsubscribe: 'suix_unsubscribeEvent',
+        params: [],
+        onMessage: () => undefined,
+      }),
+    ).resolves.toBeInstanceOf(Function);
+    expect(transportSubscribeMocks.get('https://alt.rpc')).toHaveBeenCalledTimes(1);
+
+    transportRequestMocks.get('https://primary.rpc')!.mockResolvedValueOnce({ fromPrimary: true });
+    await expect(
+      client.transport.request({ method: 'sui_getObject', params: [] }),
+    ).resolves.toEqual({ fromPrimary: true });
+    expect(transportRequestMocks.get('https://alt.rpc')).not.toHaveBeenCalled();
   });
 
   describe('logSuiReadError', () => {
