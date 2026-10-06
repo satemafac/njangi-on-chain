@@ -558,6 +558,12 @@ const getJsonRpcUrl = (): string => {
  * shape keeps the surrounding error handling — including the 401 re-login
  * branch — untouched, so this migration cannot quietly change how failures
  * surface to the admin.
+ *
+ * It resolves only once the node this page reads from has indexed the
+ * transaction. Every caller re-reads the circle next, and a read that beats
+ * the indexer shows the state from before the action. After Activate Circle
+ * that put "Inactive" back, so the first round never opened by itself; after
+ * an approval or a removal the member list snapped back.
  */
 async function runSignedTx(
   fn: () => Promise<{ digest: string }>,
@@ -569,6 +575,7 @@ async function runSignedTx(
 }> {
   try {
     const r = await fn();
+    await waitForTxIndexed(getSuiClientFromPool(getJsonRpcUrl()), r.digest);
     return { response: { ok: true, status: 200 }, result: { digest: r.digest } };
   } catch (err) {
     const requireRelogin = err instanceof ZkLoginError && err.requireRelogin;
@@ -3386,7 +3393,9 @@ export default function ManageCircle() {
           // Show success message with the transaction digest
           toast.success(`Circle activated! Opening the first round now…`, { id: toastId + '-success' });
 
-          // Refresh circle details
+          // runSignedTx returned only once the node had indexed the
+          // activation, so this read sees the circle active and cannot undo
+          // the flag the first-round auto-open waits for.
           fetchCircleDetails();
         } catch (error) {
           // **Log 4: Error caught in final catch block**
@@ -3488,16 +3497,18 @@ export default function ManageCircle() {
           try {
             toast.loading('Updating rotation order...', { id: 'rotation-order' });
             
-            await zkLoginClient.reorderRotationPositions(
+            const { digest } = await zkLoginClient.reorderRotationPositions(
               account!,
               id as string,
               normalizedOrder,
               getCurrentNetwork() // Include current network to ensure correct chain targeting
             );
-            
+
             toast.success('Rotation order updated successfully!', { id: 'rotation-order' });
-            
-            // Refresh circle details
+
+            // Re-read once the node has the new order. A read that beats the
+            // indexer showed every member as "without position" until a reload.
+            await waitForTxIndexed(getSuiClientFromPool(getJsonRpcUrl()), digest);
             await fetchCircleDetails();
             setIsEditingRotation(false);
             
@@ -3601,7 +3612,7 @@ export default function ManageCircle() {
           setIsMigrationBusy(true);
           toast.loading('Recording your circle\'s position...', { id: toastId });
 
-          await new ZkLoginClient().declareMigrationState(
+          const { digest } = await new ZkLoginClient().declareMigrationState(
             account,
             id as string,
             priorRoundsCompleted,
@@ -3610,6 +3621,7 @@ export default function ManageCircle() {
           );
 
           toast.success('Recorded. Members can now confirm it.', { id: toastId });
+          await waitForTxIndexed(getSuiClientFromPool(getJsonRpcUrl()), digest);
           await fetchCircleDetails();
         } catch (error) {
           console.error('Error declaring migration state:', error);
@@ -3647,13 +3659,14 @@ export default function ManageCircle() {
           setIsMigrationBusy(true);
           toast.loading('Removing the recorded history...', { id: toastId });
 
-          await new ZkLoginClient().clearMigrationState(
+          const { digest } = await new ZkLoginClient().clearMigrationState(
             account,
             id as string,
             getCurrentNetwork(),
           );
 
           toast.success('Removed. This circle will start from the beginning.', { id: toastId });
+          await waitForTxIndexed(getSuiClientFromPool(getJsonRpcUrl()), digest);
           await fetchCircleDetails();
         } catch (error) {
           console.error('Error clearing migration state:', error);
@@ -4429,7 +4442,7 @@ export default function ManageCircle() {
       toast.loading('Updating next in command...', { id: toastId });
 
       const zkLoginClient = ZkLoginClient.getInstance();
-      await zkLoginClient.updateNextInCommand(account, {
+      const { digest } = await zkLoginClient.updateNextInCommand(account, {
         circleId: circle.id,
         nextInCommand,
         network: getCurrentNetwork(),
@@ -4441,6 +4454,8 @@ export default function ManageCircle() {
         ? { ...previous, nextInCommand }
         : previous);
       setIsEditingRecoveryDelegate(false);
+      // A read that beats the indexer would put the previous delegate back.
+      await waitForTxIndexed(getSuiClientFromPool(getJsonRpcUrl()), digest);
       await Promise.all([
         fetchCircleDetails(),
         fetchRecoveryStatus(),
@@ -4837,9 +4852,8 @@ export default function ManageCircle() {
       }
 
       setCircle(prevCircle => prevCircle ? { ...prevCircle, paused: false } : null);
-      // A read before the node has the resume would put "paused" (and the
-      // Resume button) back.
-      await waitForTxIndexed(getSuiClientFromPool(getJsonRpcUrl()), result.digest);
+      // runSignedTx waited for the node to index the resume, so this read
+      // cannot put "paused" (and the Resume button) back.
       await fetchCircleDetails();
 
       toast.success('Successfully resumed to the next cycle', { id: toastId });
