@@ -142,14 +142,6 @@ const parseU64Like = (value: unknown): bigint => {
   return 0n;
 };
 
-const asRecord = (value: unknown): Record<string, unknown> | null => {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    return null;
-  }
-
-  return value as Record<string, unknown>;
-};
-
 const toDisplayAmount = (value: bigint, decimals: number): number => {
   if (value <= 0n) return 0;
   return Number(value) / 10 ** decimals;
@@ -4198,6 +4190,14 @@ export default function ManageCircle() {
     // Recovery is a slow-moving safety status (liveness/grace windows are hours),
     // not a live feed — poll gently and skip while the tab is backgrounded. The
     // old 15s cadence was a top contributor to RPC rate-limit cooldowns.
+    //
+    // Polling is the only way to hear about it: no configured endpoint serves
+    // event subscriptions (publicnode closes the socket on the first
+    // `suix_subscribeEvent`, blockvision refuses WebSockets). The
+    // EmergencyStop/Recovery subscription that used to sit beside this poll
+    // never delivered an event; its timeout, 30s after every page load,
+    // benched publicnode for every read and left the round panel on
+    // "couldn't reach the network" after a Resume Cycle (2026-10-06).
     const intervalId = window.setInterval(() => {
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
       void fetchRecoveryStatus();
@@ -4208,58 +4208,6 @@ export default function ManageCircle() {
       window.clearInterval(intervalId);
     };
   }, [fetchRecoveryExecutionState, fetchRecoveryStatus, id, userAddress]);
-
-  useEffect(() => {
-    if (!circlePackageId || !id) {
-      return;
-    }
-
-    let isActive = true;
-    let unsubscribe: (() => void) | null = null;
-    const rpcUrl = getJsonRpcUrl();
-    const subscriptionClient = getSuiClientFromPool(rpcUrl);
-
-    subscriptionClient.subscribeEvent({
-      filter: {
-        MoveModule: {
-          package: circlePackageId,
-          module: 'njangi_circles',
-        },
-      },
-      onMessage: (event) => {
-        const parsed = asRecord(event.parsedJson);
-        if (
-          typeof parsed?.circle_id !== 'string' ||
-          parsed.circle_id.toLowerCase() !== (id as string).toLowerCase()
-        ) {
-          return;
-        }
-
-        if (!event.type.includes('EmergencyStop') && !event.type.includes('Recovery')) {
-          return;
-        }
-
-        void fetchRecoveryStatus();
-        void fetchRecoveryExecutionState(circlePackageId);
-      },
-    }).then((cleanup) => {
-      if (!isActive) {
-        cleanup();
-        return;
-      }
-
-      unsubscribe = cleanup;
-    }).catch((error) => {
-      console.warn('Recovery event subscription unavailable, continuing with polling:', error);
-    });
-
-    return () => {
-      isActive = false;
-      if (unsubscribe) {
-        unsubscribe();
-      }
-    };
-  }, [circlePackageId, fetchRecoveryExecutionState, fetchRecoveryStatus, id]);
 
   useEffect(() => {
     if (isEditingRecoveryDelegate) {

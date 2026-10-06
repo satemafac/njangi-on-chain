@@ -36,6 +36,7 @@ import {
   type CircleRotationPointer,
 } from '@/lib/cycle-round-progression';
 import { roundNumber } from '@/lib/round-number';
+import { roundReadRetryDelayMs } from '@/lib/round-read-retry';
 import { resolveRoundMemberStatus, type RoundMemberStatus } from '@/lib/round-member-status';
 import {
   beginOpenRound,
@@ -193,6 +194,9 @@ export function CycleEscrowPanel({
   // it a rate-limited lookup renders as a confident (and wrong) statement
   // that the admin has not opened the round.
   const [loadError, setLoadError] = useState(false);
+  // Failed reads in a row, for the automatic retry (round-read-retry.ts).
+  // Any read that succeeds resets it.
+  const failedReadsRef = useRef(0);
   const [busy, setBusy] = useState<null | 'pay' | 'claim' | 'advance' | 'refund'>(null);
   // Why the last Collect on a finalized round did not sign, keyed to its
   // escrow so a later round never inherits it. `unreadable` is a failed
@@ -290,8 +294,10 @@ export function CycleEscrowPanel({
         setRotationPointer(null);
         setChainNowMs(null);
       }
+      failedReadsRef.current = 0;
     } catch (err) {
       console.warn('[CycleEscrowPanel] refresh failed', err);
+      failedReadsRef.current += 1;
       // Say so, rather than falling through to the "not open yet" copy.
       setLoadError(true);
       setSummary(null);
@@ -308,6 +314,19 @@ export function CycleEscrowPanel({
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  // A read that failed tries again by itself, so a short RPC cooldown clears
+  // without anyone pressing Refresh status (round-read-retry.ts). An open
+  // that is confirming re-reads on its own schedule below; not twice.
+  useEffect(() => {
+    if (!loadError || loading || openLock.kind === 'confirming') return;
+    const delay = roundReadRetryDelayMs(failedReadsRef.current);
+    if (delay === null) return;
+    const timer = setTimeout(() => {
+      void refresh();
+    }, delay);
+    return () => clearTimeout(timer);
+  }, [loadError, loading, openLock.kind, refreshSeq, refresh]);
 
   // Best-effort and off the hot path: the panel never waits on the probe,
   // and a failed one just leaves the notice hidden.
@@ -729,6 +748,8 @@ export function CycleEscrowPanel({
     if (!isReady || !circleIsActive) return;
     if (isOpenRoundLocked(openLock)) return;
     if (loading) return;
+    // A failed read is not "no round": wait for the retry to answer.
+    if (loadError) return;
     // Stage check: only when no round is currently open.
     if (summary || liveState) return;
     onAutoOpenFired?.();
@@ -741,6 +762,7 @@ export function CycleEscrowPanel({
     circleIsActive,
     openLock,
     loading,
+    loadError,
     summary,
     liveState,
     onAutoOpenFired,
