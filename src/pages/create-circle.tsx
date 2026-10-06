@@ -65,6 +65,13 @@ import {
 import { rememberPostLoginDestination } from '../lib/post-login-redirect';
 import { trackFunnel } from '../lib/funnel-events';
 import { refreshSuiBalance } from '../lib/wallet';
+import {
+  canPickSui,
+  DEFAULT_CREATE_CIRCLE_COIN,
+  formatCreateCoinAmount,
+  settlementAssetForCreate,
+  type CreateCircleCoin,
+} from '../lib/create-circle-coin';
 
 // Curated emoji set for giving a Smart Goal pot a bit of personality. The
 // chosen emoji is prepended to the on-chain circle name so it travels with the
@@ -167,6 +174,11 @@ interface CircleFormData {
   securityDeposit: number; // SUI amount
   securityDepositUSD: number; // NEW: USD amount (deprecated, will be replaced by selectedCurrency amount)
   securityDepositLocal: number; // NEW: Amount in selected currency
+  /**
+   * The coin members pay in, pinned at creation (create-circle-coin.ts).
+   * Optional so a form saved before this choice existed restores as USDC.
+   */
+  settlementAsset?: CreateCircleCoin;
   autoReleaseEnabled: boolean;
   autoReleaseDelayMs: number;
   penaltyRules: {
@@ -419,6 +431,10 @@ const prepareCircleCreationData = (formData: CircleFormData) => {
     auto_release_enabled: isSmartGoal ? false : formData.autoReleaseEnabled,
     auto_release_delay_ms: isSmartGoal ? 0 : formData.autoReleaseDelayMs,
     next_in_command: null,
+    // Pinned by create_circle_with_asset: USDC at the peg, or the SUI
+    // amounts above (priced at today's rate). The manage page cannot change
+    // it afterwards.
+    settlement_asset: isSmartGoal ? DEFAULT_CREATE_CIRCLE_COIN : settlementAssetForCreate(formData.settlementAsset),
   };
 };
 
@@ -463,6 +479,7 @@ export default function CreateCircle() {
     securityDeposit: 0,
     securityDepositUSD: 0,
     securityDepositLocal: 0,
+    settlementAsset: DEFAULT_CREATE_CIRCLE_COIN,
     autoReleaseEnabled: false,
     autoReleaseDelayMs: 0,
     penaltyRules: {
@@ -554,15 +571,12 @@ export default function CreateCircle() {
     return await priceService.convertCurrencyToSUI(localAmount, formData.selectedCurrency);
   };
 
-  // USDC a circle charges for a US-dollar value: the contract stores whole
-  // cents (Math.floor below, as in prepareCircleData) and charges them in USDC.
-  const usdcFor = (usd: number) => (Math.floor(usd * 100) / 100).toFixed(2);
+  // The coin the organizer picked, pinned when the circle is created.
+  const circleCoin = settlementAssetForCreate(formData.settlementAsset);
 
-  // An amount in the selected currency and in the coin members pay. A new
-  // circle starts in USDC mode (the contract's default), so that coin is
-  // USDC; the admin can switch the circle to SUI on its manage page before
-  // it starts, and then the SUI amount priced here applies. This used to
-  // show every amount "converted to SUI".
+  // An amount in the selected currency and in the coin members pay: the
+  // whole USDC cents the contract stores, or the SUI amount priced here at
+  // today's rate (create-circle-coin.ts).
   const CoinAmountDisplay = ({ usd, sui, local, className = "" }: { usd: number; sui: number; local: number; className?: string }) => {
     const currencyInfo = SUPPORTED_CURRENCIES[formData.selectedCurrency];
     const symbol = currencyInfo?.symbol || formData.selectedCurrency;
@@ -573,7 +587,7 @@ export default function CreateCircle() {
           <Tooltip.Trigger asChild>
             <span className={`cursor-help ${className}`}>
               {symbol} {local.toFixed(2)}{' '}
-              <span className="text-[#667085]">(≈ {usdcFor(usd)} USDC)</span>
+              <span className="text-[#667085]">(≈ {formatCreateCoinAmount({ coin: circleCoin, usd, sui })})</span>
             </span>
           </Tooltip.Trigger>
           <Tooltip.Portal>
@@ -582,12 +596,12 @@ export default function CreateCircle() {
               sideOffset={5}
             >
               <div className="space-y-1">
-                <p>Members pay in USDC, a US-dollar coin (1 USDC ≈ US$1).</p>
-                <p className="text-xs text-white/70">
-                  {isPriceAvailable
-                    ? `If you switch the circle to SUI before it starts, members pay about ${sui.toFixed(2)} SUI instead, at today's price.`
-                    : 'To run the circle in SUI instead, switch it on the manage page before it starts.'}
+                <p>
+                  {circleCoin === 'SUI'
+                    ? `Members pay in SUI: ${formatCreateCoinAmount({ coin: 'SUI', usd, sui })}, set at today's price.`
+                    : 'Members pay in USDC, a US-dollar coin (1 USDC ≈ US$1).'}
                 </p>
+                <p className="text-xs text-white/70">{t('create.coinFixed')}</p>
                 <p className="text-xs text-[#b9c8dd]">Currency: {formData.selectedCurrency}</p>
               </div>
               <Tooltip.Arrow className="fill-[#1d2533]" />
@@ -1884,6 +1898,55 @@ The Njangi On-Chain Team`;
                   <p className="text-xs text-gray-500">{t('create.amountHint')}</p>
                 </div>
 
+                {/* The coin is pinned on chain at creation and the manage page
+                    cannot switch it later, so it is chosen here, once. USDC
+                    stays the default: the quick path needs no extra click. */}
+                <div className="space-y-2">
+                  <span className="block text-sm font-medium text-gray-700">{t('create.coinLabel')}</span>
+                  <div role="radiogroup" aria-label={t('create.coinLabel')} className="grid grid-cols-2 gap-2">
+                    {(['USDC', 'SUI'] as const).map((coin) => {
+                      const selected = circleCoin === coin;
+                      const unavailable = coin === 'SUI' && !canPickSui(isPriceAvailable);
+                      return (
+                        <button
+                          key={coin}
+                          type="button"
+                          role="radio"
+                          aria-checked={selected}
+                          disabled={unavailable}
+                          title={unavailable ? t('create.coinSuiUnavailable') : undefined}
+                          onClick={() => handleInputChange('settlementAsset', coin)}
+                          className={`rounded-xl border px-3 py-2.5 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+                            selected
+                              ? 'border-[#1d2533] bg-[#1d2533] text-white'
+                              : 'border-stone-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-stone-50'
+                          }`}
+                        >
+                          {coin}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <p className="text-xs text-gray-500">
+                    {circleCoin === 'SUI'
+                      ? formData.contributionAmount > 0
+                        ? t('create.coinHintSui', {
+                            amount: formatCreateCoinAmount({
+                              coin: 'SUI',
+                              usd: formData.contributionAmountUSD,
+                              sui: formData.contributionAmount,
+                            }),
+                            currency: formData.selectedCurrency,
+                          })
+                        : t('create.coinHintSuiEmpty')
+                      : t('create.coinHintUsdc')}{' '}
+                    {t('create.coinFixed')}
+                  </p>
+                  {circleCoin === 'SUI' && !canPickSui(isPriceAvailable) ? (
+                    <p className="text-xs text-amber-700">{t('create.coinSuiUnavailable')}</p>
+                  ) : null}
+                </div>
+
                 <div className="grid gap-6 sm:grid-cols-2">
                   <div className="space-y-2">
                     <span className="block text-sm font-medium text-gray-700">{t('create.frequencyLabel')}</span>
@@ -2100,7 +2163,11 @@ The Njangi On-Chain Team`;
                     </label>
                     <InfoTooltip>
                       <p>One-time deposit to ensure member commitment</p>
-                      <p className="text-gray-300 text-xs mt-1">Fixed in {formData.selectedCurrency} value, paid in USDC (1 USDC ≈ US$1)</p>
+                      <p className="text-gray-300 text-xs mt-1">
+                        {circleCoin === 'SUI'
+                          ? 'Paid in SUI, at the amount set when the circle is created'
+                          : `Fixed in ${formData.selectedCurrency} value, paid in USDC (1 USDC ≈ US$1)`}
+                      </p>
                       <p className="text-gray-300 text-xs mt-1">Refundable when leaving the circle in good standing</p>
                     </InfoTooltip>
                   </div>
@@ -2187,7 +2254,9 @@ The Njangi On-Chain Team`;
                             <p className="text-gray-300">
                               One-time deposit: {SUPPORTED_CURRENCIES[formData.selectedCurrency]?.symbol || formData.selectedCurrency} {formData.securityDepositLocal.toFixed(2)}
                             </p>
-                            <p className="text-xs text-gray-400">≈ {usdcFor(formData.securityDepositUSD)} USDC</p>
+                            <p className="text-xs text-gray-400">
+                              ≈ {formatCreateCoinAmount({ coin: circleCoin, usd: formData.securityDepositUSD, sui: formData.securityDeposit })}
+                            </p>
                           </div>
                           <Tooltip.Arrow className="fill-gray-900" />
                         </Tooltip.Content>

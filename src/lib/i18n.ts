@@ -287,6 +287,13 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'create.amountLabel': 'Contribution per person',
     'create.amountHint': 'What each member puts in each time.',
     'create.currencyLabel': 'Currency',
+    'create.coinLabel': 'Members pay in',
+    'create.coinHintUsdc': 'A US-dollar coin (1 USDC ≈ US$1), so each share keeps its dollar value.',
+    'create.coinHintSui':
+      'Each share is {amount}, set at today’s SUI price, so what it is worth in {currency} moves with the SUI price.',
+    'create.coinHintSuiEmpty': 'Shares are set in SUI at today’s price, so what they are worth moves with the SUI price.',
+    'create.coinFixed': 'The coin can’t be changed once the circle is created.',
+    'create.coinSuiUnavailable': 'SUI is unavailable right now because its price couldn’t be loaded.',
     'create.frequencyLabel': 'How often',
     'create.frequency.weekly': 'Every week',
     'create.frequency.biweekly': 'Every 2 weeks',
@@ -801,6 +808,15 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'create.amountLabel': 'Versement par personne',
     'create.amountHint': 'Ce que chaque membre verse à chaque fois.',
     'create.currencyLabel': 'Devise',
+    'create.coinLabel': 'Les membres paient en',
+    'create.coinHintUsdc':
+      'Une monnaie indexée sur le dollar américain (1 USDC ≈ 1 $ US) : chaque versement garde sa valeur en dollars.',
+    'create.coinHintSui':
+      'Chaque versement est de {amount}, fixé au cours du SUI d’aujourd’hui : sa valeur en {currency} suit donc le cours du SUI.',
+    'create.coinHintSuiEmpty':
+      'Les versements sont fixés en SUI au cours d’aujourd’hui : leur valeur suit donc le cours du SUI.',
+    'create.coinFixed': 'La monnaie ne peut plus être changée une fois le cercle créé.',
+    'create.coinSuiUnavailable': 'Le SUI est indisponible pour le moment : son cours n’a pas pu être chargé.',
     'create.frequencyLabel': 'À quelle fréquence',
     'create.frequency.weekly': 'Chaque semaine',
     'create.frequency.biweekly': 'Toutes les 2 semaines',
