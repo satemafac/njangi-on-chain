@@ -257,7 +257,13 @@ export function buildCreateCircleWithAssetTx(input: BuildCreateCircleWithAssetTx
   const coinType = requireCoinType(input.coinType);
   const registryId = normalizeRequiredObjectId(input.registryId, 'Asset registry ID');
   if (input.contributionNative <= 0n) throw new Error('Contribution amount is required.');
-  if (input.depositNative <= 0n || input.depositNative * 2n < input.contributionNative) {
+  // The contract's own rule, no stricter: `deposit_native >=
+  // njangi_core::min_security_deposit(contribution_native)`, which is the
+  // contribution divided by two, rounded down. `deposit * 2 < contribution`
+  // refused an odd SUI share's half (84_745_763 MIST share, 42_372_881 MIST
+  // deposit) that the contract accepts, so the default half deposit of a SUI
+  // circle failed before signing about half the time (production 2026-10-06).
+  if (input.depositNative <= 0n || input.depositNative < input.contributionNative / 2n) {
     throw new Error('The security deposit must be at least half a contribution.');
   }
 

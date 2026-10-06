@@ -209,6 +209,25 @@ describe('v11 create', () => {
       }),
     ).toThrow('at least half a contribution');
   });
+
+  it('accepts the half of an odd share the contract accepts, rounded down', () => {
+    // njangi_core::min_security_deposit is `contribution / 2` in integer
+    // math. A SUI share priced at today's rate is often an odd number of
+    // MIST (production 2026-10-06: $0.10 → 84_745_763), and its default
+    // half deposit rounds to 42_372_881, which the contract takes.
+    const SUI = '0x2::sui::SUI';
+    const build = (depositNative: bigint) =>
+      buildCreateCircleWithAssetTx({
+        packageId: PKG,
+        registryId: REGISTRY,
+        coinType: SUI,
+        circleData: circleData(),
+        contributionNative: 84_745_763n,
+        depositNative,
+      });
+    expect(() => build(42_372_881n)).not.toThrow();
+    expect(() => build(42_372_880n)).toThrow('at least half a contribution');
+  });
 });
 
 describe('v11 security deposit', () => {
