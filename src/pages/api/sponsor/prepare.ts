@@ -21,6 +21,7 @@ import {
 } from '@/lib/gas-sponsorship';
 import { isPostgresConfigured } from '@/lib/pg-pool';
 import { resolveEscrowSponsorship } from '@/lib/gas-sponsorship-eligibility';
+import { judgeSponsorableKind, type SponsorableKindVerdict } from '@/lib/sponsorable-kind';
 import { getCurrentNetwork, getNetworkConfig } from '@/services/network-config';
 
 interface PrepareBody {
@@ -32,43 +33,6 @@ interface PrepareBody {
     coinType?: string;
     usesGasCoinForValue?: boolean;
   };
-}
-
-/**
- * Reject any kind whose move calls fall outside the sponsorable allowlist.
- *
- * Enoki enforces `allowedMoveCallTargets` too, so this is not the only guard —
- * but doing it here is what makes the decision auditable on our side, and it
- * fails a disallowed target before we have spent an Enoki call on it.
- */
-function assertKindIsSponsorable(kindBytes: Uint8Array, allowed: string[]): Set<string> {
-  const allowedSet = new Set(allowed);
-  const data = Transaction.fromKind(kindBytes).getData();
-
-  for (const command of data.commands) {
-    if (!('MoveCall' in command) || !command.MoveCall) continue;
-    const { package: pkg, module, function: fn } = command.MoveCall;
-    const target = `${pkg}::${module}::${fn}`;
-    if (!allowedSet.has(target)) {
-      throw new Error(`Move call target is not sponsorable: ${target}`);
-    }
-  }
-
-  // Every object this kind actually touches, so the caller can prove the
-  // circle it wants billed is one of them (see the binding check below).
-  const objectIds = new Set<string>();
-  for (const input of data.inputs) {
-    if (input.$kind !== 'Object' || !input.Object) continue;
-    const obj = input.Object as {
-      SharedObject?: { objectId: string };
-      ImmOrOwnedObject?: { objectId: string };
-      Receiving?: { objectId: string };
-    };
-    const objectId =
-      obj.SharedObject?.objectId ?? obj.ImmOrOwnedObject?.objectId ?? obj.Receiving?.objectId;
-    if (objectId) objectIds.add(normalizeSuiObjectId(objectId));
-  }
-  return objectIds;
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -113,14 +77,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const allowedTargets = allowedMoveCallTargets(networkConfig.packageId);
     if (allowedTargets.length === 0) return decline('no_package_id');
 
-    const decoded = fromBase64(kindBytes);
-    let kindObjectIds: Set<string>;
+    // Judged from the kind itself (sponsorable-kind.ts): the commands it
+    // runs, the targets it calls, and whether it touches the gas coin.
+    let verdict: SponsorableKindVerdict;
     try {
-      kindObjectIds = assertKindIsSponsorable(decoded, allowedTargets);
+      verdict = judgeSponsorableKind(
+        Transaction.fromKind(fromBase64(kindBytes)).getData(),
+        allowedTargets,
+      );
     } catch (err) {
-      console.warn('[sponsor/prepare] rejected non-sponsorable kind:', err);
-      return decline('target_not_allowed');
+      console.warn('[sponsor/prepare] unreadable kind:', err);
+      return decline('kind_unreadable');
     }
+    if (!verdict.sponsorable) {
+      console.warn('[sponsor/prepare] rejected non-sponsorable kind:', verdict.detail);
+      return decline(verdict.reason);
+    }
+    const kindObjectIds = verdict.objectIds;
 
     // Bind the circle being BILLED to the transaction being sponsored.
     //

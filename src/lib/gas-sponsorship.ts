@@ -88,6 +88,11 @@ export const SPONSORABLE_MOVE_FUNCTIONS: readonly string[] = Object.freeze([
   'njangi_cycle_escrow::recipient',
   'njangi_cycle_escrow::redeem_claim',
   'njangi_cycle_escrow::advance_circle_after_claim',
+  // A round whose payout went uncollected past its claim window: sends each
+  // recorded contribution back to the member who paid it, and to nobody
+  // else. Permissionless, so a gas-less member is never stuck waiting on
+  // someone holding SUI to get their share back.
+  'njangi_cycle_escrow::refund_expired_claim',
   'njangi_cycle_escrow::open_cycle_stable',
   'njangi_cycle_escrow::open_cycle_stable_with_gate',
   'njangi_cycle_escrow::open_cycle_stable_indexed',

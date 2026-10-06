@@ -18,8 +18,14 @@ import {
 } from '@/lib/cycle-escrow-collect';
 import { readChainClockMs } from '@/lib/chain-clock';
 import { preparePaymentCoin } from '@/lib/payment-coin-builder';
-import { useZkLoginSigner } from '@/hooks/useZkLoginSigner';
+import { useZkLoginSigner, type SponsorRequest } from '@/hooks/useZkLoginSigner';
 import type { TransactionBuilder } from '@/lib/zklogin-client-signer';
+import {
+  escrowSponsorRequest,
+  openRoundSponsorRequest,
+  payShareSponsorRequest,
+} from '@/lib/round-sponsorship';
+import { assertTransactionSucceeded, isOnChainFailure } from '@/lib/tx-effects-status';
 import { useTranslation } from '@/hooks/useTranslation';
 import {
   findCurrentCycleEscrow,
@@ -541,6 +547,9 @@ export function CycleEscrowPanel({
       action: 'pay' | 'claim' | 'advance' | 'refund',
       build: TransactionBuilder,
       gasBudget: number,
+      // The sponsor pays the network fee when the circle's plan covers it;
+      // any decline signs with the member's own gas (round-sponsorship.ts).
+      sponsor?: SponsorRequest,
     ) => {
       if (!isReady) {
         toast.error(t('toast.signInAgain'));
@@ -548,8 +557,10 @@ export function CycleEscrowPanel({
       }
       setBusy(action);
       try {
-        const result = await signAndExecute({ build, gasBudget });
+        const result = await signAndExecute({ build, gasBudget }, { sponsor });
         setLastDigest(result.digest);
+        // Landed is not succeeded: a refused transaction still has a digest.
+        assertTransactionSucceeded(result);
         toast.success(
           action === 'pay'
             ? t('toast.sharePaid')
@@ -597,6 +608,9 @@ export function CycleEscrowPanel({
         }, 1500);
       } catch (err) {
         toast.error(moveAbortUserMessage(err) ?? t('toast.genericError', { error: explain(err) }));
+        // The chain refused it, so what this panel showed was likely stale
+        // (someone else paid, collected or refunded first): re-read it.
+        if (isOnChainFailure(err)) void refresh();
       } finally {
         setBusy(null);
       }
@@ -694,8 +708,15 @@ export function CycleEscrowPanel({
     const submitting = beginOpenRound(priorEscrowId);
     updateOpenLock(submitting);
     try {
-      const result = await signAndExecute({ build, gasBudget: 80_000_000 });
+      const result = await signAndExecute(
+        { build, gasBudget: 80_000_000 },
+        { sponsor: openRoundSponsorRequest(circleId, open.coin.coinType) },
+      );
       setLastDigest(result.digest);
+      // A refused open (abort 234 above all) lands with a digest too. Without
+      // this the catch below never saw it: the toast said "opened" and the
+      // lock waited out its timeout for a round that did not exist.
+      assertTransactionSucceeded(result);
       toast.success(t('toast.roundOpened'));
       // Resolved is not confirmed: keep the lock until discovery shows the
       // new escrow (the confirm-poll effect below) or the timeout passes.
@@ -824,6 +845,7 @@ export function CycleEscrowPanel({
     const coin = requirePayCoin();
     if (!coin) return;
     const coinType = coin.coinType;
+    const sponsor = payShareSponsorRequest(coin, summary.escrowId);
     const attestationId = await resolveAttestationIdOrAbort();
     if (attestationId === 'ABORT') return;
 
@@ -875,7 +897,7 @@ export function CycleEscrowPanel({
           ],
         });
       };
-      void runWithSigner('pay', build, 120_000_000);
+      void runWithSigner('pay', build, 120_000_000, sponsor);
       return;
     }
 
@@ -886,7 +908,7 @@ export function CycleEscrowPanel({
       contributionAmount: BigInt(contributionAmountBase),
       ownerAddress: userAddress,
     });
-    void runWithSigner('pay', build, 100_000_000);
+    void runWithSigner('pay', build, 100_000_000, sponsor);
   }, [summary, userAddress, network, requirePayCoin, contributionAmountBase, runWithSigner, resolveAttestationIdOrAbort]);
 
   const onCollectPayout = useCallback(async () => {
@@ -920,6 +942,7 @@ export function CycleEscrowPanel({
 
     const attestationId = await resolveAttestationIdOrAbort();
     if (attestationId === 'ABORT') return;
+    const sponsor = escrowSponsorRequest('collectPayout', summary.escrowId, coinType);
 
     if (route.kind === 'redeem-claim') {
       // Ungated escrows only: the route refuses gated ones. The pass
@@ -951,7 +974,7 @@ export function CycleEscrowPanel({
         // Same atomic rotation advance as the one-step collect below.
         circleId,
       });
-      void runWithSigner('claim', redeem, 120_000_000);
+      void runWithSigner('claim', redeem, 120_000_000, sponsor);
       return;
     }
 
@@ -987,7 +1010,7 @@ export function CycleEscrowPanel({
           coinType,
           circleId,
         });
-    void runWithSigner('claim', build, 120_000_000);
+    void runWithSigner('claim', build, 120_000_000, sponsor);
   }, [
     summary,
     liveState,
@@ -1016,7 +1039,12 @@ export function CycleEscrowPanel({
       circleId,
       escrowId: summary.escrowId,
     });
-    void runWithSigner('advance', build, 60_000_000);
+    void runWithSigner(
+      'advance',
+      build,
+      60_000_000,
+      escrowSponsorRequest('advanceRound', summary.escrowId, coinType),
+    );
   }, [summary, network, requireExitCoinType, circleId, runWithSigner]);
 
   // An expired round's pot can only go back to its contributors, and
@@ -1033,7 +1061,12 @@ export function CycleEscrowPanel({
       coinType,
       escrowId: summary.escrowId,
     });
-    void runWithSigner('refund', build, 100_000_000);
+    void runWithSigner(
+      'refund',
+      build,
+      100_000_000,
+      escrowSponsorRequest('refundExpiredClaim', summary.escrowId, coinType),
+    );
   }, [summary, refundAccess, network, requireExitCoinType, runWithSigner]);
 
   return (
