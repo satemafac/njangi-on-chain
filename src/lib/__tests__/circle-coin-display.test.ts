@@ -49,10 +49,13 @@ describe('join page', () => {
 });
 
 describe('create circle', () => {
-  it('quotes a rotational circle in USDC, the coin a new circle runs in', () => {
+  it('quotes a rotational circle in the coin the organizer picked', () => {
+    // The coin is pinned at creation (create-circle-coin.ts): USDC by
+    // default, SUI when chosen. Every amount is quoted in that coin, never
+    // "converted to SUI" for a circle that will charge USDC.
     const source = readFileSync(join(process.cwd(), 'src/pages/create-circle.tsx'), 'utf8');
     expect(source).not.toContain('converted to SUI at current price');
     expect(source).not.toContain('SuiAmountDisplay');
-    expect(source).toContain('(≈ {usdcFor(usd)} USDC)');
+    expect(source).toContain('(≈ {formatCreateCoinAmount({ coin: circleCoin, usd, sui })})');
   });
 });
