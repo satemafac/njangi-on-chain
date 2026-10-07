@@ -294,6 +294,8 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'create.coinHintSuiEmpty': 'Shares are set in SUI at today’s price, so what they are worth moves with the SUI price.',
     'create.coinFixed': 'The coin can’t be changed once the circle is created.',
     'create.coinSuiUnavailable': 'SUI is unavailable right now because its price couldn’t be loaded.',
+    'create.coinHintSuiStale':
+      'Live SUI prices aren’t answering right now, so this uses the last price seen, {age} ago.',
     'create.frequencyLabel': 'How often',
     'create.frequency.weekly': 'Every week',
     'create.frequency.biweekly': 'Every 2 weeks',
@@ -817,6 +819,8 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
       'Les versements sont fixés en SUI au cours d’aujourd’hui : leur valeur suit donc le cours du SUI.',
     'create.coinFixed': 'La monnaie ne peut plus être changée une fois le cercle créé.',
     'create.coinSuiUnavailable': 'Le SUI est indisponible pour le moment : son cours n’a pas pu être chargé.',
+    'create.coinHintSuiStale':
+      'Les cours du SUI en direct ne répondent pas pour le moment : le dernier cours relevé, il y a {age}, est utilisé.',
     'create.frequencyLabel': 'À quelle fréquence',
     'create.frequency.weekly': 'Chaque semaine',
     'create.frequency.biweekly': 'Toutes les 2 semaines',

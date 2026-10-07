@@ -72,6 +72,12 @@ import {
   settlementAssetForCreate,
   type CreateCircleCoin,
 } from '../lib/create-circle-coin';
+import {
+  formatSuiPriceAge,
+  isUsableSuiPrice,
+  suiPriceAgeMs,
+  type SuiPriceReading,
+} from '@/lib/sui-price-reading';
 
 // Curated emoji set for giving a Smart Goal pot a bit of personality. The
 // chosen emoji is prepended to the on-chain circle name so it travels with the
@@ -488,6 +494,12 @@ export default function CreateCircle() {
     },
   });
   const [suiPrice, setSuiPrice] = useState<number | null>(null); // Changed to allow null
+  // Where suiPrice came from (sui-price-reading.ts). isPriceAvailable is
+  // the pinning question: a quote, live or at most six hours old — never
+  // the hardcoded fallback the price service hands out when every source
+  // is down. A SUI circle pins its SUI amount for life, so it needs a quote;
+  // a USDC circle pins its dollar amount and only shows SUI as a sidecar.
+  const [suiPriceReading, setSuiPriceReading] = useState<SuiPriceReading | null>(null);
   const [isPriceAvailable, setIsPriceAvailable] = useState(false);
   const [inviteMembers, setInviteMembers] = useState<InviteMember[]>([]);
   const [inviteInput, setInviteInput] = useState('');
@@ -506,8 +518,10 @@ export default function CreateCircle() {
   useEffect(() => {
     const fetchPrice = async () => {
       const price = await priceService.getSUIPrice();
+      const reading = priceService.getPriceReading();
       setSuiPrice(price);
-      setIsPriceAvailable(price !== null);
+      setSuiPriceReading(reading);
+      setIsPriceAvailable(isUsableSuiPrice(reading));
     };
 
     fetchPrice();
@@ -566,13 +580,24 @@ export default function CreateCircle() {
     return localAmount; // Allow any value for testnet testing
   };
 
+  // Converts with whatever price the service has, the fallback included: a
+  // USDC circle needs the SUI sidecar only to pass validation and never pins
+  // it, and a SUI circle cannot be submitted (nor SUI picked) until the
+  // price is a usable quote — by which time the effect below has
+  // re-converted every amount at that quote.
   const convertLocalToSUI = async (localAmount: number) => {
-    if (!isPriceAvailable) return 0;
     return await priceService.convertCurrencyToSUI(localAmount, formData.selectedCurrency);
   };
 
   // The coin the organizer picked, pinned when the circle is created.
   const circleCoin = settlementAssetForCreate(formData.settlementAsset);
+
+  // How old a usable-but-not-live quote is, so a SUI circle's organizer sees
+  // that "today's price" is the last one seen; null while the quote is live.
+  const suiPriceStaleAge =
+    suiPriceReading && suiPriceReading.stale && isUsableSuiPrice(suiPriceReading)
+      ? suiPriceAgeMs(suiPriceReading)
+      : null;
 
   // An amount in the selected currency and in the coin members pay: the
   // whole USDC cents the contract stores, or the SUI amount priced here at
@@ -633,8 +658,10 @@ export default function CreateCircle() {
   useEffect(() => {
     const fetchPriceForCurrency = async () => {
       const price = await priceService.getSUIPrice();
+      const reading = priceService.getPriceReading();
       setSuiPrice(price);
-      setIsPriceAvailable(price !== null);
+      setSuiPriceReading(reading);
+      setIsPriceAvailable(isUsableSuiPrice(reading));
     };
 
     fetchPriceForCurrency();
@@ -646,13 +673,20 @@ export default function CreateCircle() {
 
   // The amount can now be typed BEFORE the currency is picked (they sit on
   // the same screen), so a currency switch re-converts what is already there.
+  // A new SUI price re-converts too: the SUI amounts are what a SUI circle
+  // pins, so they must follow the quote in hand at submit time, not the
+  // number (possibly the fallback) that was current when the amount was
+  // typed. An overridden deposit is re-converted on its own.
   useEffect(() => {
     if (formData.contributionAmountLocal > 0) {
       void handleLocalInputChange('contributionAmountLocal', formData.contributionAmountLocal);
     }
-    // Re-run on currency change only; the converter reads the current amount.
+    if (depositOverridden && formData.securityDepositLocal > 0) {
+      void handleLocalInputChange('securityDepositLocal', formData.securityDepositLocal);
+    }
+    // Re-run on currency or price change only; the converter reads the current amounts.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [formData.selectedCurrency]);
+  }, [formData.selectedCurrency, suiPrice]);
 
   const handleInputChange = (name: keyof Omit<CircleFormData, 'penaltyRules'>, value: string | number) => {
     setFormData(prev => ({
@@ -961,8 +995,10 @@ export default function CreateCircle() {
       return;
     }
 
-    // Check if SUI price is available
-    if (!isPriceAvailable) {
+    // A SUI circle pins the SUI amounts priced here, so it needs a usable
+    // quote (never the fallback). A USDC circle pins its dollar amounts and
+    // does not depend on the SUI price at all.
+    if (circleCoin === 'SUI' && !isPriceAvailable) {
       setValidationErrors(["SUI price is currently unavailable. Please try again later."]);
       return;
     }
@@ -979,13 +1015,17 @@ export default function CreateCircle() {
       
       // Debug logging
       console.log("Circle Creation Data:", {
+        coin: circleCoin,
         contributionAmountUSD: formData.contributionAmountUSD.toFixed(2),
         securityDepositUSD: formData.securityDepositUSD.toFixed(2),
-        suiPrice: suiPrice!.toFixed(4),
+        suiPrice: suiPrice === null ? 'unavailable' : suiPrice.toFixed(4),
+        suiPriceSource: suiPriceReading?.source ?? 'unavailable',
         contributionAmountMIST: contractData.contribution_amount.toString(),
         securityDepositMIST: contractData.security_deposit.toString(),
-        expectedSUIAmount: (formData.contributionAmountUSD / suiPrice!).toFixed(6),
-        expectedMIST: Math.round((formData.contributionAmountUSD / suiPrice!) * 1e9),
+        expectedSUIAmount:
+          suiPrice === null ? 'unavailable' : (formData.contributionAmountUSD / suiPrice).toFixed(6),
+        expectedMIST:
+          suiPrice === null ? 'unavailable' : Math.round((formData.contributionAmountUSD / suiPrice) * 1e9),
         // Add cycle debugging
         cycleLength: contractData.cycle_length,
         cycleDay: contractData.cycle_day,
@@ -1929,21 +1969,30 @@ The Njangi On-Chain Team`;
                   </div>
                   <p className="text-xs text-gray-500">
                     {circleCoin === 'SUI'
-                      ? formData.contributionAmount > 0
-                        ? t('create.coinHintSui', {
-                            amount: formatCreateCoinAmount({
-                              coin: 'SUI',
-                              usd: formData.contributionAmountUSD,
-                              sui: formData.contributionAmount,
-                            }),
-                            currency: formData.selectedCurrency,
-                          })
-                        : t('create.coinHintSuiEmpty')
+                      ? // Without a usable quote there is no "today's price" to
+                        // describe; the amber line below says so instead.
+                        !canPickSui(isPriceAvailable)
+                        ? null
+                        : formData.contributionAmount > 0
+                          ? t('create.coinHintSui', {
+                              amount: formatCreateCoinAmount({
+                                coin: 'SUI',
+                                usd: formData.contributionAmountUSD,
+                                sui: formData.contributionAmount,
+                              }),
+                              currency: formData.selectedCurrency,
+                            })
+                          : t('create.coinHintSuiEmpty')
                       : t('create.coinHintUsdc')}{' '}
                     {t('create.coinFixed')}
                   </p>
                   {circleCoin === 'SUI' && !canPickSui(isPriceAvailable) ? (
                     <p className="text-xs text-amber-700">{t('create.coinSuiUnavailable')}</p>
+                  ) : null}
+                  {circleCoin === 'SUI' && canPickSui(isPriceAvailable) && suiPriceStaleAge !== null ? (
+                    <p className="text-xs text-amber-700">
+                      {t('create.coinHintSuiStale', { age: formatSuiPriceAge(suiPriceStaleAge) })}
+                    </p>
                   ) : null}
                 </div>
 
