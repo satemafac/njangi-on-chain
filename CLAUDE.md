@@ -80,7 +80,10 @@ Phase 1 ships three subsystems:
   security deposit and, through the round panel's sponsor-first signer
   (`src/lib/sponsored-first-signer.ts`), for opening a round (SUI or USDC,
   including the re-open after a refunded round), paying a USDC share,
-  collecting, advancing and expired-claim refunds. A SUI share is never
+  collecting, advancing and expired-claim refunds, and for how deposits come
+  back: the emergency stop (the admin's proposal, the members' votes), the
+  recovery it unlocks, the auto-release, and the admin's Return Deposit &
+  Remove Member (`src/lib/recovery-sponsorship.ts`). A SUI share is never
   sponsored: it is split from the gas coin, which under sponsorship is the
   sponsor's. Every decline falls back to the member's own gas; verify
   with gas owner != sender. The plan is to launch on mainnet with

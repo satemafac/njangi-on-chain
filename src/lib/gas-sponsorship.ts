@@ -119,8 +119,17 @@ export const SPONSORABLE_MOVE_FUNCTIONS: readonly string[] = Object.freeze([
   // group. It also rides in the same PTB as the deposit above, and Enoki
   // rejects the entire transaction if any single target is unlisted.
   'njangi_circles::acknowledge_migration_state',
+  // The emergency stop that unlocks execute_recovery below: only the admin
+  // can propose it and only the members snapshotted on the proposal can
+  // vote, once each. Neither moves coins.
+  'njangi_circles::propose_emergency_stop',
+  'njangi_circles::vote_emergency_stop',
   'njangi_circles::execute_recovery',
   'njangi_circles::trigger_auto_release',
+  // The admin's "Return Deposit & Remove Member" on a circle that has not
+  // started: returns the member's own recorded deposit to them, in the coin
+  // it was paid in, and nothing else. Only this v11 removal is listed.
+  'njangi_circles::admin_remove_member_asset',
   // v11 (behind NEXT_PUBLIC_V11_ENABLED; listing them before the publish is
   // harmless, Enoki refuses unknown targets). The deposit that joins a circle,
   // the round open/contribute pair, and every refund path, so a gas-less

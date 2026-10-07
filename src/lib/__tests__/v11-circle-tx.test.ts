@@ -328,11 +328,13 @@ describe('v11 refunds, removal, conversion and rounds', () => {
     expect(call.typeArguments).toEqual([USDC]);
   });
 
-  it('refunds and the claim are sponsorable; removal and conversion are not', () => {
+  it('refunds, the claim and the deposit-returning removal are sponsorable; conversion is not', () => {
     const allowed = new Set(allowedMoveCallTargets(PKG));
     expect(allowed.has(`${PKG}::njangi_circles::refund_asset`)).toBe(true);
     expect(allowed.has(`${PKG}::njangi_circles::claim_own_refund`)).toBe(true);
-    expect(allowed.has(`${PKG}::njangi_circles::admin_remove_member_asset`)).toBe(false);
+    // The admin's "Return Deposit & Remove Member": it pays only the removed
+    // member's own recorded deposit back to them (recovery-sponsorship.ts).
+    expect(allowed.has(`${PKG}::njangi_circles::admin_remove_member_asset`)).toBe(true);
     expect(allowed.has(`${PKG}::njangi_circles::adopt_asset_policy`)).toBe(false);
   });
 

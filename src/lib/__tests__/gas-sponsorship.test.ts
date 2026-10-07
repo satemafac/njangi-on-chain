@@ -32,6 +32,14 @@ import {
   buildRedeemClaimTx,
   buildRefundExpiredClaimTx,
 } from '@/services/cycle-escrow-service';
+import {
+  buildAdminRemoveMemberTx,
+  buildExecuteRecoveryTx,
+  buildProposeEmergencyStopTx,
+  buildTriggerAutoReleaseTx,
+  buildVoteEmergencyStopTx,
+} from '@/lib/zklogin-tx-builders';
+import { buildAdminRemoveMemberAssetTx } from '@/lib/v11-circle-tx';
 
 const PKG = '0xabc';
 
@@ -189,6 +197,61 @@ describe('every round transaction the panel asks about is sponsorable end to end
     expect(targets.map((target) => target.split('::')[2])).toEqual(expectedFunctions);
     const allowed = new Set(allowedMoveCallTargets(TESTNET_PKG));
     expect(targets.filter((target) => !allowed.has(target))).toEqual([]);
+  });
+});
+
+describe('recovery and deposit-return transactions are sponsorable end to end', () => {
+  // How deposits come back to members: the emergency stop the admin proposes
+  // and the members vote on, the recovery it unlocks, the auto-release after
+  // the admin goes quiet, and the admin's "Return Deposit & Remove Member".
+  // A member holding no SUI must be able to get theirs back.
+  const ADDR = (b: string) => '0x' + b.repeat(64);
+  const IDS = { packageId: TESTNET_PKG, circleId: ADDR('d') };
+  const USDC_TYPE = `${ADDR('c')}::usdc::USDC`;
+  const targetsOf = (tx: Transaction): string[] =>
+    tx.getData().commands.flatMap((command) =>
+      'MoveCall' in command && command.MoveCall
+        ? [`${command.MoveCall.package}::${command.MoveCall.module}::${command.MoveCall.function}`]
+        : [],
+    );
+
+  it.each([
+    ['propose an emergency stop', () => buildProposeEmergencyStopTx(IDS), 'propose_emergency_stop'],
+    ['vote on it', () => buildVoteEmergencyStopTx({ ...IDS, yesVote: true }), 'vote_emergency_stop'],
+    [
+      'execute the recovery it unlocks',
+      () => buildExecuteRecoveryTx({ ...IDS, walletId: ADDR('e'), stablecoinType: USDC_TYPE }),
+      'execute_recovery',
+    ],
+    [
+      'release after the admin goes quiet',
+      () => buildTriggerAutoReleaseTx({ ...IDS, walletId: ADDR('e'), stablecoinType: USDC_TYPE }),
+      'trigger_auto_release',
+    ],
+    [
+      'return a deposit and remove the member',
+      () =>
+        buildAdminRemoveMemberAssetTx({
+          ...IDS,
+          walletId: ADDR('e'),
+          coinType: USDC_TYPE,
+          memberAddress: ADDR('b'),
+        }),
+      'admin_remove_member_asset',
+    ],
+  ])('%s', (_route, makeTx, expectedFunction) => {
+    const targets = targetsOf(makeTx());
+    expect(targets.map((target) => target.split('::')[2])).toEqual([expectedFunction]);
+    const allowed = new Set(allowedMoveCallTargets(TESTNET_PKG));
+    expect(targets.filter((target) => !allowed.has(target))).toEqual([]);
+  });
+
+  it('leaves the pre-v11 member removal off the list', () => {
+    const targets = targetsOf(
+      buildAdminRemoveMemberTx({ ...IDS, memberAddress: ADDR('b'), walletId: ADDR('e') }),
+    );
+    expect(targets.map((target) => target.split('::')[2])).toEqual(['admin_remove_member']);
+    expect(allowedMoveCallTargets(TESTNET_PKG)).not.toContain(targets[0]);
   });
 });
 
