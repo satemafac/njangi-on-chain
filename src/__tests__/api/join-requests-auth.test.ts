@@ -98,6 +98,7 @@ import { screenAddress } from '@/lib/sanctions';
 import { hasAcceptedAllLegalDocs } from '@/lib/legal-acceptance-server';
 import { getDriftStatusForIdentity } from '@/lib/zklogin-address-bindings';
 import { JOIN_REQUESTS_UNREADABLE } from '@/lib/join-request-read-failure';
+import { consumeRateLimit } from '@/lib/rate-limit';
 
 const ADMIN = '0x' + 'a1'.repeat(32);
 const MEMBER = '0x' + 'b2'.repeat(32);
@@ -546,6 +547,19 @@ describe('POST /api/join-requests/create', () => {
     expect(sqlite.createJoinRequest).toHaveBeenCalledWith(
       expect.objectContaining({ circleId: CIRCLE_ID, userAddress: MEMBER }),
     );
+  });
+
+  it('throttles on a hashed IP + address key, never the raw values', async () => {
+    await createHandler(createReq({ method: 'POST', body, cookies: signInAs(MEMBER) }), createRes());
+
+    const limiter = consumeRateLimit as jest.Mock;
+    expect(limiter).toHaveBeenCalledTimes(1);
+    const { key } = limiter.mock.calls[0][0] as { key: string };
+    expect(key).toMatch(/^join-request:[0-9a-f]{64}$/);
+    expect(key).not.toContain(MEMBER.toLowerCase());
+    // No forwarded header in this harness: the IP resolves to "unknown",
+    // and even that placeholder is hashed, not stored.
+    expect(key).not.toContain('unknown');
   });
 });
 

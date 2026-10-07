@@ -9,6 +9,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { getZkLoginSessionAccount } from '../../../lib/zklogin-session-registry';
 import { buildCircleRecord } from '../../../lib/circle-record';
 import { consumeRateLimit } from '../../../lib/rate-limit';
+import { rateLimitKey } from '../../../lib/rate-limit-key';
 import { getClientIp } from '../../../lib/client-ip';
 
 const REQUESTS_PER_WINDOW = 20;
@@ -21,7 +22,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const rateOutcome = await consumeRateLimit({
-    key: `record:${getClientIp(req)}`,
+    key: rateLimitKey('record', getClientIp(req)),
     limit: REQUESTS_PER_WINDOW,
     windowMs: WINDOW_MS,
   });

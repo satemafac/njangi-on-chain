@@ -9,6 +9,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { getZkLoginSessionAccount } from '../../../lib/zklogin-session-registry';
 import { listBadges } from '../../../lib/member-badges';
 import { consumeRateLimit } from '../../../lib/rate-limit';
+import { rateLimitKey } from '../../../lib/rate-limit-key';
 import { getClientIp } from '../../../lib/client-ip';
 import { isPostgresConfigured } from '../../../lib/pg-pool';
 
@@ -18,7 +19,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(405).json({ success: false, error: 'Method not allowed' });
   }
   const rateOutcome = await consumeRateLimit({
-    key: `badges:${getClientIp(req)}`,
+    key: rateLimitKey('badges', getClientIp(req)),
     limit: 30,
     windowMs: 60_000,
   });

@@ -35,6 +35,7 @@ import { createHmac } from 'node:crypto';
 import { z } from 'zod';
 import { getClientIp } from '../../../lib/client-ip';
 import { consumeRateLimit } from '../../../lib/rate-limit';
+import { rateLimitKey } from '../../../lib/rate-limit-key';
 import { getSharedPgPool, isPostgresConfigured } from '../../../lib/pg-pool';
 import { getZkLoginSessionAccount } from '../../../lib/zklogin-session-registry';
 
@@ -95,7 +96,7 @@ export default async function handler(
   }
 
   const rateOutcome = await consumeRateLimit({
-    key: `legal-deletion:${getClientIp(req)}:${normalizedEmail}`,
+    key: rateLimitKey('legal-deletion', getClientIp(req), normalizedEmail),
     limit: REQUESTS_PER_WINDOW,
     windowMs: WINDOW_MS,
   });
