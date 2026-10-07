@@ -104,6 +104,21 @@ const MOVE_ABORT_COPY: readonly MoveAbortCopy[] = [
     code: 85,
     message: "This circle's coin and amounts are fixed and can't be changed.",
   },
+  {
+    moduleName: 'njangi_circles',
+    code: 57,
+    message: 'This circle is not paused at the end of a lap. Finish the current lap first.',
+  },
+  {
+    moduleName: 'njangi_circles',
+    code: 94,
+    message: 'A member can hold only one seat in the rotation. Remove the repeated name and try again.',
+  },
+  {
+    moduleName: 'njangi_circles',
+    code: 95,
+    message: 'A round is still open. Settle it (or send its shares back) before closing the circle.',
+  },
 ];
 
 /** The deprecation code every njangi module shares (89). */

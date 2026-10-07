@@ -111,6 +111,16 @@ module njangi::njangi_cycle_escrow {
     /// Long enough for slow contributors / a late finalize; short enough
     /// that a stalled cycle doesn't strand funds for long.
     const CANCEL_GRACE_MS: u64 = 7 * 24 * 60 * 60 * 1000; // 7 days
+    /// Floor on a round's due date, counted from the moment it opens. The
+    /// circle's scheduled due date advances by (cycle length ÷ members)
+    /// within a lap and is NOT refreshed when the organizer opens a round,
+    /// so a round opened on the "every month" rhythm the app promises can
+    /// carry a due date already weeks in the past — and `cancel_unfinalized_escrow`
+    /// would let anyone refund it the moment the first share landed. Every
+    /// round therefore gets at least this long to fill before its cancel
+    /// window (due + CANCEL_GRACE_MS) can open; a scheduled due date further
+    /// out than this still wins.
+    const MIN_ROUND_WINDOW_MS: u64 = 7 * 24 * 60 * 60 * 1000; // 7 days
     const MAX_U64: u64 = 0xFFFF_FFFF_FFFF_FFFF;
     /// Upper bound for caller-supplied stablecoin decimals. No real coin
     /// uses more than 18; bounding it keeps pow10 trivially overflow-safe.
@@ -723,7 +733,12 @@ module njangi::njangi_cycle_escrow {
 
         let asset_type = canonical_type_bytes<T>();
         let opened_at_ms = clock::timestamp_ms(clock);
-        let due_at_ms = circles::get_next_payout_time(circle);
+        // Due date = the circle's scheduled date, floored at open time plus
+        // MIN_ROUND_WINDOW_MS (see the constant): a late-opened round must
+        // not be born already cancellable.
+        let scheduled_due_ms = circles::get_next_payout_time(circle);
+        let earliest_due_ms = opened_at_ms + MIN_ROUND_WINDOW_MS;
+        let due_at_ms = if (scheduled_due_ms > earliest_due_ms) { scheduled_due_ms } else { earliest_due_ms };
         let circle_id = circles::get_id(circle);
 
         let snapshot = CycleSnapshot {
@@ -1335,6 +1350,7 @@ module njangi::njangi_cycle_escrow {
     public fun is_refunded<T>(escrow: &CycleEscrow<T>): bool { escrow.refunded }
     public fun claim_expires_at_ms<T>(escrow: &CycleEscrow<T>): u64 { escrow.claim_expires_at_ms }
     public fun due_at_ms<T>(escrow: &CycleEscrow<T>): u64 { escrow.snapshot.due_at_ms }
+    public fun opened_at_ms<T>(escrow: &CycleEscrow<T>): u64 { escrow.snapshot.opened_at_ms }
     public fun cancel_grace_ms(): u64 { CANCEL_GRACE_MS }
     public fun claim_window_ms(): u64 { CLAIM_WINDOW_MS }
     public fun requires_attestation<T>(escrow: &CycleEscrow<T>): bool { escrow.requires_attestation }
@@ -2006,6 +2022,95 @@ module njangi::njangi_cycle_escrow {
         let mut escrow = ts::take_shared<CycleEscrow<SUI>>(&scenario);
         cancel_unfinalized_escrow(&mut escrow, &clock, ts::ctx(&mut scenario));
         abort 0
+    }
+
+    // --- due-date floor: a late-opened round is never born cancellable ---
+
+    /// Shares the 3-member circle at TEST_START_MS (scheduled due =
+    /// start + 7 days), then opens the round `late_by_ms` later than that.
+    #[test_only]
+    fun setup_circle_and_late_escrow(scenario: &mut ts::Scenario, late_by_ms: u64): Clock {
+        let mut clock = clock::create_for_testing(ts::ctx(scenario));
+        clock::set_for_testing(&mut clock, TEST_START_MS);
+        circles::share_circle_for_testing(
+            vector[TEST_ADMIN, TEST_BOB, TEST_CAROL],
+            TEST_CONTRIBUTION,
+            TEST_USD_CENTS,
+            &clock,
+            ts::ctx(scenario)
+        );
+        clock::set_for_testing(&mut clock, TEST_START_MS + TEST_SEVEN_DAYS_MS + late_by_ms);
+        ts::next_tx(scenario, TEST_ADMIN);
+        let circle = ts::take_shared<Circle>(scenario);
+        open_cycle<SUI>(&circle, &clock, ts::ctx(scenario));
+        ts::return_shared(circle);
+        clock
+    }
+
+    #[test]
+    fun test_late_open_due_date_is_floored_at_open_plus_window() {
+        // The organizer opens the round 30 days after the circle's
+        // scheduled due date (the "every month" rhythm). Before the floor,
+        // the snapshot carried the stale date and the round could be
+        // cancelled by anyone as soon as one share landed.
+        let late_by = 30 * TEST_SEVEN_DAYS_MS / 7;
+        let mut scenario = ts::begin(TEST_ADMIN);
+        let mut clock = setup_circle_and_late_escrow(&mut scenario, late_by);
+        let opened_at = TEST_START_MS + TEST_SEVEN_DAYS_MS + late_by;
+
+        ts::next_tx(&mut scenario, TEST_BOB);
+        let escrow = ts::take_shared<CycleEscrow<SUI>>(&scenario);
+        assert!(due_at_ms(&escrow) == opened_at + MIN_ROUND_WINDOW_MS, 9260);
+        assert!(opened_at_ms(&escrow) == opened_at, 9261);
+        ts::return_shared(escrow);
+
+        contribute_as(&mut scenario, TEST_BOB);
+
+        // Window + grace from the OPEN, not from the stale schedule.
+        clock::set_for_testing(&mut clock, opened_at + MIN_ROUND_WINDOW_MS + CANCEL_GRACE_MS);
+        ts::next_tx(&mut scenario, TEST_CAROL);
+        let mut escrow = ts::take_shared<CycleEscrow<SUI>>(&scenario);
+        cancel_unfinalized_escrow(&mut escrow, &clock, ts::ctx(&mut scenario));
+        assert!(is_refunded(&escrow), 9262);
+        ts::return_shared(escrow);
+        assert_received_refund(&mut scenario, TEST_BOB, TEST_CONTRIBUTION);
+
+        clock::destroy_for_testing(clock);
+        ts::end(scenario);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = E_CANCEL_TOO_EARLY)]
+    fun test_late_open_round_cannot_be_cancelled_at_open() {
+        // Opened 30 days late with one share paid: the pre-floor contract
+        // let this cancel go through immediately. It must wait.
+        let late_by = 30 * TEST_SEVEN_DAYS_MS / 7;
+        let mut scenario = ts::begin(TEST_ADMIN);
+        let mut clock = setup_circle_and_late_escrow(&mut scenario, late_by);
+        let opened_at = TEST_START_MS + TEST_SEVEN_DAYS_MS + late_by;
+        contribute_as(&mut scenario, TEST_BOB);
+
+        // One millisecond short of open + window + grace.
+        clock::set_for_testing(&mut clock, opened_at + MIN_ROUND_WINDOW_MS + CANCEL_GRACE_MS - 1);
+        ts::next_tx(&mut scenario, TEST_CAROL);
+        let mut escrow = ts::take_shared<CycleEscrow<SUI>>(&scenario);
+        cancel_unfinalized_escrow(&mut escrow, &clock, ts::ctx(&mut scenario));
+        abort 0
+    }
+
+    #[test]
+    fun test_on_time_open_keeps_the_scheduled_due_date() {
+        // Opened at the start: the scheduled due (start + 7 days) is not
+        // earlier than open + window, so the snapshot keeps it and every
+        // existing cancel-window test above still holds.
+        let mut scenario = ts::begin(TEST_ADMIN);
+        let clock = setup_circle_and_escrow(&mut scenario);
+        ts::next_tx(&mut scenario, TEST_BOB);
+        let escrow = ts::take_shared<CycleEscrow<SUI>>(&scenario);
+        assert!(due_at_ms(&escrow) == TEST_START_MS + TEST_SEVEN_DAYS_MS, 9263);
+        ts::return_shared(escrow);
+        clock::destroy_for_testing(clock);
+        ts::end(scenario);
     }
 
     #[test]

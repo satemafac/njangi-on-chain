@@ -204,6 +204,65 @@ export async function readCircleAssetPolicy(
 }
 
 // ---------------------------------------------------------------------------
+// Planned close record
+// ---------------------------------------------------------------------------
+
+/** The on-chain record `complete_circle` leaves on a circle the organizer closed. */
+export interface CircleCompletionRecord {
+  completedAtMs: number;
+  cycleNo: number;
+  completedBy: string;
+}
+
+function parseCircleCompletion(value: unknown): CircleCompletionRecord | null {
+  if (!value || typeof value !== 'object') return null;
+  const fields = 'fields' in (value as Record<string, unknown>)
+    ? ((value as { fields?: unknown }).fields as Record<string, unknown> | undefined)
+    : (value as Record<string, unknown>);
+  if (!fields) return null;
+  const completedAtMs = Number(fields.completed_at_ms);
+  const cycleNo = Number(fields.cycle_no);
+  const completedBy = typeof fields.completed_by === 'string' ? fields.completed_by : '';
+  if (!Number.isFinite(completedAtMs) || !Number.isFinite(cycleNo) || !completedBy) return null;
+  return { completedAtMs, cycleNo, completedBy };
+}
+
+/**
+ * Whether the organizer closed the circle through `complete_circle`, and
+ * when. Null when the circle carries no completion record: it is running,
+ * or it was stopped by the emergency-stop vote or the auto-release instead
+ * (those leave the same recovery state but no record). Throws when the
+ * record exists but cannot be read, never reports "not closed" for a read
+ * failure.
+ */
+export async function readCircleCompletion(
+  client: PolicyReaderClient,
+  circleId: string,
+): Promise<CircleCompletionRecord | null> {
+  const parentId = normalizeRequiredObjectId(circleId, 'Circle ID');
+  let cursor: string | null | undefined = null;
+  do {
+    const page = await client.getDynamicFields({ parentId, cursor });
+    const entry = page.data.find((field) =>
+      typeof field.name?.type === 'string'
+      && field.name.type.endsWith('::njangi_circles::CompletionKey'),
+    );
+    if (entry) {
+      const object = await client.getObject({ id: entry.objectId, options: { showContent: true } });
+      const content = object.data?.content;
+      const value = content && 'fields' in content
+        ? (content.fields as Record<string, unknown>).value
+        : null;
+      const record = parseCircleCompletion(value);
+      if (!record) throw new Error('This circle\'s close record could not be read.');
+      return record;
+    }
+    cursor = page.hasNextPage ? page.nextCursor : null;
+  } while (cursor);
+  return null;
+}
+
+// ---------------------------------------------------------------------------
 // Native terms at creation
 // ---------------------------------------------------------------------------
 
@@ -418,6 +477,32 @@ export const buildExecuteRecoveryAssetTx = (input: CircleWalletAssetInput) =>
 /** Stop through the auto-release rule (if not yet stopped), then refund `coinType`. */
 export const buildTriggerAutoReleaseAssetTx = (input: CircleWalletAssetInput) =>
   circleWalletAssetCall('trigger_auto_release_asset', input);
+
+/**
+ * The organizer's planned close of a circle paused at the end of a lap:
+ * `complete_circle` (admin-only, refused while a round is open, moves no
+ * coins) followed by `refund_asset<T>` in the same transaction, so every
+ * recorded deposit in `coinType` goes back to the member who paid it before
+ * the organizer's signature is spent. Members whose deposit is recorded in
+ * another coin, or who prefer to collect themselves, use `claim_own_refund`.
+ */
+export function buildCompleteCircleTx(input: CircleWalletAssetInput): Transaction {
+  const tx = new Transaction();
+  const packageId = requirePackageId(input.packageId);
+  const circle = normalizeRequiredObjectId(input.circleId, 'Circle ID');
+  const wallet = normalizeRequiredObjectId(input.walletId, 'Custody wallet ID');
+  const coinType = requireCoinType(input.coinType);
+  tx.moveCall({
+    target: `${packageId}::njangi_circles::complete_circle`,
+    arguments: [tx.object(circle), tx.object(CLOCK_OBJECT_ID)],
+  });
+  tx.moveCall({
+    target: `${packageId}::njangi_circles::refund_asset`,
+    typeArguments: [coinType],
+    arguments: [tx.object(circle), tx.object(wallet), tx.object(CLOCK_OBJECT_ID)],
+  });
+  return tx;
+}
 
 /**
  * `admin_remove_member_asset<T>`: removes a member from an inactive circle and

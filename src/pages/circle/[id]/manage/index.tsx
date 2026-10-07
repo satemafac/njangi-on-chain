@@ -35,6 +35,7 @@ import { recoveryCoinTypeErrorMessage, resolveRecoveryCoinType } from '@/lib/rec
 import { resolveStablecoinMetadata } from '@/lib/stablecoin-metadata';
 import { readCustodyBalances, type CustodyBalances } from '@/lib/custody-wallet-balance';
 import { useCircleCoinTerms } from '@/lib/circle-coin-terms';
+import { isCircleWindDownEnabled } from '@/config/feature-flags';
 import { waitForTxIndexed } from '@/lib/wait-for-tx-indexed';
 import { lookupMemberNames } from '@/lib/member-name-lookup';
 import { supportedCoinBySymbol, UNSUPPORTED_COIN_LABEL } from '@/lib/supported-coins';
@@ -4231,7 +4232,7 @@ export default function ManageCircle() {
   }, [isEditingRecoveryDelegate, recoveryStatus?.nextInCommand]);
 
   const postRecoveryAction = async (
-    action: 'proposeEmergencyStop' | 'voteEmergencyStop' | 'executeRecovery' | 'triggerAutoRelease',
+    action: 'proposeEmergencyStop' | 'voteEmergencyStop' | 'executeRecovery' | 'triggerAutoRelease' | 'completeCircle',
     extraBody: Record<string, unknown>,
     messages: { loading: string; success: string },
   ) => {
@@ -4276,6 +4277,17 @@ export default function ManageCircle() {
           break;
         case 'triggerAutoRelease':
           ({ digest } = await zkLoginClient.triggerAutoRelease(account, {
+            circleId: circle.id,
+            walletId: String(extraBody.walletId || ''),
+            stablecoinType: String(extraBody.stablecoinType || ''),
+            network: getCurrentNetwork(),
+          }));
+          break;
+        // The planned close: complete_circle + refund_asset<T> in one
+        // transaction (src/lib/v11-circle-tx.ts), every deposit in the
+        // circle's coin back to its member.
+        case 'completeCircle':
+          ({ digest } = await zkLoginClient.completeCircle(account, {
             circleId: circle.id,
             walletId: String(extraBody.walletId || ''),
             stablecoinType: String(extraBody.stablecoinType || ''),
@@ -4425,6 +4437,62 @@ export default function ManageCircle() {
       },
       confirmText: 'Execute Recovery',
       cancelText: 'Cancel',
+      confirmButtonVariant: 'danger',
+    });
+  };
+
+  // The planned close. Shown only on a circle paused at the end of a lap
+  // (the contract refuses otherwise: 57 not paused, 95 a round is open) and
+  // only once the package carrying complete_circle is live on this network
+  // (NEXT_PUBLIC_CIRCLE_WIND_DOWN_ENABLED). Chains refund_asset<T> for the
+  // circle's coin, so every recorded deposit goes back to its member in the
+  // same transaction; nothing else moves.
+  const handleCompleteCircle = async () => {
+    if (!circle?.custody?.walletId) {
+      toast.error('Custody wallet information is unavailable.');
+      return;
+    }
+    const closeWalletId = circle.custody.walletId;
+
+    let closeCoinType: string;
+    try {
+      ({ coinType: closeCoinType } = await resolveRecoveryCoinType(
+        getPooledSuiClient(),
+        closeWalletId,
+        getCurrentCoinTypes().USDC,
+      ));
+    } catch (error) {
+      console.error('Close coin type unavailable:', error);
+      toast.error(recoveryCoinTypeErrorMessage(error));
+      return;
+    }
+
+    setConfirmationModal({
+      isOpen: true,
+      title: 'Close the circle',
+      message: (
+        <div className="space-y-3">
+          <p>
+            This ends the circle for good. Every member gets their own security deposit back in the
+            same transaction, and no new round can be opened.
+          </p>
+          <p className="rounded-[16px] border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+            If the group wants another lap instead, use Resume Cycle. Closing cannot be undone.
+          </p>
+        </div>
+      ),
+      onConfirm: async () => {
+        await postRecoveryAction(
+          'completeCircle',
+          { walletId: closeWalletId, stablecoinType: closeCoinType },
+          {
+            loading: 'Closing the circle and sending the deposits back...',
+            success: 'Circle closed. Every security deposit is on its way back to its member.',
+          },
+        );
+      },
+      confirmText: 'Close the circle',
+      cancelText: 'Keep it open',
       confirmButtonVariant: 'danger',
     });
   };
@@ -5887,6 +5955,9 @@ export default function ManageCircle() {
                           <li>Edit rotation order for the next cycle</li>
                           <li>Approve waiting members so they get a seat in the next rotation</li>
                           <li>Resume the circle to start the next cycle</li>
+                          {isCircleWindDownEnabled() && coinTerms && (
+                            <li>Close the circle to end it and send every security deposit back</li>
+                          )}
                         </ul>
                         <p className="mt-4 flex items-start rounded-[18px] border border-amber-200 bg-white/70 p-3 text-sm font-medium text-amber-900">
                           <Info className="mr-2 h-4 w-4 flex-shrink-0 mt-0.5" />
@@ -5919,6 +5990,17 @@ export default function ManageCircle() {
                           <CheckCircle className="mr-2 h-4 w-4" />
                           Resume Cycle
                         </button>
+                        {isCircleWindDownEnabled() && coinTerms && (
+                          <button
+                            type="button"
+                            onClick={() => void handleCompleteCircle()}
+                            disabled={isSubmittingRecoveryAction}
+                            className={`${secondaryActionClass} w-full`}
+                          >
+                            <Pause className="mr-2 h-4 w-4" />
+                            {isSubmittingRecoveryAction ? 'Closing...' : 'Close the circle'}
+                          </button>
+                        )}
                         <button
                           onClick={openReturnAllDepositsModal}
                           className={`${infoActionClass} w-full`}

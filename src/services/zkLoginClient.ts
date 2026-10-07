@@ -34,6 +34,8 @@ import { getCurrentNetwork, getCurrentPackageId, getNetworkConfig } from './netw
 import { isV11AssetTermsEnabled } from '@/config/feature-flags';
 import {
   buildAdminRemoveMemberAssetTx,
+  buildClaimOwnRefundTx,
+  buildCompleteCircleTx,
   buildCreateCircleWithAssetTx,
   buildPostSecurityDepositTx,
   getAssetRegistryId,
@@ -729,6 +731,58 @@ export class ZkLoginClient {
       tx,
       request.network,
       circleSponsorRequest('triggerAutoRelease', request.circleId),
+    );
+  }
+
+  /**
+   * The organizer's planned close of a circle paused at the end of a lap:
+   * `complete_circle` + `refund_asset<T>` in one transaction, so every
+   * recorded deposit in the circle's coin goes back to its member. Admin
+   * only on chain; the contract refuses while a round is open.
+   */
+  public async completeCircle(
+    account: AccountData,
+    request: RecoveryExecutionRequest,
+  ): Promise<{ digest: string; requireRelogin?: boolean }> {
+    const packageId = await getCircleTransactionPackageId(request.circleId, account.userAddr);
+    const tx = buildCompleteCircleTx({
+      packageId,
+      circleId: request.circleId,
+      walletId: request.walletId,
+      coinType: request.stablecoinType,
+    });
+
+    return this.sendSerializedTransaction(
+      account,
+      tx,
+      request.network,
+      circleSponsorRequest('completeCircle', request.circleId),
+    );
+  }
+
+  /**
+   * A member collects their own recorded deposit in `stablecoinType` once
+   * the circle is stopped (closed by the organizer, emergency-stopped, or
+   * auto-released) or once they are no longer a member. Pays the signer
+   * only; a no-op when nothing is recorded for them.
+   */
+  public async claimOwnRefund(
+    account: AccountData,
+    request: RecoveryExecutionRequest,
+  ): Promise<{ digest: string; requireRelogin?: boolean }> {
+    const packageId = await getCircleTransactionPackageId(request.circleId, account.userAddr);
+    const tx = buildClaimOwnRefundTx({
+      packageId,
+      circleId: request.circleId,
+      walletId: request.walletId,
+      coinType: request.stablecoinType,
+    });
+
+    return this.sendSerializedTransaction(
+      account,
+      tx,
+      request.network,
+      circleSponsorRequest('claimOwnRefund', request.circleId),
     );
   }
 

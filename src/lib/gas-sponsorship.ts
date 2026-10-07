@@ -152,6 +152,12 @@ export const SPONSORABLE_MOVE_FUNCTIONS: readonly string[] = Object.freeze([
   'njangi_circles::claim_own_refund',
   'njangi_circles::execute_recovery_asset',
   'njangi_circles::trigger_auto_release_asset',
+  // The organizer's planned close between laps (behind
+  // NEXT_PUBLIC_CIRCLE_WIND_DOWN_ENABLED). Admin-only, refused while a round
+  // is open, moves no coins itself; the client chains refund_asset<T> above
+  // so every recorded deposit goes back to its own member in the same
+  // transaction.
+  'njangi_circles::complete_circle',
   'njangi_cycle_escrow::open_round',
   'njangi_cycle_escrow::open_round_with_gate',
   'njangi_cycle_escrow::contribute_round',

@@ -4,6 +4,7 @@ import {
   buildAdminRemoveMemberAssetTx,
   buildAdoptAssetPolicyTx,
   buildClaimOwnRefundTx,
+  buildCompleteCircleTx,
   buildCreateCircleWithAssetTx,
   buildOpenRoundTx,
   buildPostSecurityDepositTx,
@@ -16,6 +17,7 @@ import {
   nativeTermsForCreate,
   parseCircleAssetPolicy,
   readCircleAssetPolicy,
+  readCircleCompletion,
   type V11CircleAssetPolicy,
 } from '@/lib/v11-circle-tx';
 import type { CreateCircleTransactionData } from '@/lib/zklogin-tx-builders';
@@ -336,6 +338,70 @@ describe('v11 refunds, removal, conversion and rounds', () => {
     // member's own recorded deposit back to them (recovery-sponsorship.ts).
     expect(allowed.has(`${PKG}::njangi_circles::admin_remove_member_asset`)).toBe(true);
     expect(allowed.has(`${PKG}::njangi_circles::adopt_asset_policy`)).toBe(false);
+  });
+
+  it('the planned close chains complete_circle with the deposit refund, inside the allowlist', () => {
+    const tx = buildCompleteCircleTx(base);
+    const calls = tx.getData().commands.map((c) => c.MoveCall!);
+    expect(calls.map((c) => `${c.module}::${c.function}`)).toEqual([
+      'njangi_circles::complete_circle',
+      'njangi_circles::refund_asset',
+    ]);
+    expect(calls[0].typeArguments).toEqual([]);
+    expect(calls[1].typeArguments).toEqual([USDC]);
+    const allowed = new Set(allowedMoveCallTargets(PKG));
+    expect(targetsOf(tx).filter((target) => !allowed.has(target))).toEqual([]);
+  });
+
+  it('refuses the planned close without a coin type (nothing to refund in)', () => {
+    expect(() => buildCompleteCircleTx({ ...base, coinType: '' })).toThrow();
+  });
+
+  describe('readCircleCompletion', () => {
+    const completionField = {
+      name: { type: `${PKG}::njangi_circles::CompletionKey`, value: {} },
+      objectId: ADDR('3'),
+    };
+
+    it('reads the close record the organizer left', async () => {
+      const client = {
+        getDynamicFields: jest.fn().mockResolvedValue({
+          data: [completionField],
+          hasNextPage: false,
+          nextCursor: null,
+        }),
+        getObject: jest.fn().mockResolvedValue({
+          data: {
+            content: {
+              fields: {
+                value: { fields: { completed_at_ms: '1700000000000', cycle_no: '3', completed_by: MEMBER } },
+              },
+            },
+          },
+        }),
+      };
+      await expect(readCircleCompletion(client as never, CIRCLE)).resolves.toEqual({
+        completedAtMs: 1700000000000,
+        cycleNo: 3,
+        completedBy: MEMBER,
+      });
+      expect(client.getObject).toHaveBeenCalledWith({ id: ADDR('3'), options: { showContent: true } });
+    });
+
+    it('answers null for a circle with no record, and throws on one it cannot read', async () => {
+      const none = {
+        getDynamicFields: jest.fn().mockResolvedValue({ data: [], hasNextPage: false, nextCursor: null }),
+        getObject: jest.fn(),
+      };
+      await expect(readCircleCompletion(none as never, CIRCLE)).resolves.toBeNull();
+      expect(none.getObject).not.toHaveBeenCalled();
+
+      const broken = {
+        getDynamicFields: jest.fn().mockResolvedValue({ data: [completionField], hasNextPage: false, nextCursor: null }),
+        getObject: jest.fn().mockResolvedValue({ data: { content: { fields: { value: { fields: {} } } } } }),
+      };
+      await expect(readCircleCompletion(broken as never, CIRCLE)).rejects.toThrow('could not be read');
+    });
   });
 
   it('builds the pinned-terms round open and the invalid-round release', () => {
