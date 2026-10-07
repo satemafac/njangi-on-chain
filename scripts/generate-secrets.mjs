@@ -24,6 +24,10 @@
 //                                    legal-acceptance / data-deletion rows
 //                                    (raw IPs are never stored; see
 //                                    docs/legal-drafts/ACCEPTANCE-GATE-SPEC.md).
+//   * RATE_LIMIT_KEY_SALT          — HMAC salt for the rate limiter's bucket
+//                                    keys (src/lib/rate-limit-key.ts): the
+//                                    client IP + email/address are hashed
+//                                    before they reach the rate_limits table.
 //
 // Usage:
 //   node scripts/generate-secrets.mjs           # patches .env.local
@@ -48,6 +52,7 @@ const SECRET_KEYS = [
   'ZKLOGIN_SESSION_ENC_KEY',
   'CRON_SECRET',
   'LEGAL_ACCEPT_IP_SALT',
+  'RATE_LIMIT_KEY_SALT',
 ];
 
 function defaultEnvPath() {

@@ -9,6 +9,15 @@
 // in-memory window remains as the dev fallback (no DATABASE_URL) and as the
 // fail-open path if Postgres errors — the limiter is defense-in-depth, not
 // a correctness gate.
+//
+// Keys (October 2026): build them with `rateLimitKey` from
+// ./rate-limit-key, never by interpolating the client IP, an email or an
+// address. The key is the `bucket` column of `rate_limits`, and a bucket is
+// only replaced when it is hit again, so anything in it persists. The
+// Postgres path also sweeps rows whose window started more than
+// STALE_WINDOW_RETENTION_MS ago, at most once per SWEEP_INTERVAL_MS per
+// process, on the back of a write it was already making (no cron, no extra
+// database wake-ups: see the 2026-07-21 Neon compute incident).
 
 import { getSharedPgPool, isPostgresConfigured } from './pg-pool';
 
@@ -20,7 +29,11 @@ interface Window {
 const windows: Map<string, Window> = new Map();
 
 export interface RateLimitOptions {
-  /** Unique key (typically sha256 of the bearer secret + action). */
+  /**
+   * Bucket key: `<scope>:<hmac-sha256 hex>` from `rateLimitKey()` in
+   * ./rate-limit-key. Never put a raw IP, email or address here — with
+   * DATABASE_URL set the key is stored verbatim in Postgres.
+   */
   key: string;
   /** Max requests allowed inside the window. */
   limit: number;
@@ -60,6 +73,20 @@ function consumeMemoryRateLimit(opts: RateLimitOptions): RateLimitResult {
 let setupPromise: Promise<void> | null = null;
 let postgresWarned = false;
 
+/**
+ * Rows whose window started this long ago are deleted by the sweep. Every
+ * window the app uses is at most 10 minutes (compliance: configurable,
+ * default 60 s), so a row older than this can only be a leftover: the
+ * per-bucket garbage collection in the upsert never sees a bucket that is
+ * not hit again. Keep this above the longest `windowMs` in use.
+ */
+export const STALE_WINDOW_RETENTION_MS = 24 * 60 * 60 * 1000;
+
+/** How often one process sweeps, at most. */
+export const SWEEP_INTERVAL_MS = 60 * 60 * 1000;
+
+let lastSweepAt = 0;
+
 function ensureTable(): Promise<void> {
   if (!setupPromise) {
     setupPromise = getSharedPgPool()
@@ -69,7 +96,9 @@ function ensureTable(): Promise<void> {
            window_start TIMESTAMPTZ NOT NULL,
            count INTEGER NOT NULL,
            PRIMARY KEY (bucket, window_start)
-         );`,
+         );
+         CREATE INDEX IF NOT EXISTS rate_limits_window_start_idx
+           ON rate_limits (window_start);`,
       )
       .then(() => undefined)
       .catch((err) => {
@@ -103,6 +132,12 @@ async function consumePostgresRateLimit(opts: RateLimitOptions): Promise<RateLim
 
   const count = Number(result.rows[0]?.count ?? 1);
   const resetMs = Math.max(windowStartMs + opts.windowMs - now, 0);
+
+  // Piggy-back the table-wide sweep on this write. Best effort: it is
+  // awaited so a serverless instance does not freeze with it half done,
+  // but its failure is logged and never reaches the caller.
+  await sweepStaleWindowsIfDue(now);
+
   if (count > opts.limit) {
     return { allowed: false, remaining: 0, resetMs };
   }
@@ -111,6 +146,36 @@ async function consumePostgresRateLimit(opts: RateLimitOptions): Promise<RateLim
     remaining: Math.max(opts.limit - count, 0),
     resetMs,
   };
+}
+
+/** True when a sweep is due: none yet this process, or the interval elapsed. */
+export function isSweepDue(now: number, lastSweep: number, intervalMs = SWEEP_INTERVAL_MS): boolean {
+  return lastSweep === 0 || now - lastSweep >= intervalMs;
+}
+
+/**
+ * Deletes every row whose window started more than
+ * STALE_WINDOW_RETENTION_MS ago, at most once per SWEEP_INTERVAL_MS per
+ * process. The per-bucket garbage collection in the upsert only ever
+ * touches the bucket being written, so a visitor who never comes back left
+ * a row behind forever; this is the table-wide counterpart. Marks the sweep
+ * as done BEFORE running it so a failing database is not hammered on every
+ * request.
+ */
+async function sweepStaleWindowsIfDue(now: number): Promise<void> {
+  if (!isSweepDue(now, lastSweepAt)) return;
+  lastSweepAt = now;
+  try {
+    await getSharedPgPool().query(
+      `DELETE FROM rate_limits WHERE window_start < to_timestamp($1 / 1000.0)`,
+      [now - STALE_WINDOW_RETENTION_MS],
+    );
+  } catch (err) {
+    console.warn(
+      '[rate-limit] stale-window sweep failed; will retry after the sweep interval:',
+      err instanceof Error ? err.message : err,
+    );
+  }
 }
 
 function peekMemoryRateLimit(opts: RateLimitOptions): RateLimitResult {
@@ -198,4 +263,5 @@ export function __resetRateLimitForTests(): void {
   windows.clear();
   setupPromise = null;
   postgresWarned = false;
+  lastSweepAt = 0;
 }
