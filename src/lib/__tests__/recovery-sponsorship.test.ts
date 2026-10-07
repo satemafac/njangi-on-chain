@@ -38,6 +38,10 @@ describe('zkLoginClient asks the sponsor first for recovery and deposit returns'
     ['executeRecovery', 'executeRecovery'],
     ['triggerAutoRelease', 'triggerAutoRelease'],
     ['adminRemoveMember', 'returnDepositAndRemoveMember'],
+    // The organizer's planned close between laps, and a member collecting
+    // their own deposit afterwards: deposit returns, so they ask too.
+    ['completeCircle', 'completeCircle'],
+    ['claimOwnRefund', 'claimOwnRefund'],
   ])('%s passes its request', (method, action) => {
     expect(methodSource(method)).toContain(`circleSponsorRequest('${action}'`);
   });

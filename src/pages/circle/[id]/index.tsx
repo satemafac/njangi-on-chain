@@ -46,6 +46,7 @@ import { readObject, queryEventsCached, invalidateObject, invalidateSuiRead } fr
 import { resolveCustodyWalletId } from '@/lib/custody-wallet-discovery';
 import { recoveryCoinTypeErrorMessage, resolveRecoveryCoinType } from '@/lib/recovery-coin-type';
 import { getPooledSuiClient } from '@/services/sui-rpc-failover';
+import { readCircleCompletion, type CircleCompletionRecord } from '@/lib/v11-circle-tx';
 import { logSuiReadError } from '@/services/sui-rpc-failover';
 import { ZkLoginClient, ZkLoginError } from '../../../services/zkLoginClient';
 import { getCurrentCoinTypes, getCurrentNetwork, getCurrentRpcUrl } from '../../../services/network-config';
@@ -213,6 +214,38 @@ export default function CircleDetails() {
   // the buttons: a dialog's onConfirm closes over the render that opened it,
   // so it would read them stale. The lock is what stops a second submission.
   const recoveryInFlightRef = useRef({ vote: false, autoRelease: false, execute: false });
+  // A member collecting their own deposit after a stop (claim_own_refund).
+  const claimRefundInFlightRef = useRef(false);
+  const [isClaimingOwnRefund, setIsClaimingOwnRefund] = useState(false);
+  // The planned-close record, read once the circle is stopped: it tells a
+  // close by the organizer apart from an emergency stop. Null while unread
+  // or when the circle carries none; a failed read is said so, never shown
+  // as "not closed".
+  const [completionRecord, setCompletionRecord] = useState<CircleCompletionRecord | null>(null);
+  const [completionReadFailed, setCompletionReadFailed] = useState(false);
+
+  useEffect(() => {
+    const stopped = recoveryStatus?.rawState === 2 || recoveryStatus?.rawState === 3;
+    if (typeof id !== 'string' || !stopped) {
+      setCompletionRecord(null);
+      setCompletionReadFailed(false);
+      return;
+    }
+    let cancelled = false;
+    readCircleCompletion(getPooledSuiClient(), id)
+      .then((record) => {
+        if (cancelled) return;
+        setCompletionRecord(record);
+        setCompletionReadFailed(false);
+      })
+      .catch((error) => {
+        console.error('Details - close record unreadable:', error);
+        if (!cancelled) setCompletionReadFailed(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [id, recoveryStatus?.rawState]);
   const [suiPrice, setSuiPrice] = useState(1.25); // Default price until we fetch real price
   const [copiedId, setCopiedId] = useState(false);
   // Track membership verification status (used for access control flow)
@@ -1465,6 +1498,53 @@ export default function CircleDetails() {
     });
   };
 
+  // claim_own_refund<T>: the signer's own recorded deposit, once the circle
+  // is stopped. The organizer's close and the recovery normally chain
+  // refund_asset for everyone; this is the member's own path when a deposit
+  // is still recorded for them (a stop recorded without the refund, or a
+  // deposit in another coin). Pays the signer only; a no-op otherwise.
+  const handleClaimOwnRefund = async () => {
+    if (!circle || !circle.custody?.walletId || !account) {
+      toast.error('Recovery wallet information is unavailable. Refresh and try again.');
+      return;
+    }
+    if (claimRefundInFlightRef.current) return;
+    const walletId = circle.custody.walletId;
+    const coinType = await recoveryCoinTypeForSigning(walletId);
+    if (!coinType) return;
+    if (claimRefundInFlightRef.current) return;
+    claimRefundInFlightRef.current = true;
+    setIsClaimingOwnRefund(true);
+    const toastId = 'claim-own-refund';
+
+    try {
+      toast.loading('Sending your security deposit back...', { id: toastId });
+      const { digest } = await ZkLoginClient.getInstance().claimOwnRefund(account, {
+        circleId: circle.id,
+        walletId,
+        stablecoinType: coinType,
+        network: getCurrentNetwork(),
+      });
+      toast.success('Done. If a security deposit was still recorded for you, it is back in your wallet.', { id: toastId });
+      await waitForTxIndexed(getSuiClientFromPool(getCurrentRpcUrl()), digest);
+      await Promise.all([fetchCircleDetails(), fetchRecoveryStatus(), fetchRecoveryExecutionState()]);
+    } catch (error) {
+      console.error('Details - Failed to claim own refund:', error);
+      if (error instanceof ZkLoginError && error.requireRelogin) {
+        router.push('/');
+        return;
+      }
+      toast.error(
+        moveAbortUserMessage(error)
+          ?? humanizeErrorMessage(error instanceof Error ? error.message : '', 'Could not send your security deposit back'),
+        { id: toastId },
+      );
+    } finally {
+      claimRefundInFlightRef.current = false;
+      setIsClaimingOwnRefund(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-[#f6f3ee] text-[#171923]">
       <div className="pointer-events-none absolute inset-x-0 top-0 h-[420px] bg-[radial-gradient(circle_at_top_left,_rgba(108,122,147,0.16),_transparent_34%),radial-gradient(circle_at_85%_8%,_rgba(218,204,178,0.28),_transparent_24%),linear-gradient(180deg,_rgba(255,255,255,0.58)_0%,_rgba(246,243,238,0)_72%)]" />
@@ -1917,13 +1997,48 @@ export default function CircleDetails() {
 
                   {!recoveryProposal && (recoveryStatus?.rawState === 2 || recoveryStatus?.rawState === 3) && (
                     <div className={`${detailCardClass} mt-6 p-5`}>
-                      <p className={detailLabelClass}>Proposal</p>
-                      <h3 className="mt-3 text-xl font-semibold tracking-[-0.03em] text-[#171923]">
-                        Vote window closed
-                      </h3>
-                      <p className="mt-3 text-sm leading-7 text-[#5f6674]">
-                        The circle is already in a recovery lifecycle state, so proposal voting is no longer the active control path.
-                      </p>
+                      {completionRecord ? (
+                        <>
+                          <p className={detailLabelClass}>Circle closed</p>
+                          <h3 className="mt-3 text-xl font-semibold tracking-[-0.03em] text-[#171923]">
+                            Closed by the organizer
+                          </h3>
+                          <p className="mt-3 text-sm leading-7 text-[#5f6674]">
+                            The organizer closed this circle on{' '}
+                            {new Date(completionRecord.completedAtMs).toLocaleDateString()} after lap{' '}
+                            {completionRecord.cycleNo}. Every security deposit goes back to the member who paid it, and
+                            no new round can be opened.
+                          </p>
+                        </>
+                      ) : (
+                        <>
+                          <p className={detailLabelClass}>Proposal</p>
+                          <h3 className="mt-3 text-xl font-semibold tracking-[-0.03em] text-[#171923]">
+                            Vote window closed
+                          </h3>
+                          <p className="mt-3 text-sm leading-7 text-[#5f6674]">
+                            The circle is already in a recovery lifecycle state, so proposal voting is no longer the active control path.
+                            {completionReadFailed
+                              ? ' We could not check whether the organizer closed it; refresh to try again.'
+                              : ''}
+                          </p>
+                        </>
+                      )}
+                      {account && recoveryStatus?.rawState === 2 && (
+                        <div className="mt-4">
+                          <button
+                            type="button"
+                            onClick={() => void handleClaimOwnRefund()}
+                            disabled={isClaimingOwnRefund}
+                            className="inline-flex items-center gap-2 rounded-2xl bg-[#171923] px-4 py-3 text-sm font-semibold text-white transition-all duration-200 hover:-translate-y-0.5 hover:bg-[#2b2f3a] disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {isClaimingOwnRefund ? 'Sending...' : 'Get my security deposit back'}
+                          </button>
+                          <p className="mt-2 text-xs leading-5 text-[#7a818e]">
+                            Only your own recorded deposit, paid to you. Nothing happens if it has already come back.
+                          </p>
+                        </div>
+                      )}
                     </div>
                   )}
 

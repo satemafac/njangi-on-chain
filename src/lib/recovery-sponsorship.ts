@@ -8,6 +8,10 @@
 // sponsor first; any decline pays the network fee as before. All of them
 // bill the circle they act on, which is one of the transaction's own inputs,
 // as /api/sponsor/prepare requires. None draws on the gas coin.
+//
+// The organizer's planned close between laps ("Close the circle":
+// complete_circle + refund_asset<T>) and a member's own deposit claim after a
+// stop (claim_own_refund<T>) are deposit returns too, and ask the same way.
 
 import type { SponsorRequest } from './sponsored-first-signer';
 
@@ -16,7 +20,9 @@ export type RecoverySponsorAction =
   | 'voteEmergencyStop'
   | 'executeRecovery'
   | 'triggerAutoRelease'
-  | 'returnDepositAndRemoveMember';
+  | 'returnDepositAndRemoveMember'
+  | 'completeCircle'
+  | 'claimOwnRefund';
 
 export function circleSponsorRequest(
   action: RecoverySponsorAction,

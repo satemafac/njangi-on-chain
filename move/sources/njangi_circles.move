@@ -74,6 +74,14 @@ module njangi::njangi_circles {
     const E_POLICY_EXISTS: u64 = 91;
     const E_CIRCLE_NOT_CONVERTED: u64 = 92;
     const E_CIRCLE_STOPPED: u64 = 93;
+    /// A rotation order lists the same member in two seats, or a seat move
+    /// would. The rotation is who receives each round, so a repeated seat
+    /// is a second payout per lap for one member (invariant #1: no
+    /// discretion over fund direction, not even between laps).
+    const E_DUPLICATE_ROTATION_SEAT: u64 = 94;
+    /// `complete_circle` refused: the circle's open-round marker still names
+    /// a live escrow. Settle it (collect + advance) or release it first.
+    const E_ROUND_STILL_OPEN: u64 = 95;
 
     // MemberDepositKey.kind values. Only security deposits are recorded
     // today; a new kind is a new key value, never a new struct field.
@@ -88,6 +96,10 @@ module njangi::njangi_circles {
     const RECOVERY_TRIGGER_ROLE_VOTE_EXECUTION: u8 = 0;
     const RECOVERY_TRIGGER_ROLE_DELEGATE: u8 = 1;
     const RECOVERY_TRIGGER_ROLE_MEMBER_FALLBACK: u8 = 2;
+    /// The organizer wound the circle down between laps (`complete_circle`):
+    /// a planned close, not an emergency stop, but it leaves the circle in
+    /// the same stopped state so the per-asset refund paths apply unchanged.
+    const RECOVERY_TRIGGER_ROLE_ADMIN_COMPLETION: u8 = 3;
 
     // Oracle safety constants.
 
@@ -1314,7 +1326,20 @@ module njangi::njangi_circles {
     ) {
         assert!(position < config::get_max_members(&circle.id), 29);
         assert!(table::contains(&circle.members, member_addr), 8);
-        
+
+        // A member holds at most one seat. Seating someone who already sits
+        // elsewhere MOVES them: their old seat is vacated (@0x0, the same
+        // gap marker the fill-in below uses) so the rotation can never
+        // name one member twice.
+        let mut i = 0;
+        let existing = vector::length(&circle.rotation_order);
+        while (i < existing) {
+            if (i != position && *vector::borrow(&circle.rotation_order, i) == member_addr) {
+                *vector::borrow_mut(&mut circle.rotation_order, i) = @0x0;
+            };
+            i = i + 1;
+        };
+
         let current_size = vector::length(&circle.rotation_order);
         if (position >= current_size) {
             // fill gap with 0x0 addresses
@@ -1375,14 +1400,20 @@ module njangi::njangi_circles {
         let order_length = vector::length(&new_order);
         assert!(order_length <= config::get_max_members(&circle.id), 29);
         
-        // Verify all addresses in the new order are circle members
+        // Verify all addresses in the new order are circle members, and
+        // that no member is listed twice (E_DUPLICATE_ROTATION_SEAT).
         let mut i = 0;
         while (i < order_length) {
             let member_addr = *vector::borrow(&new_order, i);
             assert!(table::contains(&circle.members, member_addr), 8);
+            let mut j = i + 1;
+            while (j < order_length) {
+                assert!(*vector::borrow(&new_order, j) != member_addr, E_DUPLICATE_ROTATION_SEAT);
+                j = j + 1;
+            };
             i = i + 1;
         };
-        
+
         // Replace the rotation order completely
         circle.rotation_order = new_order;
         
@@ -4013,6 +4044,84 @@ module njangi::njangi_circles {
         stop_internal(circle, true, trigger_role, clock, ctx);
     }
 
+    // ---------------- planned close (wind-down between laps) ----------------
+
+    /// Emitted when the organizer closes a circle that finished its lap.
+    public struct CircleCompleted has copy, drop {
+        circle_id: ID,
+        admin: address,
+        /// The lap counter at the close (`current_cycle`).
+        cycle_no: u64,
+        completed_at_ms: u64,
+    }
+
+    /// Dynamic-field key for the completion record on the circle's UID.
+    /// Present only on circles closed through `complete_circle`, so readers
+    /// can tell a planned close from an emergency stop (both leave the
+    /// recovery state STOPPED / REFUNDED).
+    public struct CompletionKey has copy, drop, store {}
+
+    public struct CircleCompletion has store, copy, drop {
+        completed_at_ms: u64,
+        cycle_no: u64,
+        completed_by: address,
+    }
+
+    /// The organizer closes a converted circle that has finished a lap: the
+    /// circle is paused with no round open, so no contribution is in
+    /// flight and nothing can be redirected. The close puts the circle in
+    /// the stopped state the emergency-stop path uses, so every recorded
+    /// deposit goes back through the same permissionless, rule-fixed
+    /// refunds — `refund_asset<T>` (anyone, every depositor) and
+    /// `claim_own_refund<T>` (the member themselves) — each to the member
+    /// who paid it and nobody else. Moves no coins itself.
+    ///
+    /// Before this existed a circle had no ordinary ending: deposits came
+    /// back only through an emergency-stop vote (organizer-proposed) or the
+    /// opt-in auto-release, and otherwise stayed locked.
+    public fun complete_circle(circle: &mut Circle, clock: &Clock, ctx: &mut TxContext) {
+        assert!(tx_context::sender(ctx) == circle.admin, ENotAdmin);
+        assert!(is_converted(circle), E_CIRCLE_NOT_CONVERTED);
+        assert!(!is_stopped(circle), E_CIRCLE_STOPPED);
+        // Same lifecycle gate as `resume_cycle`: running, and paused at the
+        // end of a lap (54 / 57 are the codes that function uses).
+        assert!(circle.is_active, 54);
+        assert!(circle.paused_after_cycle, 57);
+        assert!(option::is_none(&open_round(circle)), E_ROUND_STILL_OPEN);
+
+        let now = clock::timestamp_ms(clock);
+        let circle_id = object::uid_to_inner(&circle.id);
+        dynamic_field::add(
+            &mut circle.id,
+            CompletionKey {},
+            CircleCompletion { completed_at_ms: now, cycle_no: circle.current_cycle, completed_by: circle.admin }
+        );
+        event::emit(CircleCompleted {
+            circle_id,
+            admin: circle.admin,
+            cycle_no: circle.current_cycle,
+            completed_at_ms: now,
+        });
+        stop_internal(circle, false, RECOVERY_TRIGGER_ROLE_ADMIN_COMPLETION, clock, ctx);
+    }
+
+    /// The completion record, if the circle was closed by `complete_circle`.
+    public fun completion(circle: &Circle): Option<CircleCompletion> {
+        if (dynamic_field::exists_with_type<CompletionKey, CircleCompletion>(&circle.id, CompletionKey {})) {
+            option::some(*dynamic_field::borrow<CompletionKey, CircleCompletion>(&circle.id, CompletionKey {}))
+        } else {
+            option::none()
+        }
+    }
+
+    public fun is_completed(circle: &Circle): bool {
+        dynamic_field::exists_with_type<CompletionKey, CircleCompletion>(&circle.id, CompletionKey {})
+    }
+
+    public fun completion_time_ms(record: &CircleCompletion): u64 { record.completed_at_ms }
+    public fun completion_cycle_no(record: &CircleCompletion): u64 { record.cycle_no }
+    public fun completion_by(record: &CircleCompletion): address { record.completed_by }
+
     /// Returns every recorded deposit in `T` to the member it is recorded
     /// for. Permissionless once the circle is stopped (by any package
     /// version). Touches only `T`; never aborts for lack of something to
@@ -4706,6 +4815,33 @@ module njangi::njangi_circles {
         clock::destroy_for_testing(clock);
         sui::test_scenario::end(scenario);
     }
+
+    // One member, one seat: a repeated address would be a second payout
+    // per lap for that member, chosen by the admin.
+    #[test]
+    #[expected_failure(abort_code = E_DUPLICATE_ROTATION_SEAT)]
+    fun test_reorder_rotation_rejects_duplicate_seats() {
+        let admin = @0xA;
+        let bob = @0xB;
+        let mut scenario = sui::test_scenario::begin(admin);
+        let clock = clock::create_for_testing(sui::test_scenario::ctx(&mut scenario));
+        share_circle_for_testing(vector[admin, bob], 1_000_000_000, 100, &clock, sui::test_scenario::ctx(&mut scenario));
+
+        sui::test_scenario::next_tx(&mut scenario, admin);
+        let mut circle = sui::test_scenario::take_shared<Circle>(&scenario);
+        set_paused_after_cycle_for_testing(&mut circle, true);
+        // Two seats, one member: within the member limit, every entry a
+        // member, so only the duplicate check can refuse it.
+        reorder_rotation_positions(
+            &mut circle,
+            vector[bob, bob],
+            &clock,
+            sui::test_scenario::ctx(&mut scenario)
+        );
+        abort 0
+    }
+    // (`set_rotation_position` moving a seated member is covered in
+    // njangi_v11_tests, which has a circle with spare seats.)
 
     // ----------------------------------------------------------
     // Circle-level compliance requirement tests

@@ -431,7 +431,15 @@ Heroku is retired: Vercel is the only deploy target. The `Procfile`,
 | 9 | `0xf8afd3df…` | PR #14 (`create_circle` stores the real custody `wallet_id`; `create_custody_wallet_returning_id`); published 2026-09-06 with `sui` 1.79.0, tx `Ap9Xpvx2…`, from `main` 5864d5f; superseded by v10 |
 | 10 | `0x1ee9995c…` | PR #83 (`finalize_and_redeem*` collects an already-finalized round: same guards as `redeem_claim`, a finalized round's stray `Claim` is void, 206); published 2026-10-03 with `sui` 1.81.0, tx `Ew6fu3Am…`, ~0.77 SUI; `NEXT_PUBLIC_ESCROW_FINALIZED_COLLECT_ENABLED=true`; defines no new types; superseded by v11 |
 | 11 | `0x5f71b5c8…` | PR #109 (circles pin their coin and amounts, `create_circle_with_asset<T>`; security deposits are per-member records in the circle's custody wallet, `post_security_deposit<T>`; stop once, then `refund_asset<T>` per coin; `adopt_asset_policy<T>` converts older circles; opens need a running, unpaused circle, 236/237; retired entrypoints abort 89; AssetRegistry blessed by the UpgradeCap); published 2026-10-05 with `sui` 1.81.0, tx `36HdQaWL…`, ~0.77 SUI; registry setup tx `66SxWiGE…` (SUI roles 3; USDC registered, roles 7, Pyth USDC/USD feed, display-only); `NEXT_PUBLIC_V11_ENABLED=true` must flip together with the package id; defines new types and events (`assetTermsPackageId`); all references point here |
-No Move PR is waiting on a publish. Upgrade with the CLI: `suiup install
+**Waiting on a publish (v12 candidate, branch
+`fix/round-cancel-window-and-wind-down`):** a round's due date is floored at
+open time + 7 days so a late-opened round is never born cancellable
+(`MIN_ROUND_WINDOW_MS`); one member, one seat (`E_DUPLICATE_ROTATION_SEAT`
+94, and `set_rotation_position` moves a seated member); and the planned
+close `complete_circle` (admin, paused circle, no open round: 57 / 95 / 93)
+with its `CircleCompletion` dynamic field. The app's "Close the circle"
+chains `refund_asset<T>` and stays behind `NEXT_PUBLIC_CIRCLE_WIND_DOWN_ENABLED`
+until that package is live. Upgrade with the CLI: `suiup install
 sui@testnet -y` when it lags the network, then `sui client upgrade
 --upgrade-capability <cap from Published.toml>` from `move/` — the CLI holds
 the deployer key and rewrites `Published.toml` itself.
