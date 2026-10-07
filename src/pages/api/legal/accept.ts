@@ -24,6 +24,7 @@ import {
 } from '../../../lib/legal-acceptance-server';
 import { LEGAL_DOC_IDS } from '../../../lib/legal-acceptance';
 import { consumeRateLimit } from '../../../lib/rate-limit';
+import { rateLimitKey } from '../../../lib/rate-limit-key';
 import { getClientIp } from '../../../lib/client-ip';
 
 // Acceptance is a once-per-version event; throttle hard.
@@ -56,7 +57,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const { docs, locale } = parsed.data;
 
   const rateOutcome = await consumeRateLimit({
-    key: `legal-accept:${getClientIp(req)}`,
+    key: rateLimitKey('legal-accept', getClientIp(req)),
     limit: REQUESTS_PER_WINDOW,
     windowMs: WINDOW_MS,
   });

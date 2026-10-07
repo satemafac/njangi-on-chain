@@ -20,6 +20,7 @@ import {
   withdrawOwnTestimonial,
 } from '../../../lib/testimonials';
 import { consumeRateLimit } from '../../../lib/rate-limit';
+import { rateLimitKey } from '../../../lib/rate-limit-key';
 import { getClientIp } from '../../../lib/client-ip';
 import { isPostgresConfigured } from '../../../lib/pg-pool';
 
@@ -46,7 +47,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const rateOutcome = await consumeRateLimit({
-    key: `testimonials:${getClientIp(req)}`,
+    key: rateLimitKey('testimonials', getClientIp(req)),
     limit: REQUESTS_PER_WINDOW,
     windowMs: WINDOW_MS,
   });

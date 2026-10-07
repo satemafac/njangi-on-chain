@@ -17,10 +17,14 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 import type { SuiClient } from '@mysten/sui/client';
 import {
+  CANCEL_GRACE_MS,
+  cancelAvailableAtMs,
+  cancelWindowOpen,
   claimStructType,
   claimWindowClosed,
   findRecipientClaim,
   MAX_CLAIM_PAGES,
+  resolveCancelRoundRoute,
   resolveCollectRoute,
   resolveEscrowStage,
   resolveExpiredClaimRefundAccess,
@@ -53,6 +57,7 @@ describe('resolveEscrowStage', () => {
     claimed: false,
     refunded: false,
     claimExpiresAtMs: 0,
+    dueAtMs: 0,
     ...over,
   });
 
@@ -144,11 +149,91 @@ describe('resolveEscrowStage', () => {
       resolveEscrowStage({ loading: false, state: null, paidSoFar: 0, totalRequired: 0 }),
     ).toBe('no-round-open');
   });
+
+  // A round that never filled: cancel_unfinalized_escrow<T> is permissionless
+  // once the chain clock reaches the snapshot due date plus CANCEL_GRACE_MS
+  // (abort 224 before that), refuses finalized escrows (205) and aborts 225
+  // when no share was recorded. The stage mirrors exactly that.
+  describe('stalled round (cancel window)', () => {
+    const DUE = 1_791_000_000_000;
+    const OPENS = DUE + CANCEL_GRACE_MS;
+    const partlyPaid = state({ dueAtMs: DUE });
+    const stageAt = (
+      chainNowMs: number | null | undefined,
+      over: Partial<Parameters<typeof resolveEscrowStage>[0]> = {},
+    ) =>
+      resolveEscrowStage({
+        loading: false,
+        state: partlyPaid,
+        paidSoFar: 1,
+        totalRequired: 2,
+        chainNowMs,
+        ...over,
+      });
+
+    it('mirrors the contract grace: seven days', () => {
+      expect(CANCEL_GRACE_MS).toBe(7 * 24 * 60 * 60 * 1000);
+      expect(cancelAvailableAtMs(partlyPaid)).toBe(OPENS);
+      expect(cancelAvailableAtMs(state())).toBeNull();
+    });
+
+    it('is stalled from the exact ms the contract accepts the cancel (>=), in progress before', () => {
+      expect(stageAt(OPENS)).toBe('stalled');
+      expect(stageAt(OPENS + 86_400_000)).toBe('stalled');
+      expect(stageAt(OPENS - 1)).toBe('in-progress');
+      // Past due but inside the grace is still an ordinary open round.
+      expect(stageAt(DUE + 1)).toBe('in-progress');
+    });
+
+    it('never stalls a round nobody paid into: the cancel would abort 225, so no button', () => {
+      expect(stageAt(OPENS + 1, { paidSoFar: 0 })).toBe('in-progress');
+      expect(stageAt(OPENS + 1, { paidSoFar: 0, circleStopped: true })).toBe('in-progress');
+    });
+
+    it('never stalls a finalized round: it is waiting on its recipient, or its claim expired', () => {
+      const finalized = state({ dueAtMs: DUE, finalized: true, claimExpiresAtMs: OPENS + 1 });
+      expect(stageAt(OPENS + 1, { state: finalized, paidSoFar: 2 })).toBe('full-waiting-for-claim');
+      expect(stageAt(OPENS + 2, { state: finalized, paidSoFar: 2 })).toBe('claim-expired');
+    });
+
+    it('never stalls a full pot: cancelling it would take a payout away from its recipient', () => {
+      expect(stageAt(OPENS + 1, { paidSoFar: 2 })).toBe('full-waiting-for-claim');
+    });
+
+    it('keeps the terminal stages ahead of it', () => {
+      expect(stageAt(OPENS + 1, { state: state({ dueAtMs: DUE, refunded: true }) })).toBe('refunded');
+      expect(
+        stageAt(OPENS + 1, { state: state({ dueAtMs: DUE, finalized: true, claimed: true }) }),
+      ).toBe('completed');
+    });
+
+    it('never calls the window open without a chain clock reading, or without a due date', () => {
+      // A device clock is never consulted, and an unread chain clock is unknown.
+      expect(stageAt(null)).toBe('in-progress');
+      expect(stageAt(undefined)).toBe('in-progress');
+      expect(stageAt(OPENS + 1, { state: state({ dueAtMs: 0 }) })).toBe('in-progress');
+    });
+
+    it('is stalled at once when the circle was stopped by its recovery vote, whatever the clock', () => {
+      expect(stageAt(DUE - 1, { circleStopped: true })).toBe('stalled');
+      expect(stageAt(null, { circleStopped: true })).toBe('stalled');
+      // Unread (null) and "not stopped" both fall back to the time rule.
+      expect(stageAt(OPENS - 1, { circleStopped: null })).toBe('in-progress');
+      expect(stageAt(OPENS - 1, { circleStopped: false })).toBe('in-progress');
+      expect(stageAt(OPENS, { circleStopped: false })).toBe('stalled');
+    });
+  });
 });
 
 describe('claimWindowClosed', () => {
   const EXPIRES = 1_793_926_356_233;
-  const running = { finalized: true, claimed: false, refunded: false, claimExpiresAtMs: EXPIRES };
+  const running = {
+    finalized: true,
+    claimed: false,
+    refunded: false,
+    claimExpiresAtMs: EXPIRES,
+    dueAtMs: 0,
+  };
 
   it('is true strictly after the expiry, false up to it', () => {
     expect(claimWindowClosed(running, EXPIRES + 1)).toBe(true);
@@ -167,6 +252,102 @@ describe('claimWindowClosed', () => {
     expect(claimWindowClosed({ ...running, finalized: false, claimExpiresAtMs: 0 }, null)).toBe(false);
     expect(claimWindowClosed({ ...running, claimed: true }, EXPIRES + 1)).toBe(false);
     expect(claimWindowClosed({ ...running, refunded: true }, EXPIRES + 1)).toBe(false);
+  });
+});
+
+describe('cancelWindowOpen', () => {
+  const DUE = 1_791_000_000_000;
+  const OPENS = DUE + CANCEL_GRACE_MS;
+  const open = { finalized: false, claimed: false, refunded: false, claimExpiresAtMs: 0, dueAtMs: DUE };
+
+  it('is true from the sum the contract compares (>=), false before it', () => {
+    expect(cancelWindowOpen(open, OPENS)).toBe(true);
+    expect(cancelWindowOpen(open, OPENS + 1)).toBe(true);
+    expect(cancelWindowOpen(open, OPENS - 1)).toBe(false);
+  });
+
+  it('is unknown (null) while a window could apply but the chain clock is unread', () => {
+    expect(cancelWindowOpen(open, null)).toBeNull();
+  });
+
+  it('is unknown when the snapshot carries no due date', () => {
+    expect(cancelWindowOpen({ ...open, dueAtMs: 0 }, OPENS + 1)).toBeNull();
+  });
+
+  it('is false once the contract would refuse the cancel anyway (finalized, collected, refunded)', () => {
+    expect(cancelWindowOpen({ ...open, finalized: true }, OPENS + 1)).toBe(false);
+    expect(cancelWindowOpen({ ...open, finalized: true, claimed: true }, OPENS + 1)).toBe(false);
+    expect(cancelWindowOpen({ ...open, refunded: true }, OPENS + 1)).toBe(false);
+  });
+});
+
+describe('resolveCancelRoundRoute', () => {
+  it('takes the recovery cancel only for a circle whose recovery vote executed', () => {
+    expect(resolveCancelRoundRoute(true)).toEqual({ kind: 'cancel-for-recovery' });
+  });
+
+  it('takes the plain, grace-gated cancel otherwise, an unread state included', () => {
+    expect(resolveCancelRoundRoute(false)).toEqual({ kind: 'cancel' });
+    expect(resolveCancelRoundRoute(null)).toEqual({ kind: 'cancel' });
+  });
+});
+
+describe('CycleEscrowPanel offers "Cancel the round and send the shares back" by the same rule', () => {
+  // Source pin, as for the send-back button below: node-only tests, no jsdom.
+  const panel = readFileSync(join(process.cwd(), 'src/components/CycleEscrowPanel.tsx'), 'utf8');
+
+  // The stalled notice: from its stage test to the next block the panel
+  // renders after it (the collect issue of a full round).
+  const stalledBlock = (() => {
+    const start = panel.indexOf("{stage === 'stalled' ? (");
+    const rest = panel.slice(start);
+    const end = rest.search(/\{stage === 'full-waiting-for-claim' &&\s+isUserRecipient/);
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(-1);
+    return rest.slice(0, end);
+  })();
+
+  it('renders the one cancel button only in the stalled stage, and only when the rule offers it', () => {
+    expect(panel.match(/onClick=\{onCancelStalledRound\}/g)).toHaveLength(1);
+    expect(stalledBlock).toMatch(
+      /refundAccess === 'offer' \? \(\s*<button\s+type="button"\s+onClick=\{onCancelStalledRound\}/,
+    );
+  });
+
+  it('names who still has to pay and when the cancel became possible', () => {
+    expect(stalledBlock).toContain('date: cancelAvailableOn');
+    expect(stalledBlock).toContain("t('escrow.stalled.unpaid', { members: unpaidMembersLabel })");
+  });
+
+  it('says so when membership could not be checked, instead of hiding it silently', () => {
+    expect(stalledBlock).toMatch(
+      /refundAccess === 'unknown' \? \([\s\S]{0,200}escrow\.cancel\.membershipUnknown/,
+    );
+  });
+
+  it('refuses the cancel in the handler too, for anyone the rule does not offer it to', () => {
+    expect(panel).toMatch(
+      /const onCancelStalledRound = useCallback\(\(\) => \{\s*if \(!summary \|\| refundAccess !== 'offer'\) return;/,
+    );
+  });
+
+  it('signs the recovery cancel for a stopped circle and the plain one otherwise, never releasing the round itself', () => {
+    expect(panel).toMatch(
+      /resolveCancelRoundRoute\(circleStopped\)[\s\S]{0,400}buildCancelUnfinalizedEscrowForRecoveryTx\([\s\S]{0,200}buildCancelUnfinalizedEscrowTx\(/,
+    );
+    // The re-open owns release_open_round (releaseEscrowId on a refunded
+    // escrow); a release chained here would be a second one.
+    const handler = panel.slice(
+      panel.indexOf('const onCancelStalledRound'),
+      panel.indexOf('return (', panel.indexOf('const onCancelStalledRound')),
+    );
+    expect(handler).not.toMatch(/release/i);
+  });
+
+  it('judges both deadlines on the chain clock, read for an open round with shares in it', () => {
+    expect(panel).toMatch(/awaitingRecipient \|\| partlyPaidOpen \? await readChainClockMs\(rpcClient\) : null/);
+    expect(panel).toMatch(/partlyPaidOpen \? await readCircleRecoveryStopped\(circleId, network, rpcClient\) : null/);
+    expect(panel).not.toMatch(/Date\.now\(\)[^\n]*dueAtMs|dueAtMs[^\n]*Date\.now\(\)/);
   });
 });
 

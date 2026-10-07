@@ -171,6 +171,13 @@ describe('POST /api/legal/accept', () => {
     expect(mockedRecord).not.toHaveBeenCalled();
   });
 
+  it('throttles on a hashed IP key, never the raw address', async () => {
+    await handler(createReq({ docs: [...ALL_DOCS], locale: 'en' }), createRes());
+    const { key } = mockedRateLimit.mock.calls[0][0];
+    expect(key).toMatch(/^legal-accept:[0-9a-f]{64}$/);
+    expect(key).not.toContain('203.0.113.7');
+  });
+
   it('returns 401 without a verified zkLogin session', async () => {
     mockedSession.mockResolvedValue(null);
     const res = createRes();

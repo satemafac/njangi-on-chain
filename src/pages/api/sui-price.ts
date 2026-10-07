@@ -1,11 +1,24 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 
+// Every answer carries a price, so callers must read the provenance:
+//   live        stale: false, fallback: false, fetchedAt: now
+//   server-cache (< 5 min)  stale: false, fallback: false, fetchedAt
+//   stale-cache  (< 6 h)    stale: true,  fallback: false, fetchedAt
+//   fallback     stale: true,  fallback: true,  no fetchedAt — the hardcoded
+//                FALLBACK_PRICE, which nobody quoted. Fine for a "≈ $" label,
+//                never for the SUI amount a circle is pinned to
+//                (src/lib/sui-price-reading.ts).
 type PriceApiResponse = {
   success: boolean;
   data?: {
     price: number;
     source: string;
-    stale?: boolean;
+    /** Not a live quote this request: a cached one, or the fallback. */
+    stale: boolean;
+    /** The hardcoded FALLBACK_PRICE: no source quoted it. */
+    fallback: boolean;
+    /** When a live source last quoted the price (epoch ms). Absent for the fallback. */
+    fetchedAt?: number;
   };
   message?: string;
 };
@@ -135,6 +148,8 @@ export default async function handler(
         price: lastSuccessfulPrice.price,
         source: `${lastSuccessfulPrice.source} (server-cache)`,
         stale: false,
+        fallback: false,
+        fetchedAt: lastSuccessfulPrice.timestamp,
       },
     });
   }
@@ -155,27 +170,38 @@ export default async function handler(
           price,
           source: source.name,
           stale: false,
+          fallback: false,
+          fetchedAt: now,
         },
       });
     }
   }
 
+  if (lastSuccessfulPrice && now - lastSuccessfulPrice.timestamp < SERVER_STALE_TTL_MS) {
+    return res.status(200).json({
+      success: true,
+      data: {
+        price: lastSuccessfulPrice.price,
+        source: `${lastSuccessfulPrice.source} (stale-cache)`,
+        stale: true,
+        fallback: false,
+        fetchedAt: lastSuccessfulPrice.timestamp,
+      },
+      message: 'Live SUI price sources failed; returning stale server cache.',
+    });
+  }
+
+  // Still 200: the only caller (price-service.ts) treats a non-2xx as "no
+  // answer" and substitutes its own copy of this number, which would lose
+  // the flag that says so. The flag is the point.
   return res.status(200).json({
     success: true,
     data: {
-      price:
-        lastSuccessfulPrice && now - lastSuccessfulPrice.timestamp < SERVER_STALE_TTL_MS
-          ? lastSuccessfulPrice.price
-          : FALLBACK_PRICE,
-      source:
-        lastSuccessfulPrice && now - lastSuccessfulPrice.timestamp < SERVER_STALE_TTL_MS
-          ? `${lastSuccessfulPrice.source} (stale-cache)`
-          : 'server-fallback',
+      price: FALLBACK_PRICE,
+      source: 'fallback',
       stale: true,
+      fallback: true,
     },
-    message:
-      lastSuccessfulPrice && now - lastSuccessfulPrice.timestamp < SERVER_STALE_TTL_MS
-        ? 'Live SUI price sources failed; returning stale server cache.'
-        : 'Live SUI price sources failed; returning fallback SUI price.',
+    message: 'Live SUI price sources failed; returning fallback SUI price.',
   });
 }

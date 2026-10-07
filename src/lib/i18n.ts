@@ -77,6 +77,15 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'escrow.action.sendingBack': 'Sending back…',
     'escrow.sendBack.membershipUnknown':
       "We couldn't check whether you're a member of this round, so sending the contributions back isn't offered here yet. Refresh to try again.",
+    'escrow.stalled':
+      "Round {round} is past its due date and the 7-day grace that follows it, and the pot still isn't full. Since {date}, any member can cancel the round: every share goes back to the member who paid it, and the circle admin can open the round again. Shares can still be paid in until someone does.",
+    'escrow.stalled.stopped':
+      "Round {round}'s circle was stopped by its members, so the round can be cancelled right away: every share goes back to the member who paid it.",
+    'escrow.stalled.unpaid': 'Still to pay: {members}',
+    'escrow.action.cancelRound': 'Cancel the round and send the shares back',
+    'escrow.action.cancellingRound': 'Cancelling…',
+    'escrow.cancel.membershipUnknown':
+      "We couldn't check whether you're a member of this round, so cancelling it isn't offered here yet. Refresh to try again.",
     'escrow.coin.unreadable':
       "We couldn't read which coin this round uses, so nothing can be signed here yet. Refresh to try again.",
     'escrow.coin.unsupported':
@@ -124,6 +133,8 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'toast.payoutSent': 'Your payout is on its way to your wallet.',
     'toast.contributionsSentBack':
       'The contributions are on their way back to the members who paid in.',
+    'toast.roundCancelled':
+      'The round was cancelled. The shares are on their way back to the members who paid in.',
     'toast.signInAgain': 'Please sign in again to continue.',
     'toast.genericError': 'Something went wrong: {error}',
     // Dashboard alerts
@@ -294,6 +305,8 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'create.coinHintSuiEmpty': 'Shares are set in SUI at today’s price, so what they are worth moves with the SUI price.',
     'create.coinFixed': 'The coin can’t be changed once the circle is created.',
     'create.coinSuiUnavailable': 'SUI is unavailable right now because its price couldn’t be loaded.',
+    'create.coinHintSuiStale':
+      'Live SUI prices aren’t answering right now, so this uses the last price seen, {age} ago.',
     'create.frequencyLabel': 'How often',
     'create.frequency.weekly': 'Every week',
     'create.frequency.biweekly': 'Every 2 weeks',
@@ -595,6 +608,15 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'escrow.action.sendingBack': 'Renvoi en cours…',
     'escrow.sendBack.membershipUnknown':
       "Nous n'avons pas pu vérifier si vous faites partie de ce tour : le renvoi des contributions n'est donc pas encore proposé ici. Actualisez pour réessayer.",
+    'escrow.stalled':
+      "Le tour {round} a dépassé sa date d'échéance et le délai de grâce de 7 jours qui la suit, et la cagnotte n'est toujours pas complète. Depuis le {date}, tout membre peut annuler le tour : chaque part revient au membre qui l'a versée, et l'administrateur du cercle peut rouvrir ce tour. Les parts peuvent encore être versées tant que personne ne l'a annulé.",
+    'escrow.stalled.stopped':
+      "Le cercle du tour {round} a été arrêté par ses membres : le tour peut donc être annulé dès maintenant, et chaque part revient au membre qui l'a versée.",
+    'escrow.stalled.unpaid': 'Reste à verser : {members}',
+    'escrow.action.cancelRound': 'Annuler le tour et renvoyer les parts',
+    'escrow.action.cancellingRound': 'Annulation en cours…',
+    'escrow.cancel.membershipUnknown':
+      "Nous n'avons pas pu vérifier si vous faites partie de ce tour : l'annulation n'est donc pas encore proposée ici. Actualisez pour réessayer.",
     'escrow.coin.unreadable':
       "Nous n'avons pas pu lire l'actif utilisé par ce tour : rien ne peut encore être signé ici. Actualisez pour réessayer.",
     'escrow.coin.unsupported':
@@ -645,6 +667,8 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'toast.payoutSent': 'Votre versement est en route vers votre portefeuille.',
     'toast.contributionsSentBack':
       'Les contributions sont en route vers les membres qui les ont versées.',
+    'toast.roundCancelled':
+      'Le tour est annulé. Les parts sont en route vers les membres qui les ont versées.',
     'toast.signInAgain': 'Veuillez vous reconnecter pour continuer.',
     'toast.genericError': 'Quelque chose ne va pas : {error}',
     // Dashboard alerts
@@ -817,6 +841,8 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
       'Les versements sont fixés en SUI au cours d’aujourd’hui : leur valeur suit donc le cours du SUI.',
     'create.coinFixed': 'La monnaie ne peut plus être changée une fois le cercle créé.',
     'create.coinSuiUnavailable': 'Le SUI est indisponible pour le moment : son cours n’a pas pu être chargé.',
+    'create.coinHintSuiStale':
+      'Les cours du SUI en direct ne répondent pas pour le moment : le dernier cours relevé, il y a {age}, est utilisé.',
     'create.frequencyLabel': 'À quelle fréquence',
     'create.frequency.weekly': 'Chaque semaine',
     'create.frequency.biweekly': 'Toutes les 2 semaines',

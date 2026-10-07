@@ -19,6 +19,7 @@ import {
   DEFAULT_TTL_DAYS,
 } from '../../../lib/circle-record-share';
 import { consumeRateLimit } from '../../../lib/rate-limit';
+import { rateLimitKey } from '../../../lib/rate-limit-key';
 import { getClientIp } from '../../../lib/client-ip';
 
 const REQUESTS_PER_WINDOW = 20;
@@ -31,7 +32,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const rateOutcome = await consumeRateLimit({
-    key: `record-share:${getClientIp(req)}`,
+    key: rateLimitKey('record-share', getClientIp(req)),
     limit: REQUESTS_PER_WINDOW,
     windowMs: WINDOW_MS,
   });

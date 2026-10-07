@@ -400,7 +400,8 @@ Heroku is retired: Vercel is the only deploy target. The `Procfile`,
 4. `npm run generate:secrets` — fills any missing
    `WALRUS_PII_MASTER_KEY`, `WALRUS_LOOKUP_SALT`,
    `COMPLIANCE_REF_HMAC_SALT`, `INTERNAL_NOTIFY_SECRET`,
-   `COMPLIANCE_ISSUANCE_SECRET` in `.env.local`. Existing values are
+   `COMPLIANCE_ISSUANCE_SECRET`, `LEGAL_ACCEPT_IP_SALT`,
+   `RATE_LIMIT_KEY_SALT` in `.env.local`. Existing values are
    preserved.
 5. `bash move/scripts/switch-network.sh testnet` if not already there.
 6. `bash move/build_and_test.sh` — builds, publishes, captures the

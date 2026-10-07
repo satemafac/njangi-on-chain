@@ -98,9 +98,17 @@ project dashboard (Project → Settings → Environment Variables).
 - Server-only secrets (`ZKLOGIN_SECRET`, `WALRUS_PII_MASTER_KEY` and, during
   a key rotation, `WALRUS_PII_PREVIOUS_MASTER_KEY`,
   `INTERNAL_NOTIFY_SECRET`, `CRON_SECRET`,
-  `ENOKI_API_KEY_TESTNET`/`ENOKI_API_KEY_MAINNET`, ramp secrets, etc.) must
+  `ENOKI_API_KEY_TESTNET`/`ENOKI_API_KEY_MAINNET`, `LEGAL_ACCEPT_IP_SALT`,
+  `RATE_LIMIT_KEY_SALT`, ramp secrets, etc.) must
   **not** carry the `NEXT_PUBLIC_` prefix, so Next.js keeps them off the client
   bundle.
+- `RATE_LIMIT_KEY_SALT` keys the HMAC in every rate-limit bucket
+  (`src/lib/rate-limit-key.ts`), so the Postgres `rate_limits` table never
+  holds a raw client IP, email or address. Unset, the limiter uses
+  `LEGAL_ACCEPT_IP_SALT`; with both unset it degrades to unsalted SHA-256 and
+  warns (`npm run validate:env` reports it). Changing the salt only resets the
+  current windows (at most 10 minutes), so it rotates freely. Rows are swept
+  24 hours after their window started, on the limiter's own writes (no cron).
 - `NEXT_PUBLIC_*` values must be present at build time, before `next build`.
 - Cron jobs (your-turn nudges, circle-event relays, Walrus renewal) are
   declared in [`vercel.json`](../vercel.json)

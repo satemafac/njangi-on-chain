@@ -54,7 +54,10 @@ export function resolveRoundMemberStatus(params: {
     case 'refunded':
     case 'claim-expired':
       return 'nothing-due';
+    // A stalled round is still open: paying in works until someone cancels
+    // it, so the viewer's part is the same as in any open round.
     case 'in-progress':
+    case 'stalled':
     case 'full-waiting-for-claim':
       if (isUserRecipient) return 'recipient';
       if (userHasPaid) return 'paid';

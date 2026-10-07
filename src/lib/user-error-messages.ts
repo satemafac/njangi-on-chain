@@ -72,6 +72,27 @@ const MOVE_ABORT_COPY: readonly MoveAbortCopy[] = [
     code: 243,
     message: "That doesn't match this circle's coin settings. Refresh the page and try again.",
   },
+  // The stalled-round cancel (cancel_unfinalized_escrow*). 205 and 226 are
+  // left to the generic copy: the panel re-reads on any on-chain refusal and
+  // then shows the settled or refunded round itself.
+  {
+    moduleName: 'njangi_cycle_escrow',
+    code: 224,
+    message:
+      "This round can't be cancelled yet: the 7-day grace after its due date hasn't passed on the blockchain's clock. Refresh and try again later.",
+  },
+  {
+    moduleName: 'njangi_cycle_escrow',
+    code: 225,
+    message:
+      'There are no shares left in this round to send back. Refresh to see its current state.',
+  },
+  {
+    moduleName: 'njangi_cycle_escrow',
+    code: 227,
+    message:
+      "This circle hasn't been stopped by its members, so the round can only be cancelled once the 7-day grace after its due date has passed.",
+  },
   {
     moduleName: 'njangi_circles',
     code: 92,

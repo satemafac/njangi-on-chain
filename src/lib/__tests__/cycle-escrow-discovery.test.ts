@@ -338,6 +338,14 @@ describe('readCycleEscrowState', () => {
     expect((await readCycleEscrowState(ESCROW_3, 'testnet', client))?.refunded).toBe(false);
   });
 
+  // The stalled-round cancel is gated on this plus the contract's 7-day
+  // grace; u64s arrive as strings from JSON-RPC.
+  it("surfaces the snapshot's due date as a number", async () => {
+    const client = makeClient({ [ESCROW_3]: escrowObject({ id: ESCROW_3 }) });
+
+    expect((await readCycleEscrowState(ESCROW_3, 'testnet', client))?.dueAtMs).toBe(1789948800000);
+  });
+
   // Regression: the pot was read as `balance.fields.value`, but JSON-RPC
   // renders `Balance<T>` as a plain string (testnet, 2026-10-02), so every
   // pot read as '0' — the payout celebration fell back to one member's share

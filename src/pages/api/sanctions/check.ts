@@ -12,6 +12,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { screenAddress } from '../../../lib/sanctions';
 import { getClientIp } from '../../../lib/client-ip';
 import { consumeRateLimit } from '../../../lib/rate-limit';
+import { rateLimitKey } from '../../../lib/rate-limit-key';
 
 const REQUESTS_PER_MINUTE = 20;
 const MINUTE_WINDOW_MS = 60_000;
@@ -30,7 +31,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const rateOutcome = await consumeRateLimit({
-    key: `sanctions-check:${getClientIp(req)}`,
+    key: rateLimitKey('sanctions-check', getClientIp(req)),
     limit: REQUESTS_PER_MINUTE,
     windowMs: MINUTE_WINDOW_MS,
   });

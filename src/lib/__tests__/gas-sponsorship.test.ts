@@ -25,6 +25,8 @@ import {
 } from '../gas-sponsorship';
 import {
   buildAdvanceCircleAfterClaimTx,
+  buildCancelUnfinalizedEscrowForRecoveryTx,
+  buildCancelUnfinalizedEscrowTx,
   buildContributeWithAutoCoinTx,
   buildFinalizeAndRedeemTx,
   buildFinalizeAndRedeemWithAttestationTx,
@@ -139,6 +141,15 @@ describe('every round transaction the panel asks about is sponsorable end to end
     ['open a USDC round', openRound, ['open_cycle_stable']],
     ['open a SUI round', openSuiRound, ['open_cycle']],
     ['send the contributions back after the claim window', () => buildRefundExpiredClaimTx(BASE), ['refund_expired_claim']],
+    // The stalled-round cancel, both entry points: a member holding no SUI
+    // must be able to get everyone's shares back once the grace has passed,
+    // and at once in a circle whose recovery vote stopped it.
+    ['cancel a stalled round', () => buildCancelUnfinalizedEscrowTx(BASE), ['cancel_unfinalized_escrow']],
+    [
+      'cancel a stalled round in a stopped circle',
+      () => buildCancelUnfinalizedEscrowForRecoveryTx(BASE),
+      ['cancel_unfinalized_escrow_for_recovery'],
+    ],
   ])('%s', async (_route, makeBuild, expectedFunctions) => {
     const targets = await moveCallTargets(makeBuild());
     expect(targets.map((target) => target.split('::')[2])).toEqual(expectedFunctions);

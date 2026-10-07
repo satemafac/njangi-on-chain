@@ -154,6 +154,17 @@ describe('POST /api/legal/data-deletion-request', () => {
     expect(query).not.toHaveBeenCalled();
   });
 
+  it('throttles on a hashed IP + email key, never the raw values', async () => {
+    process.env.LEGAL_ACCEPT_IP_SALT = 'test-salt';
+    mockQueryOnce(1);
+    await handler(createReq(VALID_BODY), createRes());
+    expect(mockedRateLimit).toHaveBeenCalledTimes(1);
+    const { key } = mockedRateLimit.mock.calls[0][0];
+    expect(key).toMatch(/^legal-deletion:[0-9a-f]{64}$/);
+    expect(key).not.toContain('203.0.113.7');
+    expect(key).not.toContain('example.com');
+  });
+
   it('records the request with a normalized email and null ip_hash when no salt is set', async () => {
     const query = mockQueryOnce(1);
     const res = createRes();

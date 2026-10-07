@@ -1,5 +1,7 @@
 import type { Transaction } from '@mysten/sui/transactions';
 import {
+  buildCancelUnfinalizedEscrowForRecoveryTx,
+  buildCancelUnfinalizedEscrowTx,
   buildContributeWithAttestationTx,
   buildFinalizeAndRedeemWithAttestationTx,
   buildOpenCycleTx,
@@ -412,5 +414,55 @@ describe('buildRefundExpiredClaimTx', () => {
     expect(() => buildRefundExpiredClaimTx({ ...BASE, escrowId: '' })).toThrow(
       'Missing required argument: escrowId',
     );
+  });
+});
+
+describe('buildCancelUnfinalizedEscrowTx', () => {
+  it('builds the permissionless, grace-gated cancel (escrow, clock) and nothing else', () => {
+    const { txb, calls } = makeFakeTxb();
+    buildCancelUnfinalizedEscrowTx({ ...BASE, escrowId: '0xstalled' })(txb);
+
+    // One call: no release_open_round. The re-open chains the release itself
+    // (buildOpenCycleTx's releaseEscrowId on a refunded escrow).
+    expect(calls).toHaveLength(1);
+    expect(calls[0].target).toBe('0xpkg::njangi_cycle_escrow::cancel_unfinalized_escrow');
+    expect(calls[0].typeArguments).toEqual([BASE.coinType]);
+    expect(calls[0].arguments).toEqual([
+      { kind: 'object', id: '0xstalled' },
+      { kind: 'object', id: '0x6' },
+    ]);
+  });
+
+  it('fails at build time with a named error when the escrow id is missing', () => {
+    expect(() => buildCancelUnfinalizedEscrowTx({ ...BASE, escrowId: '' })).toThrow(
+      'Missing required argument: escrowId',
+    );
+  });
+});
+
+describe('buildCancelUnfinalizedEscrowForRecoveryTx', () => {
+  it('builds the recovery cancel (escrow, circle, clock) and nothing else', () => {
+    const { txb, calls } = makeFakeTxb();
+    buildCancelUnfinalizedEscrowForRecoveryTx({ ...BASE, escrowId: '0xstalled' })(txb);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].target).toBe(
+      '0xpkg::njangi_cycle_escrow::cancel_unfinalized_escrow_for_recovery',
+    );
+    expect(calls[0].typeArguments).toEqual([BASE.coinType]);
+    expect(calls[0].arguments).toEqual([
+      { kind: 'object', id: '0xstalled' },
+      { kind: 'object', id: BASE.circleId },
+      { kind: 'object', id: '0x6' },
+    ]);
+  });
+
+  it('fails at build time with a named error when an id is missing', () => {
+    expect(() => buildCancelUnfinalizedEscrowForRecoveryTx({ ...BASE, escrowId: '' })).toThrow(
+      'Missing required argument: escrowId',
+    );
+    expect(() =>
+      buildCancelUnfinalizedEscrowForRecoveryTx({ ...BASE, escrowId: '0xstalled', circleId: '' }),
+    ).toThrow('Missing required argument: circleId');
   });
 });
