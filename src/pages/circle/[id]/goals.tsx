@@ -22,6 +22,7 @@ import GoalCelebration from '@/components/milestones/GoalCelebration';
 import GoalPotProgress from '@/components/goals/GoalPotProgress';
 import { goalDisplayFont } from '@/lib/fonts';
 import BillingUpsellModal from '@/components/BillingUpsellModal';
+import { isGoalPoolsEnabled } from '@/config/feature-flags';
 import {
   clearPendingMilestonePlan,
   explainMilestoneError,
@@ -454,7 +455,9 @@ export default function CircleGoalsPage() {
                   A smart goal is chosen when a circle is created and this one
                   runs as a classic rotation.
                   {isAdmin
-                    ? ' As the admin you can start a new smart-goal circle any time, or review this circle’s settings.'
+                    ? isGoalPoolsEnabled()
+                      ? ' As the admin you can start a new smart-goal circle any time, or review this circle’s settings.'
+                      : ' As the admin you can review this circle’s settings.'
                     : ''}
                 </p>
                 {isAdmin ? (
@@ -465,12 +468,17 @@ export default function CircleGoalsPage() {
                     >
                       Circle settings
                     </NextLink>
-                    <NextLink
-                      href="/create-circle"
-                      className="inline-flex items-center justify-center rounded-full bg-[#1d2533] px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[#101723]"
-                    >
-                      Create a smart-goal circle
-                    </NextLink>
+                    {/* The create page only offers the goal door while
+                        NEXT_PUBLIC_GOAL_POOLS_ENABLED is on; without it this
+                        link would land on a form with no such choice. */}
+                    {isGoalPoolsEnabled() ? (
+                      <NextLink
+                        href="/create-circle"
+                        className="inline-flex items-center justify-center rounded-full bg-[#1d2533] px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[#101723]"
+                      >
+                        Create a smart-goal circle
+                      </NextLink>
+                    ) : null}
                   </div>
                 ) : null}
               </div>
