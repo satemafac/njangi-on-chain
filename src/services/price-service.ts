@@ -1,12 +1,26 @@
+import type { SuiPriceReading } from '@/lib/sui-price-reading';
+
 interface ServerPriceResponse {
   success: boolean;
   data?: {
     price: number;
     source?: string;
     stale?: boolean;
+    /** The server's hardcoded FALLBACK_PRICE (see pages/api/sui-price.ts). */
+    fallback?: boolean;
+    /** When a live source last quoted the price (epoch ms). */
+    fetchedAt?: number;
   };
   message?: string;
 }
+
+type ResolvedPrice = {
+  price: number;
+  source: string;
+  stale: boolean;
+  fallback: boolean;
+  fetchedAt: number | null;
+};
 
 type PriceFetchStatus = 'idle' | 'loading' | 'success' | 'degraded' | 'error';
 
@@ -21,6 +35,12 @@ class PriceService {
   private fetchStatus: PriceFetchStatus = 'idle';
   private lastPriceSource: string = 'unavailable';
   private usingStalePrice: boolean = false;
+  // Whether the number in hand is a hardcoded fallback (the server's or
+  // ours) rather than a quote, and when a live source last quoted it. Both
+  // travel with the cached price so a reload cannot launder a fallback into
+  // a "cached" quote. Read them through getPriceReading().
+  private usingFallbackPrice: boolean = false;
+  private priceFetchedAt: number | null = null;
 
   // Exchange rate properties
   private exchangeRatesCache: Record<string, number> = {};
@@ -66,11 +86,17 @@ class PriceService {
       const storedData = localStorage.getItem(this.STORAGE_KEY);
       if (storedData) {
         try {
-          const { price, timestamp, source, stale } = JSON.parse(storedData);
+          const { price, timestamp, source, stale, fallback, fetchedAt } = JSON.parse(storedData);
           this.cachedPrice = price;
           this.lastFetchTime = timestamp;
           this.lastPriceSource = typeof source === 'string' ? source : 'local-cache';
           this.usingStalePrice = stale === true;
+          // Entries written before the flag existed named the fallback in
+          // their source ('server-fallback' / 'client-fallback').
+          this.usingFallbackPrice =
+            fallback === true || (typeof source === 'string' && /fallback/i.test(source));
+          this.priceFetchedAt =
+            typeof fetchedAt === 'number' && Number.isFinite(fetchedAt) ? fetchedAt : null;
         } catch (e) {
           console.warn(`Error parsing cached price data: ${this.getErrorMessage(e)}`);
         }
@@ -78,11 +104,18 @@ class PriceService {
     }
   }
 
-  private saveCachedPrice(price: number, timestamp: number, source: string, stale: boolean) {
+  private saveCachedPrice(
+    price: number,
+    timestamp: number,
+    source: string,
+    stale: boolean,
+    fallback: boolean,
+    fetchedAt: number | null,
+  ) {
     if (typeof window !== 'undefined') {
       localStorage.setItem(
         this.STORAGE_KEY,
-        JSON.stringify({ price, timestamp, source, stale })
+        JSON.stringify({ price, timestamp, source, stale, fallback, fetchedAt })
       );
     }
   }
@@ -103,6 +136,25 @@ class PriceService {
     return this.cachedPrice !== null;
   }
 
+  /** The number in hand is a hardcoded fallback, not a quote. */
+  public isPriceFallback(): boolean {
+    return this.usingFallbackPrice;
+  }
+
+  /**
+   * The price in hand with its provenance, for callers that must know
+   * whether it is a quote (isUsableSuiPrice in src/lib/sui-price-reading.ts).
+   */
+  public getPriceReading(): SuiPriceReading {
+    return {
+      price: this.cachedPrice,
+      source: this.lastPriceSource,
+      stale: this.usingStalePrice,
+      fallback: this.usingFallbackPrice,
+      fetchedAt: this.priceFetchedAt,
+    };
+  }
+
   public getCachedPrice(): number | null {
     return this.cachedPrice;
   }
@@ -114,7 +166,7 @@ class PriceService {
     return this.getSUIPrice();
   }
 
-  private async fetchServerPrice(): Promise<{ price: number; source: string; stale: boolean } | null> {
+  private async fetchServerPrice(): Promise<ResolvedPrice | null> {
     try {
       const response = await fetch(this.SERVER_PRICE_API_URL, {
         headers: {
@@ -131,10 +183,21 @@ class PriceService {
         if (data.data.source) {
           console.log(`Successfully fetched SUI price from local API (${data.data.source}): $${data.data.price}`);
         }
+        const stale = data.data.stale === true;
+        const fallback = data.data.fallback === true;
         return {
           price: data.data.price,
           source: data.data.source || 'local-api',
-          stale: data.data.stale === true,
+          stale,
+          fallback,
+          // A live answer without the field (an older server) is as fresh as
+          // this request; a stale one of unknown age stays unknown.
+          fetchedAt:
+            typeof data.data.fetchedAt === 'number' && Number.isFinite(data.data.fetchedAt)
+              ? data.data.fetchedAt
+              : !fallback && !stale
+                ? Date.now()
+                : null,
         };
       }
 
@@ -173,9 +236,18 @@ class PriceService {
       this.lastFetchTime = now;
       this.lastPriceSource = result.source;
       this.usingStalePrice = result.stale;
+      this.usingFallbackPrice = result.fallback;
+      this.priceFetchedAt = result.fetchedAt;
       
       // Save to localStorage for persistence
-      this.saveCachedPrice(this.cachedPrice, now, this.lastPriceSource, this.usingStalePrice);
+      this.saveCachedPrice(
+        this.cachedPrice,
+        now,
+        this.lastPriceSource,
+        this.usingStalePrice,
+        this.usingFallbackPrice,
+        this.priceFetchedAt,
+      );
       
       this.fetchStatus = result.stale ? 'degraded' : 'success';
       console.log(`Successfully resolved SUI price: $${this.cachedPrice} (source: ${this.lastPriceSource})`);
@@ -189,8 +261,16 @@ class PriceService {
         this.usingStalePrice = true;
         this.lastPriceSource = `${this.lastPriceSource || 'local-cache'} (client-stale-cache)`;
         this.lastFetchTime = now;
+        // usingFallbackPrice and priceFetchedAt describe the number we keep.
         console.warn(`Using stale cached price: $${this.cachedPrice}`);
-        this.saveCachedPrice(this.cachedPrice, now, this.lastPriceSource, true);
+        this.saveCachedPrice(
+          this.cachedPrice,
+          now,
+          this.lastPriceSource,
+          true,
+          this.usingFallbackPrice,
+          this.priceFetchedAt,
+        );
         return this.cachedPrice;
       }
       
@@ -199,10 +279,12 @@ class PriceService {
         this.fetchStatus = 'degraded';
         this.usingStalePrice = true;
         this.lastPriceSource = 'client-fallback';
+        this.usingFallbackPrice = true;
+        this.priceFetchedAt = null;
         console.warn(`Using fallback price: $${this.FALLBACK_PRICE}`);
         this.cachedPrice = this.FALLBACK_PRICE;
         this.lastFetchTime = now;
-        this.saveCachedPrice(this.cachedPrice, now, this.lastPriceSource, true);
+        this.saveCachedPrice(this.cachedPrice, now, this.lastPriceSource, true, true, null);
         return this.cachedPrice;
       }
 
