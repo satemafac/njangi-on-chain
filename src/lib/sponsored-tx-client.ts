@@ -26,6 +26,7 @@ import {
   signTransactionBytes,
   type ClientSignerSession,
 } from './zklogin-client-signer';
+import { kindUsesGasCoin } from './sponsorable-kind';
 
 export interface SponsorPrepareResponse {
   sponsored: boolean;
@@ -37,6 +38,12 @@ export interface SponsorPrepareResponse {
 export interface SponsoredExecuteResult {
   digest: string;
   sponsored: boolean;
+  /**
+   * The executed effects, when the chain returned them. A transaction that
+   * landed can still have FAILED (a Move abort is committed and charged), and
+   * this is where that shows; see tx-effects-status.ts.
+   */
+  effects?: unknown;
 }
 
 /**
@@ -92,13 +99,13 @@ async function landedAlready(
   cause: unknown,
 ): Promise<SponsoredExecuteResult | null> {
   try {
-    await client.waitForTransaction({ digest, options: { showEffects: true } });
+    const landed = await client.waitForTransaction({ digest, options: { showEffects: true } });
     console.warn(
       '[sponsored-tx] execute reported a failure but the transaction landed; not re-signing:',
       digest,
       cause,
     );
-    return { digest, sponsored: true };
+    return { digest, sponsored: true, effects: landed?.effects };
   } catch {
     return null;
   }
@@ -131,6 +138,14 @@ export async function trySponsoredExecute(args: {
       client: args.client,
       onlyTransactionKind: true,
     });
+
+    // A kind that touches the gas coin would spend the sponsor's SUI: a SUI
+    // share is split from it. The server refuses those too, so asking would
+    // only cost a round trip (sponsorable-kind.ts).
+    if (kindUsesGasCoin(Transaction.fromKind(kindBytes).getData())) {
+      console.info('[sponsored-tx] sponsorship declined, paying own gas:', 'gas_coin_used');
+      return null;
+    }
 
     // 2. Ask the server for sponsorship. It resolves the caller from the
     //    session cookie, not from anything we send.
@@ -204,11 +219,13 @@ export async function trySponsoredExecute(args: {
     // OBSERVE the transaction is not a failure to SEND it — the sponsor has
     // already broadcast it, so report the digest either way and let the caller
     // reconcile. Returning null here is what would double-charge the member.
+    let effects: unknown;
     try {
-      await args.client.waitForTransaction({
+      const confirmed = await args.client.waitForTransaction({
         digest: executed.digest,
         options: { showEffects: true },
       });
+      effects = confirmed?.effects;
     } catch (err) {
       console.warn(
         '[sponsored-tx] submitted but not confirmed; not re-signing:',
@@ -217,7 +234,7 @@ export async function trySponsoredExecute(args: {
       );
     }
 
-    return { digest: executed.digest, sponsored: true };
+    return { digest: executed.digest, sponsored: true, effects };
   } catch (err) {
     // Loud on purpose. Sponsorship failing is not user-visible, so without this
     // a broken verifier is indistinguishable from "no one is eligible".

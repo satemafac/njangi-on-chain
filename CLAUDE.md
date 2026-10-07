@@ -75,14 +75,19 @@ Phase 1 ships three subsystems:
 
 **Frontend Services (src/services/)**:
 - `enokiZkLoginService.ts`: zkLogin auth + zkProof-backed transaction signing
-  (gas sponsorship is ON for the testnet pilot: Enoki pays the network fee
-  for the allowlisted member actions in `src/lib/gas-sponsorship.ts`, such
-  as deposits, round opens and collects, and refunds, behind
-  `GAS_SPONSORSHIP_ENABLED`; verify with gas owner != sender. The plan is to
-  launch on mainnet with sponsorship billed to the admin's subscription,
-  after counsel's advice. Everything else is paid by the user's own zkLogin
-  account. The Enoki private key is used only server-side for salt/zkProof,
-  behind `/api/zkLogin`)
+  (gas sponsorship is ON for the testnet pilot, behind
+  `GAS_SPONSORSHIP_ENABLED`: Enoki pays the network fee for the USDC
+  security deposit and, through the round panel's sponsor-first signer
+  (`src/lib/sponsored-first-signer.ts`), for opening a round (SUI or USDC,
+  including the re-open after a refunded round), paying a USDC share,
+  collecting, advancing and expired-claim refunds. A SUI share is never
+  sponsored: it is split from the gas coin, which under sponsorship is the
+  sponsor's. Every decline falls back to the member's own gas; verify
+  with gas owner != sender. The plan is to launch on mainnet with
+  sponsorship billed to the admin's subscription, after counsel's advice.
+  Everything else is paid by the user's own zkLogin account. The Enoki
+  private key stays server-side: salt/zkProof behind `/api/zkLogin`,
+  sponsorship behind `/api/sponsor/*`)
 - `coinbase-onramp-service.ts`, `moonpay-service.ts`, `transak-service.ts`: Fiat ramp adapters
 - `whatsapp-registry-service.ts`: Off-chain index for the on-chain Walrus pointers
 

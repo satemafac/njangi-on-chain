@@ -293,6 +293,47 @@ describe('trySponsoredExecute — never re-sign something already submitted', ()
     expect(result).toEqual({ digest: DIGEST, sponsored: true });
   });
 
+  it('returns the executed effects, so a landed transaction that failed shows as one', async () => {
+    const effects = { status: { status: 'failure', error: 'MoveAbort(...)' } };
+    mockFetch(true, () => ({ ok: true, json: async () => ({ digest: DIGEST }) }) as Response);
+    const client = {
+      waitForTransaction: jest.fn().mockResolvedValue({ digest: DIGEST, effects }),
+    } as unknown as SuiClient;
+
+    const result = await trySponsoredExecute({
+      action: 'collectPayout',
+      buildKind,
+      client,
+      session,
+    });
+
+    expect(result).toEqual({ digest: DIGEST, sponsored: true, effects });
+  });
+
+  it('declines a kind that uses the gas coin before asking the server', async () => {
+    // Under sponsorship the gas coin is the sponsor's: a SUI share split from
+    // it would be paid out of the sponsor's SUI.
+    const fetchSpy = jest.fn();
+    global.fetch = fetchSpy as unknown as typeof fetch;
+
+    const result = await trySponsoredExecute({
+      action: 'payRoundShare',
+      buildKind: (txb) => {
+        const [share] = txb.splitCoins(txb.gas, [txb.pure.u64(5)]);
+        txb.moveCall({
+          target: `${PKG}::njangi_cycle_escrow::contribute`,
+          typeArguments: ['0x2::sui::SUI'],
+          arguments: [txb.objectRef(objRef('0x' + 'e'.repeat(64))), share],
+        });
+      },
+      client: {} as SuiClient,
+      session,
+    });
+
+    expect(result).toBeNull();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it('falls back to self-paid when the reservation was never held', async () => {
     // 409 is unambiguous: nothing was submitted, so re-signing is safe.
     mockFetch(true, () => ({ ok: false, status: 409, json: async () => ({}) }) as Response);

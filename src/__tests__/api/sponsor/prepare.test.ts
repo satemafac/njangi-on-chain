@@ -208,6 +208,51 @@ describe('/api/sponsor/prepare', () => {
     expect(res.body).toMatchObject({ sponsored: false, reason: 'reservation_failed' });
   });
 
+  it('refuses a kind that touches the gas coin, whatever the client says about it', async () => {
+    // Under sponsorship the gas coin is the sponsor's SUI, and a SUI share is
+    // split from it. `usesGasCoinForValue` is the client's word; the
+    // transaction is the evidence.
+    const tx = new Transaction();
+    const [coin] = tx.splitCoins(tx.gas, [tx.pure.u64(5)]);
+    tx.moveCall({
+      target: `${PKG}::njangi_circles::member_deposit_security_deposit`,
+      arguments: [
+        tx.sharedObjectRef({ objectId: CIRCLE_ID, initialSharedVersion: 1, mutable: true }),
+        coin,
+      ],
+    });
+    const res = createRes();
+    await handler(
+      createReq({
+        action: 'paySecurityDeposit',
+        kindBytes: toBase64(await tx.build({ onlyTransactionKind: true })),
+        context: { circleId: CIRCLE_ID, usesGasCoinForValue: false },
+      }),
+      res,
+    );
+
+    expect(res.body).toMatchObject({ sponsored: false, reason: 'gas_coin_used' });
+    expect(mockedResolve).not.toHaveBeenCalled();
+    expect(createSponsoredTransaction).not.toHaveBeenCalled();
+  });
+
+  it('declines kind bytes it cannot read, as a decline rather than a failure', async () => {
+    const res = createRes();
+    await handler(
+      createReq({
+        action: 'paySecurityDeposit',
+        // Not a TransactionKind: there is no variant 9.
+        kindBytes: toBase64(new Uint8Array([9, 9, 9])),
+        context: { circleId: CIRCLE_ID },
+      }),
+      res,
+    );
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toMatchObject({ sponsored: false, reason: 'kind_unreadable' });
+    expect(createSponsoredTransaction).not.toHaveBeenCalled();
+  });
+
   it('passes a non-sponsorable target through as a decline, not a failure', async () => {
     const tx = new Transaction();
     tx.moveCall({

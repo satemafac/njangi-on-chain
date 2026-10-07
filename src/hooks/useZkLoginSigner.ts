@@ -2,11 +2,15 @@ import { useCallback, useMemo, useRef } from 'react';
 import { SuiClient } from '@mysten/sui/client';
 import {
   loadSignerSession,
-  signAndExecuteWithZkLogin,
   type ClientSignerResult,
   type ClientSignerSession,
   type SignTransactionInput,
 } from '@/lib/zklogin-client-signer';
+import {
+  signAndExecuteSponsoredFirst,
+  type SponsoredFirstResult,
+  type SponsorRequest,
+} from '@/lib/sponsored-first-signer';
 import { getCurrentRpcUrl, getNetworkConfig } from '@/services/network-config';
 
 /**
@@ -37,8 +41,15 @@ export function useZkLoginSigner() {
   const signAndExecute = useCallback(
     async (
       input: SignTransactionInput,
-      overrides?: { network?: 'testnet' | 'mainnet' },
-    ): Promise<ClientSignerResult> => {
+      overrides?: {
+        network?: 'testnet' | 'mainnet';
+        /**
+         * Ask the circle's sponsor to pay the network fee first. Any decline
+         * signs with the member's own gas instead (sponsored-first-signer.ts).
+         */
+        sponsor?: SponsorRequest;
+      },
+    ): Promise<SponsoredFirstResult> => {
       if (!session) {
         throw new Error(
           'No client-side zkLogin session. Sign in again so the OAuth callback can persist the ephemeral key.',
@@ -46,7 +57,7 @@ export function useZkLoginSigner() {
       }
       const network = overrides?.network ?? session.network;
       const client = getClient(network);
-      return signAndExecuteWithZkLogin(session, client, input);
+      return signAndExecuteSponsoredFirst(session, client, input, overrides?.sponsor);
     },
     [session, getClient],
   );
@@ -59,4 +70,4 @@ export function useZkLoginSigner() {
   };
 }
 
-export type { ClientSignerResult, SignTransactionInput };
+export type { ClientSignerResult, SignTransactionInput, SponsoredFirstResult, SponsorRequest };
