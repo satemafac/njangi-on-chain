@@ -17,6 +17,7 @@ export type RoundSponsorAction =
   | 'collectPayout'
   | 'advanceRound'
   | 'refundExpiredClaim'
+  | 'cancelStalledRound'
   | 'openRound';
 
 /** Bills the circle through the round's escrow, which the transaction touches. */
@@ -26,6 +27,18 @@ export function escrowSponsorRequest(
   coinType: string,
 ): SponsorRequest {
   return { action, context: { escrowId, coinType } };
+}
+
+/**
+ * Cancelling a stalled round (`cancel_unfinalized_escrow*`): billed through
+ * the round's escrow like the expired-claim refund it mirrors. Both cancel
+ * entry points take the escrow as an input, so prepare's binding check passes
+ * for either; the recovery variant's extra `&Circle` changes nothing here.
+ * Permissionless and gas-less-safe: a member holding no SUI can still get the
+ * shares back for everyone.
+ */
+export function cancelStalledRoundSponsorRequest(escrowId: string, coinType: string): SponsorRequest {
+  return escrowSponsorRequest('cancelStalledRound', escrowId, coinType);
 }
 
 /** A member's share: never for a SUI share, which comes out of the gas coin. */

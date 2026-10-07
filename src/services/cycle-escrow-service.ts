@@ -471,6 +471,64 @@ export function buildRefundExpiredClaimTx(params: RefundExpiredClaimParams): Bui
   };
 }
 
+export interface CancelUnfinalizedEscrowParams extends CycleEscrowCallBase {
+  escrowId: string;
+}
+
+/**
+ * `cancel_unfinalized_escrow`: a round that never filled, once its snapshot
+ * due date plus the 7-day grace has passed on the chain clock. Sends every
+ * recorded share back to the member who paid it, and to nobody else.
+ * Permissionless. Aborts 224 E_CANCEL_TOO_EARLY inside the grace, 205
+ * E_ALREADY_FINALIZED once the pot was settled, and 225 E_NOTHING_TO_REFUND
+ * when no share was recorded (an empty round has nothing to cancel).
+ *
+ * No `release_open_round` here: after the cancel the escrow reads
+ * `refunded`, and the re-open chains the release itself (buildOpenCycleTx's
+ * `releaseEscrowId`), so chaining it twice would be a second, pointless call.
+ */
+export function buildCancelUnfinalizedEscrowTx(
+  params: CancelUnfinalizedEscrowParams,
+): BuildTransactionFn {
+  const packageId = packageIdFor(params.network);
+  const escrowId = requireAddr(params.escrowId, 'escrowId');
+  return (txb: Transaction) => {
+    txb.moveCall({
+      target: `${packageId}::njangi_cycle_escrow::cancel_unfinalized_escrow`,
+      typeArguments: [params.coinType],
+      arguments: [txb.object(escrowId), txb.object(CLOCK_OBJECT_ID)],
+    });
+  };
+}
+
+export interface CancelUnfinalizedEscrowForRecoveryParams extends CycleEscrowCallBase {
+  escrowId: string;
+  /** The escrow's circle, whose recovery state the contract checks. */
+  circleId: string;
+}
+
+/**
+ * `cancel_unfinalized_escrow_for_recovery`: the same cancel with no grace
+ * wait, for a circle whose member-voted recovery has executed (recovery
+ * state STOPPED or REFUNDED; aborts 227 E_CIRCLE_NOT_IN_RECOVERY otherwise).
+ * Same refund rule — each recorded share back to its payer — and the same
+ * 205/225 aborts. As above, the re-open owns the release.
+ */
+export function buildCancelUnfinalizedEscrowForRecoveryTx(
+  params: CancelUnfinalizedEscrowForRecoveryParams,
+): BuildTransactionFn {
+  const packageId = packageIdFor(params.network);
+  const escrowId = requireAddr(params.escrowId, 'escrowId');
+  const circleId = requireAddr(params.circleId, 'circleId');
+  return (txb: Transaction) => {
+    txb.moveCall({
+      target: `${packageId}::njangi_cycle_escrow::cancel_unfinalized_escrow_for_recovery`,
+      typeArguments: [params.coinType],
+      arguments: [txb.object(escrowId), txb.object(circleId), txb.object(CLOCK_OBJECT_ID)],
+    });
+  };
+}
+
 /**
  * Convenience reader — fetches the CycleEscrow object state for a given
  * id. Useful for contribute/redeem UIs that need the snapshot's required

@@ -14,7 +14,11 @@ process.env.NEXT_PUBLIC_TESTNET_PACKAGE_ID = TESTNET_PKG;
 import type { SuiClient } from '@mysten/sui/client';
 import { Transaction } from '@mysten/sui/transactions';
 import { judgeSponsorableKind, kindUsesGasCoin } from '@/lib/sponsorable-kind';
-import { buildContributeWithAutoCoinTx } from '@/services/cycle-escrow-service';
+import {
+  buildCancelUnfinalizedEscrowForRecoveryTx,
+  buildCancelUnfinalizedEscrowTx,
+  buildContributeWithAutoCoinTx,
+} from '@/services/cycle-escrow-service';
 
 const PKG = '0x' + '1'.repeat(64);
 const ESCROW = '0x' + 'e'.repeat(64);
@@ -144,5 +148,87 @@ describe('judgeSponsorableKind', () => {
       ALLOWED,
     );
     expect(verdict).toMatchObject({ sponsorable: false, reason: 'command_not_allowed' });
+  });
+});
+
+describe('judgeSponsorableKind on the stalled-round cancel', () => {
+  // The two cancel targets as /api/sponsor/prepare sees them, built with
+  // every input explicit (the builders' shape: escrow, [circle,] clock 0x6).
+  // Neither splits, merges, transfers or passes the gas coin, so the
+  // gas-coin rule never applies; what the test guards is that BOTH targets
+  // are needed on the allowlist, because the recovery twin is its own call.
+  const CIRCLE = '0x' + 'd'.repeat(64);
+  const CANCEL = `${PKG}::njangi_cycle_escrow::cancel_unfinalized_escrow`;
+  const CANCEL_FOR_RECOVERY = `${PKG}::njangi_cycle_escrow::cancel_unfinalized_escrow_for_recovery`;
+  const clockArg = (txb: Transaction) =>
+    txb.sharedObjectRef({ objectId: '0x6', initialSharedVersion: 1, mutable: false });
+  const circleArg = (txb: Transaction) =>
+    txb.sharedObjectRef({ objectId: CIRCLE, initialSharedVersion: 1, mutable: false });
+
+  function cancelKind(txb: Transaction) {
+    txb.moveCall({ target: CANCEL, typeArguments: [USDC], arguments: [escrowArg(txb), clockArg(txb)] });
+  }
+  function cancelForRecoveryKind(txb: Transaction) {
+    txb.moveCall({
+      target: CANCEL_FOR_RECOVERY,
+      typeArguments: [USDC],
+      arguments: [escrowArg(txb), circleArg(txb), clockArg(txb)],
+    });
+  }
+
+  it('accepts the plain cancel and lists the escrow prepare bills', async () => {
+    const verdict = judgeSponsorableKind(await decoded(cancelKind), [CANCEL, CANCEL_FOR_RECOVERY]);
+    expect(verdict.sponsorable).toBe(true);
+    if (!verdict.sponsorable) return;
+    expect(verdict.objectIds.has(ESCROW)).toBe(true);
+  });
+
+  it('accepts the recovery cancel, whose extra circle input changes nothing for billing', async () => {
+    const verdict = judgeSponsorableKind(
+      await decoded(cancelForRecoveryKind),
+      [CANCEL, CANCEL_FOR_RECOVERY],
+    );
+    expect(verdict.sponsorable).toBe(true);
+    if (!verdict.sponsorable) return;
+    expect(verdict.objectIds.has(ESCROW)).toBe(true);
+    expect(verdict.objectIds.has(CIRCLE)).toBe(true);
+  });
+
+  it('refuses the recovery cancel when only the plain one is allowlisted: both entries are needed', async () => {
+    expect(judgeSponsorableKind(await decoded(cancelForRecoveryKind), [CANCEL])).toMatchObject({
+      sponsorable: false,
+      reason: 'target_not_allowed',
+    });
+    expect(judgeSponsorableKind(await decoded(cancelKind), [CANCEL_FOR_RECOVERY])).toMatchObject({
+      sponsorable: false,
+      reason: 'target_not_allowed',
+    });
+  });
+
+  it('neither cancel touches the gas coin', async () => {
+    expect(kindUsesGasCoin(await decoded(cancelKind))).toBe(false);
+    expect(kindUsesGasCoin(await decoded(cancelForRecoveryKind))).toBe(false);
+  });
+
+  it('the real builders emit exactly those targets, with the escrow coin as the type argument', () => {
+    const plain = new Transaction();
+    buildCancelUnfinalizedEscrowTx({ network: 'testnet', coinType: USDC, escrowId: ESCROW })(plain);
+    const recovery = new Transaction();
+    buildCancelUnfinalizedEscrowForRecoveryTx({
+      network: 'testnet',
+      coinType: USDC,
+      escrowId: ESCROW,
+      circleId: CIRCLE,
+    })(recovery);
+    const calls = (txb: Transaction) =>
+      txb.getData().commands.flatMap((c) =>
+        c.MoveCall
+          ? [`${c.MoveCall.module}::${c.MoveCall.function}|${c.MoveCall.typeArguments.join(',')}`]
+          : [],
+      );
+    expect(calls(plain)).toEqual([`njangi_cycle_escrow::cancel_unfinalized_escrow|${USDC}`]);
+    expect(calls(recovery)).toEqual([
+      `njangi_cycle_escrow::cancel_unfinalized_escrow_for_recovery|${USDC}`,
+    ]);
   });
 });

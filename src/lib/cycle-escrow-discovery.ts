@@ -97,6 +97,15 @@ export interface CycleEscrowLiveState {
    * against the chain clock (chain-clock.ts), never the device's.
    */
   claimExpiresAtMs: number;
+  /**
+   * The round's due date from the frozen snapshot (`snapshot.due_at_ms`).
+   * Seven days after it (the contract's CANCEL_GRACE_MS, mirrored in
+   * cycle-escrow-collect.ts) an unfinalized round with contributions in it
+   * can be cancelled by anyone, each share going back to the member who
+   * paid it. Judge it against the chain clock, never the device's. 0 when
+   * the snapshot carried none.
+   */
+  dueAtMs: number;
   contributedMembers: string[];
   /** Full rotation member list from the frozen snapshot (includes the
    *  recipient). The UI uses this to render a per-member progress ring. */
@@ -755,6 +764,7 @@ export async function readCycleEscrowState(
     claimed: Boolean(fields.claimed),
     refunded: Boolean(fields.refunded),
     claimExpiresAtMs: Number(fields.claim_expires_at_ms ?? 0) || 0,
+    dueAtMs: Number(snapshot.due_at_ms ?? 0) || 0,
     contributedMembers,
     members,
     requiresAttestation: Boolean(fields.requires_attestation),

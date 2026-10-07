@@ -168,6 +168,23 @@ describe('stream registry', () => {
     expect(stream('claim_redeemed').source).toBe('core');
   });
 
+  it('relays no refund event, so a cancelled stalled round is treated like an expired claim', () => {
+    // Both refund paths set the escrow's `refunded` flag and emit their own
+    // events (EscrowCancelled / ExpiredClaimRefunded, plus one
+    // ContributionRefunded per member). Neither is relayed: the relay has
+    // no refund message, and inventing one would mean a new WhatsApp
+    // template to approve. The dashboard scanner skips the round the same
+    // way (NjangiRoundAlerts: `if (state.refunded) continue`).
+    const types = CIRCLE_EVENT_STREAMS.map((s) => s.eventType(PKG));
+    for (const refund of [
+      '::njangi_cycle_escrow::EscrowCancelled',
+      '::njangi_cycle_escrow::ExpiredClaimRefunded',
+      '::njangi_cycle_escrow::ContributionRefunded',
+    ]) {
+      expect(types.filter((t) => t.endsWith(refund))).toEqual([]);
+    }
+  });
+
   it('listens to no event of the retired legacy payment rail', () => {
     // njangi_payments::contribute / trigger_payout and
     // njangi_circles::contribute_stablecoin are off (isLegacyRailEnabled);

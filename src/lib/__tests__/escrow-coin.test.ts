@@ -109,15 +109,15 @@ describe('CycleEscrowPanel', () => {
     expect(source).toContain('resolveEscrowCoin(liveState, summary, network)');
   });
 
-  it('refuses only payments in an unsupported coin; collect, send-back and advance use the exit type', () => {
-    // One payment path, three ways out.
+  it('refuses only payments in an unsupported coin; collect, send-back, cancel and advance use the exit type', () => {
+    // One payment path, four ways out (the stalled-round cancel included).
     expect(source.match(/requirePayCoin\(\)/g)).toHaveLength(1);
-    expect(source.match(/requireExitCoinType\(\)/g)).toHaveLength(3);
+    expect(source.match(/requireExitCoinType\(\)/g)).toHaveLength(4);
     expect(source).toMatch(/const onPayShare[\s\S]*?requirePayCoin\(\)[\s\S]*?const onCollectPayout/);
     expect(source).toContain('escrowExitCoinType(escrowCoin)');
     // The way-out buttons are gated on the exit type, not the pay coin.
     expect(source.match(/busy === 'pay' \|\| !payCoin/g)).toHaveLength(1);
-    for (const busy of ['claim', 'refund', 'advance']) {
+    for (const busy of ['claim', 'refund', 'cancel', 'advance']) {
       expect(source).toContain(`busy === '${busy}' || !exitCoinType`);
     }
   });

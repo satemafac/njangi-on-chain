@@ -9,6 +9,7 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import {
+  cancelStalledRoundSponsorRequest,
   escrowSponsorRequest,
   openRoundSponsorRequest,
   payShareSponsorRequest,
@@ -45,6 +46,17 @@ describe('round sponsorship requests', () => {
       context: { circleId: CIRCLE, coinType: USDC.coinType },
     });
   });
+
+  it('bills a stalled-round cancel through the round escrow, like the expired-claim refund', () => {
+    expect(cancelStalledRoundSponsorRequest(ESCROW, USDC.coinType)).toEqual({
+      action: 'cancelStalledRound',
+      context: { escrowId: ESCROW, coinType: USDC.coinType },
+    });
+    // A SUI round too: the cancel moves no coin out of the gas coin.
+    expect(cancelStalledRoundSponsorRequest(ESCROW, SUI.coinType).context.coinType).toBe(
+      SUI.coinType,
+    );
+  });
 });
 
 describe('CycleEscrowPanel asks for sponsorship on every round transaction', () => {
@@ -60,8 +72,9 @@ describe('CycleEscrowPanel asks for sponsorship on every round transaction', () 
 
   it('passes a sponsor request from every runWithSigner call', () => {
     const calls = runWithSignerCalls();
-    // pay x2, collect x2, advance, refund: a new call site must make a choice.
-    expect(calls).toHaveLength(6);
+    // pay x2, collect x2, advance, refund, cancel: a new call site must make
+    // a choice.
+    expect(calls).toHaveLength(7);
     for (const args of calls) {
       expect(args).toMatch(/sponsor|SponsorRequest\(/i);
     }
