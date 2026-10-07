@@ -13,13 +13,17 @@ import {
   countryFromLocale,
   fiatCurrencyForProvider,
   isCemacCountry,
+  isSanctionedCountry,
   normalizeCountryCode,
   orderedEnabledProviders,
   providerOrderForCountry,
+  RAMP_ONLY_BLOCKED_COUNTRIES,
   readClientProviderFlags,
   readServerProviderAvailability,
+  SANCTIONED_COUNTRIES,
   type RampProviderFlags,
 } from '@/lib/ramp-geo';
+import { EMBARGOED_COUNTRIES, EMBARGOED_UA_REGIONS } from '@/lib/embargo';
 
 const ALL_ENABLED: RampProviderFlags = {
   coinbase: true,
@@ -187,6 +191,67 @@ describe('countryFromLocale', () => {
     expect(countryFromLocale('')).toBeNull();
     expect(countryFromLocale(null)).toBeNull();
     expect(countryFromLocale(undefined)).toBeNull();
+  });
+});
+
+describe('ramp blocked jurisdictions (derived from embargo.ts)', () => {
+  it('contains every embargoed country from embargo.ts', () => {
+    for (const country of EMBARGOED_COUNTRIES) {
+      expect(SANCTIONED_COUNTRIES.has(country)).toBe(true);
+    }
+  });
+
+  it('adds the ramp-only extras (RU, BY) without widening the app-wide block', () => {
+    expect([...RAMP_ONLY_BLOCKED_COUNTRIES].sort()).toEqual(['BY', 'RU']);
+    for (const country of RAMP_ONLY_BLOCKED_COUNTRIES) {
+      expect(SANCTIONED_COUNTRIES.has(country)).toBe(true);
+      // The main geo-block (middleware, API choke points) deliberately leaves
+      // RU/BY open — widening it is an owner/counsel decision, not a ramp one.
+      expect(EMBARGOED_COUNTRIES.has(country)).toBe(false);
+    }
+  });
+
+  it('is exactly the union of the two sets', () => {
+    expect(new Set(SANCTIONED_COUNTRIES)).toEqual(
+      new Set([...EMBARGOED_COUNTRIES, ...RAMP_ONLY_BLOCKED_COUNTRIES]),
+    );
+  });
+
+  it('matches blocked countries case-insensitively and rejects malformed values', () => {
+    expect(isSanctionedCountry('IR')).toBe(true);
+    expect(isSanctionedCountry(' ir ')).toBe(true);
+    expect(isSanctionedCountry('ru')).toBe(true);
+    expect(isSanctionedCountry('CM')).toBe(false);
+    expect(isSanctionedCountry('US')).toBe(false);
+    expect(isSanctionedCountry(null)).toBe(false);
+    expect(isSanctionedCountry(undefined)).toBe(false);
+    expect(isSanctionedCountry('IRN')).toBe(false);
+  });
+
+  it.each([...EMBARGOED_UA_REGIONS])(
+    'blocks embargoed Ukrainian region %s from the region header',
+    (region) => {
+      expect(isSanctionedCountry('UA', region)).toBe(true);
+      expect(isSanctionedCountry('ua', ` ${region} `)).toBe(true);
+    },
+  );
+
+  it('leaves the rest of Ukraine open', () => {
+    expect(isSanctionedCountry('UA', '30')).toBe(false);
+    expect(isSanctionedCountry('UA', '')).toBe(false);
+    expect(isSanctionedCountry('UA', null)).toBe(false);
+    expect(isSanctionedCountry('UA')).toBe(false);
+  });
+
+  it('ignores the region outside Ukraine', () => {
+    expect(isSanctionedCountry('FR', '43')).toBe(false);
+    expect(isSanctionedCountry('CM', '09')).toBe(false);
+  });
+
+  it('offers no ramp provider in a blocked country', () => {
+    for (const country of SANCTIONED_COUNTRIES) {
+      expect(providerOrderForCountry(country)).toEqual([]);
+    }
   });
 });
 

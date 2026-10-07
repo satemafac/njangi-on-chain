@@ -14,6 +14,7 @@ import {
   type TransakAssetIntent,
 } from '../../../../services/transak-service';
 import { isSanctionedCountry } from '../../../../lib/ramp-geo';
+import { screenRampWallet } from '@/lib/ramp-wallet-screen';
 import {
   getDriftStatusForAddress,
   addressDriftErrorBody,
@@ -98,16 +99,38 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return invalidRequest(res, 'countryCode must be a 2-letter ISO code.');
   }
   // Sanctions screen (client-supplied country AND the edge-detected IP
-  // country): as the coordinator we refuse to mint ramp sessions for
-  // comprehensively sanctioned jurisdictions rather than deferring entirely
-  // to the provider's own KYC.
+  // country — with its region header, which is what makes the embargoed
+  // Ukrainian regions matchable, embargo.ts): as the coordinator we refuse
+  // to mint ramp sessions for blocked jurisdictions rather than deferring
+  // entirely to the provider's own KYC.
   const ipCountry = (req.headers['x-vercel-ip-country'] as string | undefined)
     ?.trim()
     .toUpperCase();
-  if (isSanctionedCountry(body.countryCode) || isSanctionedCountry(ipCountry)) {
+  const ipRegion = (req.headers['x-vercel-ip-country-region'] as string | undefined)
+    ?.trim()
+    .toUpperCase();
+  if (
+    isSanctionedCountry(body.countryCode) ||
+    isSanctionedCountry(ipCountry, ipRegion)
+  ) {
     return res.status(403).json({
       error: 'This service is not available in your region.',
       code: 'BLOCKED_REGION',
+    });
+  }
+
+  // Screen the DESTINATION WALLET, not just the country: a listed address
+  // funding itself from a permitted jurisdiction is the case geo-blocking
+  // misses. Fail CLOSED — a ramp session is a new commitment. Same
+  // status/code/message as the Coinbase and MoonPay routes
+  // (src/lib/ramp-wallet-screen.ts). Nothing is signed before this point.
+  const walletScreen = await screenRampWallet(body.walletAddress.trim());
+  if (walletScreen.refused) {
+    console.warn(`[transak/session] wallet screen refused (${walletScreen.reason})`);
+    return res.status(walletScreen.status).json({
+      provider: 'transak',
+      error: walletScreen.error,
+      message: walletScreen.message,
     });
   }
 

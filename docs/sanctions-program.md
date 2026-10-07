@@ -1,6 +1,6 @@
 # Sanctions Program (internal)
 
-_Last updated: 2026-07-05. Owner: founder. Roadmap:
+_Last updated: 2026-10-07. Owner: founder. Roadmap:
 [compliance-roadmap-cex-dex-non-kyc.md](compliance-roadmap-cex-dex-non-kyc.md) §A1.
 Escalation: [incident-playbook.md](incident-playbook.md)._
 
@@ -16,6 +16,12 @@ against Njangi's blocked-jurisdiction list (Iran, North Korea, Syria, Cuba,
 and embargoed Ukrainian regions: Crimea, Sevastopol, Donetsk, Luhansk).
 Syria stays on the list; counsel to confirm the current legal basis. We do
 not screen names — we do not collect any.
+
+The fiat ramp session routes use the same list (`src/lib/ramp-geo.ts`
+derives it from `src/lib/embargo.ts`, Ukrainian regions included) **plus
+Russia and Belarus** (`RAMP_ONLY_BLOCKED_COUNTRIES`): sectoral programs the
+hosted ramps refuse anyway, kept from the previous ramp list — owner to
+confirm. That addition is ramp-only; the app-wide geo-block is unchanged.
 
 ## Where (choke points)
 
@@ -34,20 +40,26 @@ this compatible with the non-custodial posture.
 |---------|-----------|-------|-----------|
 | **Login / proof issuance** | `screenAddress(addr,'proof_issuance')` in `api/zkLogin.ts` `handleCallback`, before proofs are returned → 403 | **Server (primary)** | open |
 | Circle join | `screenAddress(addr,'circle_join', {failClosed:true})` in `api/join-requests/create.ts` before any DB write | Server | **closed** |
-| Ramp session | `screenAddress(wallet,'ramp_session', {failClosed:true})` in `api/onramp/*/session.ts` | Server | **closed** |
+| Ramp session (Coinbase, MoonPay, Transak) | `screenRampWallet(wallet)` → `screenAddress(wallet,'ramp_session', {failClosed:true})` in all three `api/onramp/*/session.ts`, after the geo check and before any signed URL or session token is minted (`src/lib/ramp-wallet-screen.ts`). Ramps are OFF in production (`NEXT_PUBLIC_*_ENABLED=false`). | Server | **closed** |
+| Ramp session (geo) | `isSanctionedCountry(country, region)` on `x-vercel-ip-country` / `-region` (Transak also checks the client-supplied `countryCode`) → 403 `BLOCKED_REGION` | Server | n/a |
 | WhatsApp link | `screenAddress(addr,'whatsapp_link')` in `api/whatsapp/admin-link-circle.ts` before the Walrus upload | Server | open |
 | Circle create | `screenAddress(addr,'circle_create')` in `api/zkLogin.ts` | **Vestigial** — inside `sendTransaction`, unreachable for current sessions. Covered by proof issuance. | n/a |
 | Goal-pool create / escrow open | `preflightSanctionsCheck()` → `GET /api/sanctions/check` | Client preflight (UX only — these sign client-side straight to RPC) | n/a |
 | App routes (pages) | `src/middleware.ts` geo-block → `/restricted` | Edge | n/a |
 | API choke points | `isEmbargoedHeaders()` → 403 `EMBARGOED_REGION` | Server | n/a |
 
+_History: until 2026-10-07 only the Coinbase route ran the wallet screen;
+MoonPay and Transak checked the IP country alone. Closed before any ramp is
+enabled in production._
+
 **Why the fail modes differ.** New commitments (join, ramp) fail CLOSED: an
 unscreened commitment cannot be undone, and nothing is stranded by asking the
-member to retry. Login, claim, refund and recovery fail OPEN, because those
-reach funds a member has *already* committed — failing them closed during an
-outage would trap money, which is a worse compliance outcome than a delayed
-screen. The 2026-07-21 Neon outage is the concrete case: a fail-closed login
-would have locked every user out of their own funds for twelve days.
+member to retry. Login (proof issuance) and the WhatsApp link fail OPEN — as
+would claim, refund and recovery, which reach funds a member has *already*
+committed — because failing them closed during an outage would trap money,
+which is a worse compliance outcome than a delayed screen. The 2026-07-21
+Neon outage is the concrete case: a fail-closed login would have locked every
+user out of their own funds for twelve days.
 
 A caller blocked by fail-closed gets `SCREENING_UNAVAILABLE` (503), not
 `SANCTIONS_BLOCKED` (403) — an innocent user must not be told they are banned
@@ -95,17 +107,26 @@ use Njangi On-Chain.") with stable codes (`SANCTIONS_BLOCKED`,
 
 ## Fail mode and compensations
 
-Screening **fails open** on infrastructure errors (house precedent; if
-Postgres is down the surrounding action fails anyway). Compensations:
+The fail mode is chosen per surface by the caller (`ScreenOptions.failClosed`
+in `src/lib/sanctions.ts`). "Cannot run" means: flag off, no Postgres, list
+not loaded, or the query failed.
+
+| Surface | When screening cannot run |
+|---------|---------------------------|
+| Circle join; ramp session (Coinbase, MoonPay, Transak) | **Fail CLOSED** — 503 `SCREENING_UNAVAILABLE` ("We could not complete a required compliance check. Please try again shortly."). Nothing is written, minted or signed. |
+| Login / proof issuance; WhatsApp link | **Fail OPEN** — the action proceeds and the decision is logged as `error_fail_open`. |
+
+A **positive hit is never fail-open** — a match always blocks, in both
+modes, even if the audit write fails.
+
+Compensations for the fail-open surfaces:
 
 1. Every decision (pass / blocked / error_fail_open) is written to
-   `sanctions_screen_log`; fail-opens also `console.error` loudly
+   `sanctions_screen_log`; outages also `console.error` loudly
    (Vercel log drain = evidence trail).
 2. The weekly cron runs a **retro-sweep**: recent pass/fail-open log rows
    are re-joined against the fresh list; hits are logged as
    `retro_sweep`/`blocked` and escalate per the incident playbook.
-3. A **positive hit is never fail-open** — a match always blocks, even if
-   the audit write fails.
 
 Kill switches `SANCTIONS_SCREENING_ENABLED` / `SANCTIONS_GEO_BLOCK_ENABLED`
 are **default-ON**; setting either to `false` triggers a `validate:env`

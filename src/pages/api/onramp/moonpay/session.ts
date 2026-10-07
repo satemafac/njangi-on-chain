@@ -14,6 +14,7 @@ import {
   type MoonPayBaseCurrency,
 } from '../../../../services/moonpay-service';
 import { isSanctionedCountry } from '../../../../lib/ramp-geo';
+import { screenRampWallet } from '@/lib/ramp-wallet-screen';
 import {
   getDriftStatusForAddress,
   addressDriftErrorBody,
@@ -46,7 +47,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const body = (req.body || {}) as RequestBody;
-  if (!body.walletAddress || !body.preferredAssetIntent) {
+  // A non-string walletAddress is "missing" here: the wallet screen below
+  // normalizes the string and must never be handed something else.
+  if (
+    typeof body.walletAddress !== 'string' ||
+    !body.walletAddress.trim() ||
+    !body.preferredAssetIntent
+  ) {
     return res.status(400).json({
       provider: 'moonpay',
       error: 'INVALID_REQUEST',
@@ -54,17 +61,36 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 
-  // Sanctions screen on the edge-detected IP country: refuse to mint ramp
-  // sessions for comprehensively sanctioned jurisdictions (coordinator-level
-  // block, ahead of the provider's own KYC).
+  // Sanctions screen on the edge-detected IP country — and, for UA, the
+  // region header, which is what makes the embargoed Ukrainian regions
+  // matchable (embargo.ts). Refuse to mint ramp sessions for blocked
+  // jurisdictions (coordinator-level block, ahead of the provider's own KYC).
   const ipCountry = (req.headers['x-vercel-ip-country'] as string | undefined)
     ?.trim()
     .toUpperCase();
-  if (isSanctionedCountry(ipCountry)) {
+  const ipRegion = (req.headers['x-vercel-ip-country-region'] as string | undefined)
+    ?.trim()
+    .toUpperCase();
+  if (isSanctionedCountry(ipCountry, ipRegion)) {
     return res.status(403).json({
       provider: 'moonpay',
       error: 'BLOCKED_REGION',
       message: 'This service is not available in your region.',
+    });
+  }
+
+  // Screen the DESTINATION WALLET, not just the country: a listed address
+  // funding itself from a permitted jurisdiction is the case geo-blocking
+  // misses. Fail CLOSED — a ramp session is a new commitment. Same
+  // status/code/message as the Coinbase and Transak routes
+  // (src/lib/ramp-wallet-screen.ts). Nothing is signed before this point.
+  const walletScreen = await screenRampWallet(body.walletAddress);
+  if (walletScreen.refused) {
+    console.warn(`[moonpay/session] wallet screen refused (${walletScreen.reason})`);
+    return res.status(walletScreen.status).json({
+      provider: 'moonpay',
+      error: walletScreen.error,
+      message: walletScreen.message,
     });
   }
 

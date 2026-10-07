@@ -20,6 +20,11 @@
 // the server-side secrets each provider needs (e.g. TRANSAK_API_SECRET), so
 // a flag-enabled but secret-less provider never appears in the picker.
 
+// embargo.ts is dependency-free (it is also the edge-middleware import), so
+// pulling it into this client-shared module adds nothing to the browser
+// bundle. It must stay the only source of the embargoed countries/regions.
+import { EMBARGOED_COUNTRIES, isEmbargoedLocation } from './embargo';
+
 export type RampProviderId = 'coinbase' | 'moonpay' | 'transak';
 
 export interface RampProviderFlags {
@@ -63,14 +68,34 @@ export function isCemacCountry(country: string | null | undefined): boolean {
 }
 
 /**
- * Jurisdictions the ramp flow is blocked in, drawn from the US OFAC
- * sanctions programs the ramp partners themselves are bound by: Iran, North
- * Korea, Cuba, Syria, plus Russia/Belarus (broad 2022+ programs the ramps
- * block anyway). Syria stays on the list; counsel to confirm the current
- * legal basis.
- * Crimea/Donetsk/Luhansk are region-level within UA and cannot be expressed
- * as ISO-3166 alpha-2 — the ramps' own KYC handles those; we block at the
- * country level only.
+ * Ramp-ONLY additions on top of the OFAC embargo list in embargo.ts.
+ *
+ * Russia and Belarus are sectoral programs, not comprehensive embargoes, so
+ * the app-wide geo-block (embargo.ts, middleware, API choke points)
+ * deliberately leaves them open. The hosted ramps refuse them regardless —
+ * the list has carried them since 2026-06 as "broad 2022+ programs the
+ * ramps block anyway" — so sending a user there would only hand them a
+ * partner refusal after KYC. Kept from the previous list; owner to confirm.
+ *
+ * Widening the app-wide block is an owner/counsel decision and does NOT
+ * happen here: this set must never feed embargo.ts.
+ */
+export const RAMP_ONLY_BLOCKED_COUNTRIES: ReadonlySet<string> = new Set([
+  'RU', // Russia
+  'BY', // Belarus
+]);
+
+/**
+ * Jurisdictions the ramp flow is blocked in: Njangi's blocked-jurisdiction
+ * list (embargo.ts — Iran, North Korea, Syria, Cuba; Syria stays on the
+ * list, counsel to confirm the current legal basis) plus the ramp-only
+ * extras above. Derived, not copied, so the two can never disagree about
+ * the embargoed countries.
+ *
+ * The embargoed Ukrainian regions (Crimea, Sevastopol, Donetsk, Luhansk)
+ * are region-level within UA and cannot live in a country set; they are
+ * matched by `isSanctionedCountry` from the `x-vercel-ip-country-region`
+ * header, exactly as embargo.ts does for the rest of the app.
  *
  * As the ramp COORDINATOR (not the money handler) we should not route users
  * from these jurisdictions to on-ramps at all: `providerOrderForCountry`
@@ -78,17 +103,25 @@ export function isCemacCountry(country: string | null | undefined): boolean {
  * before any provider widget is offered.
  */
 export const SANCTIONED_COUNTRIES: ReadonlySet<string> = new Set([
-  'IR', // Iran
-  'KP', // North Korea
-  'CU', // Cuba
-  'SY', // Syria
-  'RU', // Russia
-  'BY', // Belarus
+  ...EMBARGOED_COUNTRIES,
+  ...RAMP_ONLY_BLOCKED_COUNTRIES,
 ]);
 
-export function isSanctionedCountry(country: string | null | undefined): boolean {
+/**
+ * True when the ramp flow is blocked for this location. `region` is the
+ * ISO-3166-2 subdivision (Vercel's `x-vercel-ip-country-region`); it only
+ * matters for UA, where the embargo is region-level. Callers that have no
+ * subdivision (a client-supplied country) omit it and get the country-level
+ * answer.
+ */
+export function isSanctionedCountry(
+  country: string | null | undefined,
+  region?: string | null,
+): boolean {
   const normalized = normalizeCountryCode(country);
-  return normalized !== null && SANCTIONED_COUNTRIES.has(normalized);
+  if (normalized === null) return false;
+  if (SANCTIONED_COUNTRIES.has(normalized)) return true;
+  return isEmbargoedLocation(normalized, region);
 }
 
 /**
