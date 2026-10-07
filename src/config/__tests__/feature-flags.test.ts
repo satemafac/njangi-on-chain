@@ -14,6 +14,7 @@ import {
   isEscrowRoundGuardEnabled,
   isFinalizedEscrowCollectEnabled,
   isTimedEscrowEntriesEnabled,
+  isCircleWindDownEnabled,
   isGoalPoolsEnabled,
   disabledResponse,
 } from '@/config/feature-flags';
@@ -139,6 +140,37 @@ describe('escrow entry-point flags', () => {
     for (const v of ['false', '1', 'yes', 'enabled', '']) {
       process.env.NEXT_PUBLIC_ESCROW_FINALIZED_COLLECT_ENABLED = v;
       expect(isFinalizedEscrowCollectEnabled()).toBe(false);
+    }
+  });
+});
+
+describe('planned-close flag', () => {
+  // "Close the circle" builds complete_circle, which only the package that
+  // carries it has; before that publish the flag must stay off or the whole
+  // close transaction (and the deposit refund chained with it) aborts.
+  const KEY = 'NEXT_PUBLIC_CIRCLE_WIND_DOWN_ENABLED';
+  let original: string | undefined;
+
+  beforeEach(() => {
+    original = process.env[KEY];
+    delete process.env[KEY];
+  });
+
+  afterEach(() => {
+    if (original === undefined) delete process.env[KEY];
+    else process.env[KEY] = original;
+  });
+
+  it('defaults to OFF when unset', () => {
+    expect(isCircleWindDownEnabled()).toBe(false);
+  });
+
+  it('enables only on an explicit true', () => {
+    process.env[KEY] = 'true';
+    expect(isCircleWindDownEnabled()).toBe(true);
+    for (const v of ['false', '1', 'yes', 'enabled', '']) {
+      process.env[KEY] = v;
+      expect(isCircleWindDownEnabled()).toBe(false);
     }
   });
 });

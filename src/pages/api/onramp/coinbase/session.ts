@@ -11,7 +11,7 @@ import {
   hashForLogs,
 } from '@/lib/onramp-logging';
 import { isSanctionedCountry } from '@/lib/ramp-geo';
-import { screenAddress } from '@/lib/sanctions';
+import { screenRampWallet } from '@/lib/ramp-wallet-screen';
 import {
   getDriftStatusForAddress,
   addressDriftErrorBody,
@@ -311,11 +311,15 @@ export default async function handler(
 
   // Sanctions screen on the edge-detected IP country — the body `country`
   // is client-supplied and could claim 'US' from anywhere. Coordinator-level
-  // block ahead of Coinbase's own KYC.
+  // block ahead of Coinbase's own KYC. The region header is what makes the
+  // embargoed Ukrainian regions matchable (embargo.ts).
   const edgeIpCountry = (req.headers['x-vercel-ip-country'] as string | undefined)
     ?.trim()
     .toUpperCase();
-  if (isSanctionedCountry(edgeIpCountry)) {
+  const edgeIpRegion = (req.headers['x-vercel-ip-country-region'] as string | undefined)
+    ?.trim()
+    .toUpperCase();
+  if (isSanctionedCountry(edgeIpCountry, edgeIpRegion)) {
     logger.info('session_blocked_region', {
       ipHash: hashForLogs(clientIp),
     });
@@ -378,24 +382,18 @@ export default async function handler(
   // leaves the case this control exists for: a listed address funding itself
   // from a permitted jurisdiction. Fail CLOSED — starting a ramp session is a
   // new commitment, and an unscreened one cannot be undone once the partner
-  // has delivered funds on chain.
-  const walletScreen = await screenAddress(
-    parsedBody.data.walletAddress,
-    'ramp_session',
-    { failClosed: true },
-  );
-  if (walletScreen.blocked) {
+  // has delivered funds on chain. Shared with the MoonPay and Transak routes
+  // (src/lib/ramp-wallet-screen.ts) so the three refusals cannot drift.
+  const walletScreen = await screenRampWallet(parsedBody.data.walletAddress);
+  if (walletScreen.refused) {
     logger.warn('session_sanctions_blocked', {
-      reason: walletScreen.reason ?? 'hit',
+      reason: walletScreen.reason,
       walletAddress: maskWalletAddress(parsedBody.data.walletAddress),
     });
-    const unavailable = walletScreen.reason === 'unavailable';
-    return res.status(unavailable ? 503 : 403).json({
+    return res.status(walletScreen.status).json({
       provider: 'coinbase',
-      error: unavailable ? 'SCREENING_UNAVAILABLE' : 'SANCTIONS_BLOCKED',
-      message: unavailable
-        ? 'We could not complete a required compliance check. Please try again shortly.'
-        : "This wallet can't use Njangi On-Chain.",
+      error: walletScreen.error,
+      message: walletScreen.message,
       fallbackProvider: null,
     });
   }

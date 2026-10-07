@@ -54,6 +54,13 @@ describe('resolveRoundMemberStatus', () => {
     },
   );
 
+  it('treats a stalled round as still open: paying in works until someone cancels it', () => {
+    expect(status('stalled')).toBe('due');
+    expect(status('stalled', { userHasPaid: true })).toBe('paid');
+    expect(status('stalled', { isUserRecipient: true })).toBe('recipient');
+    expect(status('stalled', { isRoundMember: false })).toBe('not-in-round');
+  });
+
   it('separates "no round" from "could not read the round"', () => {
     expect(status('no-round-open')).toBe('no-round');
     // The panel reports a failed read as stage no-round-open + loadError.

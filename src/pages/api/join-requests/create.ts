@@ -5,6 +5,7 @@ import databaseService from '../../../services/database-service';
 import { resolveCircleLifecycleState } from '../../../lib/circle-chain';
 import { getClientIp } from '../../../lib/client-ip';
 import { consumeRateLimit } from '../../../lib/rate-limit';
+import { rateLimitKey } from '../../../lib/rate-limit-key';
 import { getCurrentRpcUrl } from '../../../services/network-config';
 import { getPooledSuiClient } from '../../../services/sui-rpc-failover';
 import { screenAddress, sanctionsErrorBody } from '../../../lib/sanctions';
@@ -93,7 +94,7 @@ export default async function handler(
 
     // Throttle before any RPC/database work.
     const rateOutcome = await consumeRateLimit({
-      key: `join-request:${getClientIp(req)}:${userAddress.toLowerCase()}`,
+      key: rateLimitKey('join-request', getClientIp(req), userAddress.toLowerCase()),
       limit: REQUESTS_PER_MINUTE,
       windowMs: MINUTE_WINDOW_MS,
     });

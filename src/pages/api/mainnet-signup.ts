@@ -3,6 +3,7 @@ import { z } from 'zod';
 import mainnetSignupDatabase from '../../services/mainnet-signup-database';
 import { getClientIp } from '../../lib/client-ip';
 import { consumeRateLimit } from '../../lib/rate-limit';
+import { rateLimitKey } from '../../lib/rate-limit-key';
 
 type ResponseData = {
   success: boolean;
@@ -90,7 +91,7 @@ async function handleSignup(
 
     // Throttle per IP + claimed identity before any database work.
     const rateOutcome = await consumeRateLimit({
-      key: `mainnet-signup:${getClientIp(req)}:${userAddress?.toLowerCase() || normalizedEmail}`,
+      key: rateLimitKey('mainnet-signup', getClientIp(req), userAddress?.toLowerCase() || normalizedEmail),
       limit: REQUESTS_PER_MINUTE,
       windowMs: MINUTE_WINDOW_MS,
     });

@@ -63,4 +63,25 @@ describe('the create form sends the chosen coin', () => {
     expect(page).not.toMatch(/switch (?:the circle|it) to SUI/i);
     expect(page).not.toMatch(/switch it on the manage page/i);
   });
+
+  // The price service never returns null — when every source is down it
+  // hands out a hardcoded 3.71 — so "price !== null" let SUI circles be
+  // pinned to a number nobody quoted (sui-price-reading.ts).
+  it('gates SUI on a usable quote, never on the price merely existing', () => {
+    expect(page).toContain('setIsPriceAvailable(isUsableSuiPrice(reading))');
+    expect(page).not.toContain('setIsPriceAvailable(price !== null)');
+  });
+
+  it('refuses to submit a SUI circle without a usable quote, and lets USDC through', () => {
+    expect(page).toContain("if (circleCoin === 'SUI' && !isPriceAvailable) {");
+    expect(page).not.toMatch(/^\s*if \(!isPriceAvailable\) \{\s*$/m);
+  });
+
+  it("shows a stale quote its age instead of calling it today's price", () => {
+    expect(page).toContain("t('create.coinHintSuiStale', { age: formatSuiPriceAge(suiPriceStaleAge) })");
+  });
+
+  it('re-converts the SUI amounts when the price changes, so a fallback never lingers in them', () => {
+    expect(page).toContain('}, [formData.selectedCurrency, suiPrice]);');
+  });
 });

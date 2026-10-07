@@ -289,6 +289,22 @@ const STATEMENTS = [
           );`,
   },
   {
+    // October 2026 privacy fix: until then the API routes interpolated the
+    // raw client IP (often with an email or wallet address) into the bucket,
+    // and a bucket is only replaced when it is hit again, so those pairs
+    // stayed in this table indefinitely. src/lib/rate-limit-key.ts now
+    // writes `<scope>:<hmac-sha256 hex>` only. Delete every row that does
+    // not end in 64 hex characters (the old shape), and anything older than
+    // the limiter's 24-hour retention; index window_start for the hourly
+    // sweep in src/lib/rate-limit.ts. Idempotent: hashed rows never match
+    // the first DELETE, and a re-run finds nothing left to remove.
+    name: 'rate_limits_purge_raw_keys',
+    sql: `DELETE FROM rate_limits WHERE bucket !~ ':[0-9a-f]{64}$';
+          DELETE FROM rate_limits WHERE window_start < NOW() - INTERVAL '24 hours';
+          CREATE INDEX IF NOT EXISTS rate_limits_window_start_idx
+            ON rate_limits (window_start);`,
+  },
+  {
     name: 'webhook_events',
     sql: `CREATE TABLE IF NOT EXISTS webhook_events (
             id BIGSERIAL PRIMARY KEY,

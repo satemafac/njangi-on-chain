@@ -397,6 +397,16 @@ for (const [key, reason] of [
   }
 }
 
+// October 2026: rate-limit buckets are `<scope>:<hmac>` of the client IP (+
+// email/address) keyed with RATE_LIMIT_KEY_SALT, falling back to
+// LEGAL_ACCEPT_IP_SALT. With neither set the app still runs (unsalted
+// SHA-256 + a runtime warning), so this is a warning, not an error.
+if (!read('RATE_LIMIT_KEY_SALT') && !read('LEGAL_ACCEPT_IP_SALT')) {
+  warnings.push(
+    'RATE_LIMIT_KEY_SALT and LEGAL_ACCEPT_IP_SALT are both unset: rate-limit keys fall back to unsalted SHA-256 of the client IP. Run npm run generate:secrets.',
+  );
+}
+
 if (fs.existsSync(path.join(repoRoot, 'whatsapp-bot-backend', '.env.local'))) {
   warnings.push('whatsapp-bot-backend/.env.local still exists. The bot backend is deprecated (folded into the app); delete the file.');
 }

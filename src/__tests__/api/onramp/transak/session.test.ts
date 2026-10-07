@@ -7,6 +7,15 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import handler from '@/pages/api/onramp/transak/session';
 
+const mockScreenAddress = jest.fn();
+
+// The route screens the destination wallet and fails CLOSED, so without a
+// stub every test here would 503 on "Postgres not configured" rather than
+// exercising the path it cares about.
+jest.mock('@/lib/sanctions', () => ({
+  screenAddress: (...args: unknown[]) => mockScreenAddress(...args),
+}));
+
 type MockResponse = NextApiResponse & {
   statusCode: number;
   body: unknown;
@@ -18,11 +27,12 @@ const MEMBER_WALLET =
 function createMockRequest(input: {
   method?: string;
   body?: unknown;
+  headers?: Record<string, string>;
 }): NextApiRequest {
   return {
     method: input.method ?? 'POST',
     body: input.body ?? {},
-    headers: {},
+    headers: input.headers ?? {},
   } as unknown as NextApiRequest;
 }
 
@@ -73,6 +83,7 @@ describe('POST /api/onramp/transak/session', () => {
     process.env.NEXT_PUBLIC_TRANSAK_ENABLED = 'true';
     process.env.NEXT_PUBLIC_TRANSAK_API_KEY = 'pk_transak_test';
     process.env.TRANSAK_API_SECRET = 'transak-secret';
+    mockScreenAddress.mockResolvedValue({ blocked: false, listVersion: '2026-10-01' });
     jest.spyOn(console, 'error').mockImplementation(() => {});
     jest.spyOn(console, 'warn').mockImplementation(() => {});
   });
@@ -234,5 +245,115 @@ describe('POST /api/onramp/transak/session', () => {
     expect(res.statusCode).toBe(200);
     const body = res.body as { url: string };
     expect(new URL(body.url).origin).toBe('https://global.transak.com');
+  });
+
+  // --- Geo block: embargo.ts list + ramp-only extras + UA regions ---------
+
+  it.each(['IR', 'KP', 'SY', 'CU', 'RU', 'BY'])(
+    'refuses a blocked IP country (%s) before screening or minting',
+    async (country) => {
+      const res = createMockResponse();
+      await handler(
+        createMockRequest({
+          body: validBody(),
+          headers: { 'x-vercel-ip-country': country },
+        }),
+        res,
+      );
+      expect(res.statusCode).toBe(403);
+      expect(res.body).toEqual(expect.objectContaining({ code: 'BLOCKED_REGION' }));
+      expect(res.body).not.toHaveProperty('url');
+      expect(mockScreenAddress).not.toHaveBeenCalled();
+    },
+  );
+
+  it('refuses a blocked client-supplied countryCode too', async () => {
+    const res = createMockResponse();
+    await handler(createMockRequest({ body: validBody({ countryCode: 'ru' }) }), res);
+    expect(res.statusCode).toBe(403);
+    expect(res.body).toEqual(expect.objectContaining({ code: 'BLOCKED_REGION' }));
+    expect(mockScreenAddress).not.toHaveBeenCalled();
+  });
+
+  it('refuses an embargoed Ukrainian region from the region header', async () => {
+    const res = createMockResponse();
+    await handler(
+      createMockRequest({
+        body: validBody(),
+        headers: { 'x-vercel-ip-country': 'UA', 'x-vercel-ip-country-region': '43' },
+      }),
+      res,
+    );
+    expect(res.statusCode).toBe(403);
+    expect(res.body).toEqual(expect.objectContaining({ code: 'BLOCKED_REGION' }));
+    expect(mockScreenAddress).not.toHaveBeenCalled();
+  });
+
+  it('leaves the rest of Ukraine open', async () => {
+    const res = createMockResponse();
+    await handler(
+      createMockRequest({
+        body: validBody(),
+        headers: { 'x-vercel-ip-country': 'UA', 'x-vercel-ip-country-region': '30' },
+      }),
+      res,
+    );
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toHaveProperty('url');
+  });
+
+  // --- Wallet sanctions screen (same shape as the Coinbase route) ---------
+
+  it('refuses a listed destination wallet and mints no URL', async () => {
+    // Geo-blocking alone misses this: a listed address funding itself from a
+    // permitted jurisdiction. Same status, code and copy as the Coinbase route.
+    mockScreenAddress.mockResolvedValue({
+      blocked: true,
+      listVersion: '2026-10-01',
+      reason: 'hit',
+    });
+
+    const res = createMockResponse();
+    await handler(createMockRequest({ body: validBody() }), res);
+
+    expect(res.statusCode).toBe(403);
+    expect(res.body).toEqual({
+      provider: 'transak',
+      error: 'SANCTIONS_BLOCKED',
+      message: "This wallet can't use Njangi On-Chain.",
+    });
+  });
+
+  it('fails CLOSED with a retryable 503 when screening is unavailable', async () => {
+    // Distinct from a match: the user is not refused, the check could not
+    // run. Saying 403 here would tell an innocent user they are banned.
+    mockScreenAddress.mockResolvedValue({
+      blocked: true,
+      listVersion: null,
+      reason: 'unavailable',
+    });
+
+    const res = createMockResponse();
+    await handler(createMockRequest({ body: validBody() }), res);
+
+    expect(res.statusCode).toBe(503);
+    expect(res.body).toEqual({
+      provider: 'transak',
+      error: 'SCREENING_UNAVAILABLE',
+      message:
+        'We could not complete a required compliance check. Please try again shortly.',
+    });
+  });
+
+  it('screens the wallet as a new commitment (failClosed) and then mints the URL', async () => {
+    const res = createMockResponse();
+    await handler(createMockRequest({ body: validBody() }), res);
+
+    expect(mockScreenAddress).toHaveBeenCalledWith(MEMBER_WALLET, 'ramp_session', {
+      failClosed: true,
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.body as { url: string };
+    expect(new URL(body.url).searchParams.get('walletAddress')).toBe(MEMBER_WALLET);
   });
 });

@@ -1729,4 +1729,176 @@ module njangi::njangi_v11_tests {
         circles::admin_remove_member_asset<TESTUSDC>(&mut circle, BOB, &mut wallet, &clock, ts::ctx(&mut scenario));
         abort 0
     }
+
+    // ==========================================================
+    // One member, one seat
+    // ==========================================================
+
+    #[test]
+    fun test_set_rotation_position_moves_a_seated_member() {
+        // Seating a member who already holds a seat vacates the old one:
+        // the order ends up naming that member exactly once.
+        let (mut scenario, clock) = start();
+        setup_registry(&mut scenario);
+        create_usdc_circle(&mut scenario, &clock);   // max_members 5
+        seat_bob_and_carol(&mut scenario, &clock);   // ADMIN 0, BOB 1, CAROL 2
+
+        ts::next_tx(&mut scenario, ADMIN);
+        let mut circle = ts::take_shared<Circle>(&scenario);
+        circles::set_rotation_position(&mut circle, BOB, 3, &clock, ts::ctx(&mut scenario));
+        let order = circles::get_rotation_order(&circle);
+        assert!(vector::length(&order) == 4, 1);
+        assert!(*vector::borrow(&order, 0) == ADMIN, 2);
+        assert!(*vector::borrow(&order, 1) == @0x0, 3);
+        assert!(*vector::borrow(&order, 2) == CAROL, 4);
+        assert!(*vector::borrow(&order, 3) == BOB, 5);
+        assert!(members::get_payout_position(circles::get_member(&circle, BOB)) == option::some(3), 6);
+        ts::return_shared(circle);
+        finish(scenario, clock);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = 94, location = njangi::njangi_circles)]
+    fun test_reorder_refuses_a_member_in_two_seats() {
+        let (mut scenario, clock) = start();
+        setup_registry(&mut scenario);
+        create_usdc_circle(&mut scenario, &clock);
+        seat_bob_and_carol(&mut scenario, &clock);
+        ts::next_tx(&mut scenario, ADMIN);
+        let mut circle = ts::take_shared<Circle>(&scenario);
+        circles::reorder_rotation_positions(
+            &mut circle,
+            vector[ADMIN, BOB, CAROL, ADMIN],
+            &clock,
+            ts::ctx(&mut scenario)
+        );
+        abort 0
+    }
+
+    // ==========================================================
+    // Planned close: complete_circle between laps
+    // ==========================================================
+
+    /// Runs one full lap on the active USDC circle: ADMIN, BOB and CAROL
+    /// each collect once, after which the circle pauses with no round open.
+    fun run_full_usdc_lap(scenario: &mut Scenario, clock: &Clock) {
+        let r1 = open_round_as<TESTUSDC>(scenario, ADMIN, clock);
+        contribute_round_as<TESTUSDC>(scenario, BOB, r1, USDC_CONTRIB, clock);
+        contribute_round_as<TESTUSDC>(scenario, CAROL, r1, USDC_CONTRIB, clock);
+        collect_and_advance<TESTUSDC>(scenario, ADMIN, r1, clock);
+        let r2 = open_round_as<TESTUSDC>(scenario, ADMIN, clock);
+        contribute_round_as<TESTUSDC>(scenario, ADMIN, r2, USDC_CONTRIB, clock);
+        contribute_round_as<TESTUSDC>(scenario, CAROL, r2, USDC_CONTRIB, clock);
+        collect_and_advance<TESTUSDC>(scenario, BOB, r2, clock);
+        let r3 = open_round_as<TESTUSDC>(scenario, ADMIN, clock);
+        contribute_round_as<TESTUSDC>(scenario, ADMIN, r3, USDC_CONTRIB, clock);
+        contribute_round_as<TESTUSDC>(scenario, BOB, r3, USDC_CONTRIB, clock);
+        collect_and_advance<TESTUSDC>(scenario, CAROL, r3, clock);
+    }
+
+    fun complete_as(scenario: &mut Scenario, who: address, clock: &Clock) {
+        ts::next_tx(scenario, who);
+        let mut circle = ts::take_shared<Circle>(scenario);
+        circles::complete_circle(&mut circle, clock, ts::ctx(scenario));
+        ts::return_shared(circle);
+    }
+
+    #[test]
+    fun test_admin_completes_a_paused_circle_and_every_deposit_comes_back() {
+        let (mut scenario, clock) = start();
+        active_usdc_circle(&mut scenario, &clock);
+        run_full_usdc_lap(&mut scenario, &clock);
+
+        ts::next_tx(&mut scenario, STRANGER);
+        let circle = ts::take_shared<Circle>(&scenario);
+        assert!(circles::is_paused_after_cycle(&circle), 1);
+        assert!(option::is_none(&circles::open_round(&circle)), 2);
+        assert!(!circles::is_completed(&circle), 3);
+        ts::return_shared(circle);
+
+        complete_as(&mut scenario, ADMIN, &clock);
+
+        ts::next_tx(&mut scenario, STRANGER);
+        let circle = ts::take_shared<Circle>(&scenario);
+        assert!(!circles::is_circle_active(&circle), 4);
+        assert!(circles::is_completed(&circle), 5);
+        let record = option::destroy_some(circles::completion(&circle));
+        assert!(circles::completion_by(&record) == ADMIN, 6);
+        assert!(circles::completion_time_ms(&record) == START_MS, 7);
+        assert!(circles::get_recovery_state(&circle) == 2, 8); // STOPPED, no coin moved yet
+        ts::return_shared(circle);
+
+        // The same permissionless, rule-fixed refund as after an emergency
+        // stop: each deposit to the member who paid it, nothing to anyone else.
+        refund_asset_as<TESTUSDC>(&mut scenario, STRANGER, &clock);
+        assert_received<TESTUSDC>(&mut scenario, ADMIN, USDC_DEPOSIT, 9);
+        assert_received<TESTUSDC>(&mut scenario, BOB, USDC_DEPOSIT, 10);
+        assert_received<TESTUSDC>(&mut scenario, CAROL, USDC_DEPOSIT, 11);
+        assert_received_nothing<TESTUSDC>(&mut scenario, STRANGER, 12);
+
+        ts::next_tx(&mut scenario, STRANGER);
+        let circle = ts::take_shared<Circle>(&scenario);
+        let wallet = ts::take_shared<CustodyWallet>(&scenario);
+        assert!(circles::get_recovery_state(&circle) == 3, 13); // REFUNDED
+        assert!(custody::deposit_balance_value<TESTUSDC>(&wallet) == 0, 14);
+        ts::return_shared(wallet);
+        ts::return_shared(circle);
+        finish(scenario, clock);
+    }
+
+    #[test]
+    fun test_member_claims_own_deposit_after_completion() {
+        let (mut scenario, clock) = start();
+        active_usdc_circle(&mut scenario, &clock);
+        run_full_usdc_lap(&mut scenario, &clock);
+        complete_as(&mut scenario, ADMIN, &clock);
+
+        ts::next_tx(&mut scenario, BOB);
+        let mut circle = ts::take_shared<Circle>(&scenario);
+        let mut wallet = ts::take_shared<CustodyWallet>(&scenario);
+        circles::claim_own_refund<TESTUSDC>(&mut circle, &mut wallet, &clock, ts::ctx(&mut scenario));
+        ts::return_shared(wallet);
+        ts::return_shared(circle);
+        assert_received<TESTUSDC>(&mut scenario, BOB, USDC_DEPOSIT, 1);
+        // Nobody else moved: their deposits wait for them (or for refund_asset).
+        assert_received_nothing<TESTUSDC>(&mut scenario, STRANGER, 2);
+        finish(scenario, clock);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = 57, location = njangi::njangi_circles)]
+    fun test_complete_refused_while_a_round_is_in_flight() {
+        let (mut scenario, clock) = start();
+        active_usdc_circle(&mut scenario, &clock);
+        // Round 1 is open and funded by BOB: not paused, nothing to close.
+        let r1 = open_round_as<TESTUSDC>(&mut scenario, ADMIN, &clock);
+        contribute_round_as<TESTUSDC>(&mut scenario, BOB, r1, USDC_CONTRIB, &clock);
+        complete_as(&mut scenario, ADMIN, &clock);
+        abort 0
+    }
+
+    #[test]
+    #[expected_failure(abort_code = 7, location = njangi::njangi_circles)]
+    fun test_only_the_admin_completes() {
+        let (mut scenario, clock) = start();
+        active_usdc_circle(&mut scenario, &clock);
+        run_full_usdc_lap(&mut scenario, &clock);
+        complete_as(&mut scenario, BOB, &clock);
+        abort 0
+    }
+
+    #[test]
+    #[expected_failure(abort_code = 93, location = njangi::njangi_circles)]
+    fun test_complete_refused_once_stopped() {
+        let (mut scenario, clock) = start();
+        active_usdc_circle(&mut scenario, &clock);
+        pass_stop_vote(&mut scenario, &clock);
+        stop_as(&mut scenario, BOB, &clock);
+        ts::next_tx(&mut scenario, ADMIN);
+        let mut circle = ts::take_shared<Circle>(&scenario);
+        circles::set_paused_after_cycle_for_testing(&mut circle, true);
+        ts::return_shared(circle);
+        complete_as(&mut scenario, ADMIN, &clock);
+        abort 0
+    }
 }

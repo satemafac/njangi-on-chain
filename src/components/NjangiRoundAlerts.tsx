@@ -114,7 +114,11 @@ export function NjangiRoundAlerts({ circles, userAddress, network }: NjangiRound
             continue;
           }
           // Refunded: nothing is due until the admin opens the round again,
-          // and paying into this escrow aborts. (An expired claim ends here.)
+          // and paying into this escrow aborts. Both refund paths end here:
+          // an expired claim, and a stalled round a member cancelled
+          // (cancel_unfinalized_escrow* sets the same flag). A stalled round
+          // nobody has cancelled yet is still open, so its share-due alert
+          // below stands: paying in still works until someone cancels.
           if (state.refunded) continue;
 
           // Past its claim window a round is no longer ready to collect: its

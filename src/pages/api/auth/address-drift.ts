@@ -24,6 +24,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { getZkLoginSessionAccount } from '../../../lib/zklogin-session-registry';
 import { getDriftStatusForIdentity } from '../../../lib/zklogin-address-bindings';
 import { consumeRateLimit } from '../../../lib/rate-limit';
+import { rateLimitKey } from '../../../lib/rate-limit-key';
 import { getClientIp } from '../../../lib/client-ip';
 
 const REQUESTS_PER_WINDOW = 30;
@@ -36,7 +37,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const rateOutcome = await consumeRateLimit({
-    key: `address-drift:${getClientIp(req)}`,
+    key: rateLimitKey('address-drift', getClientIp(req)),
     limit: REQUESTS_PER_WINDOW,
     windowMs: WINDOW_MS,
   });

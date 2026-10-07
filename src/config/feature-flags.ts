@@ -159,6 +159,23 @@ export function isV11AssetTermsEnabled(): boolean {
 }
 
 /**
+ * Planned close: the organizer's "Close the circle" on a circle paused at the
+ * end of a lap (`njangi_circles::complete_circle`, chained with
+ * `refund_asset<T>` so every recorded deposit goes back to its member in the
+ * same transaction). Before this existed a circle had no ordinary ending:
+ * deposits came back only through the emergency-stop vote or the opt-in
+ * auto-release.
+ *
+ * Same rule as the flags above: this says which targets the client BUILDS.
+ * Flip it on only after the package carrying `complete_circle` is published
+ * on the active network — before then the call names a function that does
+ * not exist and the whole transaction aborts.
+ */
+export function isCircleWindDownEnabled(): boolean {
+  return flagEnabled(process.env.NEXT_PUBLIC_CIRCLE_WIND_DOWN_ENABLED);
+}
+
+/**
  * Goal pools: the non-rotating `njangi_goal_pool::GoalPool<T>` minted by the
  * "saving toward one goal" door on /create-circle (`buildOpenGoalPoolTx`,
  * client-signed straight to RPC).

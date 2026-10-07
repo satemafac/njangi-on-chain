@@ -63,6 +63,10 @@ describe('moveAbortUserMessage — contract refusals with copy of their own', ()
     ['njangi_cycle_escrow', 243, /coin settings/],
     ['njangi_circles', 92, /one-time update/],
     ['njangi_circles', 85, /coin and amounts are fixed/],
+    // complete_circle and the rotation seat rules (one seat per member).
+    ['njangi_circles', 57, /not paused at the end of a lap/],
+    ['njangi_circles', 94, /only one seat/],
+    ['njangi_circles', 95, /round is still open/],
   ])('%s %d has its own copy', (moduleName, code, copy) => {
     expect(moveAbortUserMessage(abortIn(moduleName, code))).toMatch(copy);
     expect(moveAbortUserMessage(new Error(abortIn(moduleName, code)))).toMatch(copy);
