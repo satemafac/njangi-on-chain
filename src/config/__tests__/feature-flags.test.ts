@@ -15,6 +15,7 @@ import {
   isFinalizedEscrowCollectEnabled,
   isTimedEscrowEntriesEnabled,
   isCircleWindDownEnabled,
+  isGoalPoolsEnabled,
   disabledResponse,
 } from '@/config/feature-flags';
 
@@ -170,6 +171,44 @@ describe('planned-close flag', () => {
     for (const v of ['false', '1', 'yes', 'enabled', '']) {
       process.env[KEY] = v;
       expect(isCircleWindDownEnabled()).toBe(false);
+    }
+  });
+});
+
+describe('goal pools flag', () => {
+  // Gates goal-pool CREATION for the first mainnet cohort (owner decision
+  // 2026-10-07, per counsel). Default-off is the whole point: a missing or
+  // mistyped value on mainnet must keep the door closed.
+  const KEY = 'NEXT_PUBLIC_GOAL_POOLS_ENABLED';
+  let original: string | undefined;
+
+  beforeEach(() => {
+    original = process.env[KEY];
+    delete process.env[KEY];
+  });
+
+  afterEach(() => {
+    if (original === undefined) delete process.env[KEY];
+    else process.env[KEY] = original;
+  });
+
+  it('defaults to OFF when unset', () => {
+    expect(isGoalPoolsEnabled()).toBe(false);
+  });
+
+  it('enables only on an explicit true', () => {
+    process.env[KEY] = 'true';
+    expect(isGoalPoolsEnabled()).toBe(true);
+    for (const v of ['TRUE', ' true ', 'True']) {
+      process.env[KEY] = v;
+      expect(isGoalPoolsEnabled()).toBe(true);
+    }
+  });
+
+  it('treats junk values as OFF', () => {
+    for (const v of ['false', '1', 'yes', 'on', 'enabled', 'tru', '', ' ']) {
+      process.env[KEY] = v;
+      expect(isGoalPoolsEnabled()).toBe(false);
     }
   });
 });

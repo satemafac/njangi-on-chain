@@ -175,6 +175,27 @@ export function isCircleWindDownEnabled(): boolean {
   return flagEnabled(process.env.NEXT_PUBLIC_CIRCLE_WIND_DOWN_ENABLED);
 }
 
+/**
+ * Goal pools: the non-rotating `njangi_goal_pool::GoalPool<T>` minted by the
+ * "saving toward one goal" door on /create-circle (`buildOpenGoalPoolTx`,
+ * client-signed straight to RPC).
+ *
+ * OFF for the first mainnet cohort. Owner decision 2026-10-07, stated in the
+ * counsel brief: the pool is not enabled for members without counsel's
+ * advice, so the deployment has to enforce it rather than rely on the
+ * Premium entitlement — with `NEXT_PUBLIC_BILLING_ENABLED=false` every
+ * organizer is treated as Premium, which left the option live for everyone.
+ * Testnet may set it true for pilot testing; mainnet leaves it unset.
+ *
+ * Gates CREATION only. Pools that already exist stay readable and
+ * operable (/pool/<id>, the dashboard's goal-pools section): a kill
+ * switch must never trap money, and the brief covers new pools, not the
+ * testnet ones already open.
+ */
+export function isGoalPoolsEnabled(): boolean {
+  return flagEnabled(process.env.NEXT_PUBLIC_GOAL_POOLS_ENABLED);
+}
+
 export function isRampEnabled(provider: 'coinbase' | 'moonpay' | 'transak'): boolean {
   switch (provider) {
     case 'coinbase':

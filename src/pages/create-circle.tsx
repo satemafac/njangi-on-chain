@@ -43,6 +43,7 @@ import { resolveComplianceConfigId, isComplianceGateEnabled } from '../lib/compl
 import GoalPotProgress from '../components/goals/GoalPotProgress';
 import { goalDisplayFont } from '../lib/fonts';
 import { useZkLoginSigner } from '../hooks/useZkLoginSigner';
+import { isGoalPoolsEnabled } from '../config/feature-flags';
 import {
   buildOpenGoalPoolTx,
   GOAL_KIND_AMOUNT,
@@ -222,6 +223,11 @@ const CYCLE_LENGTH_MAP = {
   monthly: 1,
   quarterly: 2,
 } as const;
+
+// Shown whenever the goal-pool path is reached while
+// NEXT_PUBLIC_GOAL_POOLS_ENABLED is off (src/config/feature-flags.ts).
+const GOAL_POOLS_DISABLED_MESSAGE =
+  'Goal pools are not available yet. Create a rotating circle instead.';
 
 const CYCLE_TYPE_MAP = {
   rotational: 0,
@@ -455,6 +461,13 @@ export default function CreateCircle() {
   const { isAuthenticated, isLoading: authLoading, account, userAddress } = useAuth();
   const { isReady: signerReady, signAndExecute: signGoalPool } = useZkLoginSigner();
   const { t } = useTranslation();
+  // Goal pools are OFF for the first mainnet cohort (owner decision
+  // 2026-10-07, per counsel). While off: the "saving toward one goal" door
+  // and its upsell modal are not rendered, state is pinned to 'rotational'
+  // (restored drafts included), and submit refuses the goal-pool path even
+  // if state somehow holds 'smart-goal'. Existing pools stay readable on
+  // /pool/<id> and the dashboard; only creation is gated.
+  const goalPoolsEnabled = isGoalPoolsEnabled();
   // Two screens: 0 = set up (one form), 1 = invite (the circle exists).
   const [currentStep, setCurrentStep] = useState(0);
   const [useCustomDeposit, setUseCustomDeposit] = useState(false);
@@ -774,6 +787,10 @@ export default function CreateCircle() {
   };
 
   const chooseSmartGoal = () => {
+    if (!goalPoolsEnabled) {
+      toast.error(GOAL_POOLS_DISABLED_MESSAGE);
+      return;
+    }
     if (checkingSmartGoalAccess) return;
     setCheckingSmartGoalAccess(true);
     hasFeaturePreflight('smartGoals')
@@ -864,6 +881,10 @@ export default function CreateCircle() {
   // rotation, flexible contributions). Settled in SUI for v1.
   const handleCreateGoalPool = async () => {
     const SUI_COIN_TYPE = '0x2::sui::SUI';
+    if (!goalPoolsEnabled) {
+      toast.error(GOAL_POOLS_DISABLED_MESSAGE);
+      return;
+    }
     if (!signerReady || !userAddress) {
       setError('Please sign in again to create your goal pool.');
       return;
@@ -986,6 +1007,14 @@ export default function CreateCircle() {
     // Smart-goal circles are now non-rotating GoalPools (no deposit, no
     // rotation). They take a completely different creation path.
     if (formData.cycleType === 'smart-goal') {
+      if (!goalPoolsEnabled) {
+        // State can hold 'smart-goal' here only through a restored draft or
+        // a stale tab. Refuse rather than mint a pool the cohort is not
+        // cleared for, and put the form back on the rotational path.
+        toast.error(GOAL_POOLS_DISABLED_MESSAGE);
+        chooseRotational();
+        return;
+      }
       setIsCreating(true);
       try {
         await handleCreateGoalPool();
@@ -1115,13 +1144,28 @@ export default function CreateCircle() {
     const savedFormData = sessionStorage.getItem('createCircleFormData');
     if (savedFormData) {
       try {
-        setFormData(JSON.parse(savedFormData));
+        const restored = JSON.parse(savedFormData) as CircleFormData;
+        // A draft saved while goal pools were on (or on another network)
+        // must not reopen the goal-pool path once they are off.
+        setFormData(
+          isGoalPoolsEnabled() || restored.cycleType !== 'smart-goal'
+            ? restored
+            : { ...restored, cycleType: 'rotational', smartGoal: undefined },
+        );
         sessionStorage.removeItem('createCircleFormData');
       } catch (e) {
         console.error('Error restoring form data:', e);
       }
     }
   }, []);
+
+  // Pin the form to the rotational path while goal pools are off, whatever
+  // put 'smart-goal' into state (a restored draft, a future preselect).
+  useEffect(() => {
+    if (!isGoalPoolsEnabled() && formData.cycleType === 'smart-goal') {
+      setFormData((prev) => ({ ...prev, cycleType: 'rotational', smartGoal: undefined }));
+    }
+  }, [formData.cycleType]);
 
   // Function to fetch the actual circle ID from blockchain events
   const fetchCircleId = async (): Promise<string | null> => {
@@ -2545,14 +2589,16 @@ The Njangi On-Chain Team`;
                   >
                     {formData.isMigrating ? t('create.altMigratingOff') : t('create.altMigrating')}
                   </button>
-                  <button
-                    type="button"
-                    onClick={chooseSmartGoal}
-                    disabled={checkingSmartGoalAccess}
-                    className="text-left font-medium text-[#51627b] underline-offset-4 hover:text-[#171923] hover:underline disabled:opacity-60"
-                  >
-                    {t('create.altGoal')}
-                  </button>
+                  {goalPoolsEnabled && (
+                    <button
+                      type="button"
+                      onClick={chooseSmartGoal}
+                      disabled={checkingSmartGoalAccess}
+                      className="text-left font-medium text-[#51627b] underline-offset-4 hover:text-[#171923] hover:underline disabled:opacity-60"
+                    >
+                      {t('create.altGoal')}
+                    </button>
+                  )}
                 </div>
               ) : (
                 <div className="border-t border-[#e7dfd4] pt-5 text-sm">
@@ -2842,12 +2888,16 @@ The Njangi On-Chain Team`;
         </div>
       </main>
 
-      {/* Premium upsell when smart goals are not on the caller's plan */}
-      <BillingUpsellModal
-        open={showSmartGoalUpsell}
-        onClose={() => setShowSmartGoalUpsell(false)}
-        feature="smartGoals"
-      />
+      {/* Premium upsell when smart goals are not on the caller's plan.
+          Not mounted at all while goal pools are off: there is nothing to
+          upsell when the door itself is closed. */}
+      {goalPoolsEnabled && (
+        <BillingUpsellModal
+          open={showSmartGoalUpsell}
+          onClose={() => setShowSmartGoalUpsell(false)}
+          feature="smartGoals"
+        />
+      )}
     </div>
   );
 }
