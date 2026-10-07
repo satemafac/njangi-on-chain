@@ -40,6 +40,14 @@ export type EscrowStage =
   | 'loading'
   | 'no-round-open'
   | 'in-progress'
+  /**
+   * Open, partly paid, and past its due date plus the 7-day grace on the
+   * chain clock (or its circle was stopped by a recovery vote): anyone may
+   * cancel it now with `cancel_unfinalized_escrow`, which sends each
+   * recorded share back to the member who paid it. Paying in still works
+   * until someone does, so a late payer can still complete the round.
+   */
+  | 'stalled'
   | 'full-waiting-for-claim'
   /**
    * Finalized, never collected, and past its claim window on the chain
@@ -53,8 +61,48 @@ export type EscrowStage =
 
 export type EscrowStageState = Pick<
   CycleEscrowLiveState,
-  'finalized' | 'claimed' | 'refunded' | 'claimExpiresAtMs'
+  'finalized' | 'claimed' | 'refunded' | 'claimExpiresAtMs' | 'dueAtMs'
 >;
+
+/**
+ * The contract's `CANCEL_GRACE_MS` (njangi_cycle_escrow.move): how long after
+ * the snapshot due date `cancel_unfinalized_escrow` keeps aborting 224
+ * `E_CANCEL_TOO_EARLY`. Mirrored, not read: the constant is not exposed as an
+ * object field, and `due_at_ms` itself comes from the chain, so a Move change
+ * to how the due date is derived needs nothing here.
+ */
+export const CANCEL_GRACE_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * The first chain-clock ms at which the round can be cancelled: due date plus
+ * grace, the same sum the contract compares. Null when the snapshot carried no
+ * due date, which never opens a window.
+ */
+export function cancelAvailableAtMs(state: Pick<EscrowStageState, 'dueAtMs'>): number | null {
+  return state.dueAtMs > 0 ? state.dueAtMs + CANCEL_GRACE_MS : null;
+}
+
+/**
+ * Whether an open round's cancel window has opened, judged on the CHAIN clock.
+ *
+ * `false` when no window can apply (finalized, collected or refunded: the
+ * contract refuses the cancel there, 205/226). `null` when it could apply but
+ * the answer is unknown: the chain clock could not be read, or the snapshot
+ * carries no due date. Callers must not read null as either answer, exactly
+ * as for `claimWindowClosed`.
+ *
+ * Open means at or after the sum, the same boundary as
+ * `cancel_unfinalized_escrow` (`now >= due_at_ms + CANCEL_GRACE_MS`).
+ */
+export function cancelWindowOpen(
+  state: EscrowStageState,
+  chainNowMs: number | null,
+): boolean | null {
+  if (state.finalized || state.claimed || state.refunded) return false;
+  const availableAt = cancelAvailableAtMs(state);
+  if (chainNowMs === null || availableAt === null) return null;
+  return chainNowMs >= availableAt;
+}
 
 /**
  * Whether a round's claim window has closed, judged on the CHAIN clock.
@@ -85,8 +133,22 @@ export function resolveEscrowStage(params: {
   totalRequired: number;
   /** `readChainClockMs`: null when unread, which never closes a window. */
   chainNowMs?: number | null;
+  /**
+   * `readCircleRecoveryStopped`: the circle's recovery vote executed (state
+   * STOPPED or REFUNDED), which lets `cancel_unfinalized_escrow_for_recovery`
+   * cancel an open round with no grace wait. Null when unread, which falls
+   * back to the time rule and never widens the window.
+   */
+  circleStopped?: boolean | null;
 }): EscrowStage {
-  const { loading, state, paidSoFar, totalRequired, chainNowMs = null } = params;
+  const {
+    loading,
+    state,
+    paidSoFar,
+    totalRequired,
+    chainNowMs = null,
+    circleStopped = null,
+  } = params;
   if (loading) return 'loading';
   if (!state) return 'no-round-open';
   // Checked first: a refunded escrow is unfinalized/unclaimed on chain and
@@ -99,7 +161,39 @@ export function resolveEscrowStage(params: {
   // resolveCollectRoute) instead of minting a second one.
   if (state.finalized) return 'full-waiting-for-claim';
   if (paidSoFar >= totalRequired && totalRequired > 0) return 'full-waiting-for-claim';
+  // Stalled: partly paid (a cancel with nothing recorded aborts 225, so an
+  // empty round has no cancel to offer) and either past the cancel window on
+  // the chain clock or in a circle whose recovery vote stopped it. A full pot
+  // is never stalled: it is waiting on its recipient, and cancelling it would
+  // take a payout away.
+  if (paidSoFar > 0 && (cancelWindowOpen(state, chainNowMs) === true || circleStopped === true)) {
+    return 'stalled';
+  }
   return 'in-progress';
+}
+
+// ---------------------------------------------------------------------------
+// Stalled round — which cancel the panel builds
+// ---------------------------------------------------------------------------
+
+export type CancelRoundRoute =
+  /** `cancel_unfinalized_escrow<T>(escrow, clock)`: the grace has elapsed. */
+  | { kind: 'cancel' }
+  /**
+   * `cancel_unfinalized_escrow_for_recovery<T>(escrow, circle, clock)`: the
+   * circle's recovery vote stopped it, so the contract waives the grace. Also
+   * the right call once the grace HAS elapsed on a stopped circle: both would
+   * succeed, and this one does not depend on the clock.
+   */
+  | { kind: 'cancel-for-recovery' };
+
+/**
+ * Which cancel a stalled round signs. The stage already decided a cancel is
+ * due; this only picks the entry point. An unread recovery state (null) takes
+ * the plain cancel, which the stage only reaches through the time rule.
+ */
+export function resolveCancelRoundRoute(circleStopped: boolean | null): CancelRoundRoute {
+  return circleStopped === true ? { kind: 'cancel-for-recovery' } : { kind: 'cancel' };
 }
 
 // ---------------------------------------------------------------------------
@@ -108,7 +202,9 @@ export function resolveEscrowStage(params: {
 
 /**
  * Whether the panel offers `refund_expired_claim` to the signed-in viewer
- * once a round's claim window has closed.
+ * once a round's claim window has closed — and, by the same rule, the
+ * stalled-round cancel (`cancel_unfinalized_escrow*`), which sends the same
+ * shares back to the same people.
  *
  * The call is permissionless and can only pay the recorded contributors, so
  * this is a product rule, not a safety check. Recovery is member-initiated:

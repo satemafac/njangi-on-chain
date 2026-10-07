@@ -2,6 +2,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'react-hot-toast';
 import {
   buildAdvanceCircleAfterClaimTx,
+  buildCancelUnfinalizedEscrowForRecoveryTx,
+  buildCancelUnfinalizedEscrowTx,
   buildContributeWithAutoCoinTx,
   buildFinalizeAndRedeemTx,
   buildFinalizeAndRedeemWithAttestationTx,
@@ -10,17 +12,21 @@ import {
   buildRefundExpiredClaimTx,
 } from '@/services/cycle-escrow-service';
 import {
+  cancelAvailableAtMs,
   findRecipientClaim,
+  resolveCancelRoundRoute,
   resolveCollectRoute,
   resolveEscrowStage,
   resolveExpiredClaimRefundAccess,
   type EscrowStage,
 } from '@/lib/cycle-escrow-collect';
 import { readChainClockMs } from '@/lib/chain-clock';
+import { readCircleRecoveryStopped } from '@/lib/circle-recovery-state';
 import { preparePaymentCoin } from '@/lib/payment-coin-builder';
 import { useZkLoginSigner, type SponsorRequest } from '@/hooks/useZkLoginSigner';
 import type { TransactionBuilder } from '@/lib/zklogin-client-signer';
 import {
+  cancelStalledRoundSponsorRequest,
   escrowSponsorRequest,
   openRoundSponsorRequest,
   payShareSponsorRequest,
@@ -203,7 +209,9 @@ export function CycleEscrowPanel({
   // Failed reads in a row, for the automatic retry (round-read-retry.ts).
   // Any read that succeeds resets it.
   const failedReadsRef = useRef(0);
-  const [busy, setBusy] = useState<null | 'pay' | 'claim' | 'advance' | 'refund'>(null);
+  const [busy, setBusy] = useState<null | 'pay' | 'claim' | 'advance' | 'refund' | 'cancel'>(
+    null,
+  );
   // Why the last Collect on a finalized round did not sign, keyed to its
   // escrow so a later round never inherits it. `unreadable` is a failed
   // lookup (retry); `missing` means the claim is not in this wallet.
@@ -211,10 +219,16 @@ export function CycleEscrowPanel({
     escrowId: string;
     kind: 'unreadable' | 'missing';
   } | null>(null);
-  // The chain's own clock, read only while a finalized round sits
-  // uncollected, so the claim window is judged the way the contract judges
-  // it. Null is "not read" or "unreadable", and never closes a window.
+  // The chain's own clock, read only while a deadline can apply — a
+  // finalized round sitting uncollected (its claim window) or an open round
+  // with shares in it but not full (its cancel window) — so both are judged
+  // the way the contract judges them. Null is "not read" or "unreadable",
+  // and never closes or opens a window.
   const [chainNowMs, setChainNowMs] = useState<number | null>(null);
+  // Whether the circle's recovery vote has executed (circle-recovery-state.ts),
+  // read in the same open-and-partly-paid state: a stopped circle's round can
+  // be cancelled with no grace wait. Null is unknown and leaves the time rule.
+  const [circleStopped, setCircleStopped] = useState<boolean | null>(null);
   // The one in-flight flag for every control that opens a round. Held past
   // the transaction's resolution until discovery shows the new escrow (or
   // a bounded timeout) — see cycle-open-round-lock.ts for the incident
@@ -287,18 +301,35 @@ export function CycleEscrowPanel({
         } else {
           setRotationPointer(null);
         }
-        // Whether a finalized, uncollected round is past its claim window is
-        // a chain-clock question (chain-clock.ts), asked only in that state.
+        // Two deadlines are chain-clock questions (chain-clock.ts), asked
+        // only in the states they can apply to: the claim window of a
+        // finalized, uncollected round, and the cancel window of an open
+        // round that has shares in it but is not full. A full pot waits on
+        // its recipient and an empty one has nothing to cancel (abort 225),
+        // so neither reads the clock.
+        const awaitingRecipient =
+          !!state && state.finalized && !state.claimed && !state.refunded;
+        const partlyPaidOpen =
+          !!state &&
+          !state.finalized &&
+          !state.refunded &&
+          state.contributorsSoFar > 0 &&
+          !(state.requiredContributors > 0 && state.contributorsSoFar >= state.requiredContributors);
         setChainNowMs(
-          state?.finalized && !state.claimed && !state.refunded
-            ? await readChainClockMs(rpcClient)
-            : null,
+          awaitingRecipient || partlyPaidOpen ? await readChainClockMs(rpcClient) : null,
+        );
+        // A circle stopped by its recovery vote lets that same round be
+        // cancelled with no grace wait (circle-recovery-state.ts). Read for
+        // the one state it changes; null (unread) leaves the time rule.
+        setCircleStopped(
+          partlyPaidOpen ? await readCircleRecoveryStopped(circleId, network, rpcClient) : null,
         );
       } else {
         setLiveState(null);
         setContributors([]);
         setRotationPointer(null);
         setChainNowMs(null);
+        setCircleStopped(null);
       }
       failedReadsRef.current = 0;
     } catch (err) {
@@ -311,6 +342,7 @@ export function CycleEscrowPanel({
       setContributors([]);
       setRotationPointer(null);
       setChainNowMs(null);
+      setCircleStopped(null);
     } finally {
       setLoading(false);
       setRefreshSeq((n) => n + 1);
@@ -392,8 +424,9 @@ export function CycleEscrowPanel({
         paidSoFar,
         totalRequired,
         chainNowMs,
+        circleStopped,
       }),
-    [loading, summary, liveState, paidSoFar, totalRequired, chainNowMs],
+    [loading, summary, liveState, paidSoFar, totalRequired, chainNowMs, circleStopped],
   );
 
   // The viewer's own part in this round, for the page around the panel
@@ -444,6 +477,21 @@ export function CycleEscrowPanel({
       return new Date(ms).toISOString().slice(0, 10);
     }
   }, [liveState?.claimExpiresAtMs, locale]);
+
+  // When the cancel became possible: the snapshot due date plus the
+  // contract's 7-day grace, in the reader's locale. Only formats the sum;
+  // whether it has passed is the chain clock's call (cancelWindowOpen).
+  const cancelAvailableOn = useMemo(() => {
+    const ms = cancelAvailableAtMs({ dueAtMs: liveState?.dueAtMs ?? 0 });
+    if (!ms) return '—';
+    try {
+      return new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short' }).format(
+        new Date(ms),
+      );
+    } catch {
+      return new Date(ms).toISOString().slice(0, 16).replace('T', ' ');
+    }
+  }, [liveState?.dueAtMs, locale]);
 
   // What a settled round can do next. Only meaningful in the `completed`
   // stage; everywhere else the escrow itself already says what happens.
@@ -513,6 +561,15 @@ export function CycleEscrowPanel({
     });
   }, [liveState?.members, contributors, recipient, nameFor]);
 
+  // Who still owes this round's share, named for the stalled notice. The
+  // recipient pays nothing in, so they are never listed.
+  const unpaidMembersLabel = useMemo(() => {
+    const names = memberRows
+      .filter((member) => !member.isRecipient && !member.hasContributed)
+      .map((member) => member.label);
+    return names.length > 0 ? names.join(', ') : null;
+  }, [memberRows]);
+
   // The round's own coin, read from its escrow snapshot. Not the circle's
   // current mode: that only decides what a NEW round opens in.
   const escrowCoin = useMemo(
@@ -544,7 +601,7 @@ export function CycleEscrowPanel({
 
   const runWithSigner = useCallback(
     async (
-      action: 'pay' | 'claim' | 'advance' | 'refund',
+      action: 'pay' | 'claim' | 'advance' | 'refund' | 'cancel',
       build: TransactionBuilder,
       gasBudget: number,
       // The sponsor pays the network fee when the circle's plan covers it;
@@ -568,7 +625,9 @@ export function CycleEscrowPanel({
               ? 'Cycle advanced to the next recipient.'
               : action === 'refund'
                 ? t('toast.contributionsSentBack')
-                : t('toast.payoutSent'),
+                : action === 'cancel'
+                  ? t('toast.roundCancelled')
+                  : t('toast.payoutSent'),
         );
         // No celebration figure for a coin the app does not support: it shows
         // no amounts for one.
@@ -1069,6 +1128,44 @@ export function CycleEscrowPanel({
     );
   }, [summary, refundAccess, network, requireExitCoinType, runWithSigner]);
 
+  // A stalled round's shares can only go back to the members who paid them,
+  // and cancel_unfinalized_escrow* (permissionless) does exactly that, paying
+  // nobody else. Offered by the same member rule as the refund above. The
+  // stopped-circle variant waives the grace; when the recovery state could
+  // not be read, the stage only got here through the time rule, so the plain
+  // cancel is the right call. No release_open_round: the escrow reads
+  // `refunded` afterwards and the admin's re-open chains the release itself
+  // (onStartRound), so chaining it here would release twice.
+  const onCancelStalledRound = useCallback(() => {
+    if (!summary || refundAccess !== 'offer') return;
+    const coinType = requireExitCoinType();
+    if (!coinType) return;
+    const route = resolveCancelRoundRoute(circleStopped);
+    const build =
+      route.kind === 'cancel-for-recovery'
+        ? buildCancelUnfinalizedEscrowForRecoveryTx({
+            network,
+            coinType,
+            escrowId: summary.escrowId,
+            circleId,
+          })
+        : buildCancelUnfinalizedEscrowTx({ network, coinType, escrowId: summary.escrowId });
+    void runWithSigner(
+      'cancel',
+      build,
+      100_000_000,
+      cancelStalledRoundSponsorRequest(summary.escrowId, coinType),
+    );
+  }, [
+    summary,
+    refundAccess,
+    circleStopped,
+    network,
+    circleId,
+    requireExitCoinType,
+    runWithSigner,
+  ]);
+
   return (
     <section className="rounded-2xl border border-emerald-200 bg-white p-5 shadow-sm">
       <header className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
@@ -1196,7 +1293,8 @@ export function CycleEscrowPanel({
                 {recipientLabel}
               </p>
               {/* "Your payout is waiting" only while it can still be collected. */}
-              {isUserRecipient && (stage === 'in-progress' || stage === 'full-waiting-for-claim') ? (
+              {isUserRecipient &&
+              (stage === 'in-progress' || stage === 'stalled' || stage === 'full-waiting-for-claim') ? (
                 <p className="mt-1 text-xs font-medium text-emerald-700">
                   {t('escrow.yourTurn')}
                 </p>
@@ -1330,7 +1428,11 @@ export function CycleEscrowPanel({
           ) : null}
 
           <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            {stage === 'in-progress' ? (
+            {/* A stalled round is still open on chain (contribute checks
+                finalized/refunded/membership, never the due date), so its
+                pay prompt stays: a late payer can still complete it. The
+                cancel sits in its own notice below this row. */}
+            {stage === 'in-progress' || stage === 'stalled' ? (
               isUserRecipient ? (
                 <p className="text-sm font-medium text-emerald-700">
                   You&rsquo;re the recipient this round. You don&rsquo;t pay your
@@ -1518,6 +1620,48 @@ export function CycleEscrowPanel({
               </div>
             ) : null}
           </div>
+
+          {/* Past its due date plus the contract's 7-day grace on the chain
+              clock (or stopped by a recovery vote), with shares in it but not
+              full: cancel_unfinalized_escrow* sends each recorded share back to
+              the member who paid it, and to nobody else. Offered by the same
+              rule as the expired-claim refund, to every member of the round,
+              the admin included, and to no one outside it; an unreadable member
+              list says so rather than offer or hide the control on a guess. */}
+          {stage === 'stalled' ? (
+            <div className="mt-4 flex w-full flex-col gap-3 rounded-lg border border-amber-200 bg-amber-50 p-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="sm:max-w-md">
+                <p className="text-sm font-medium text-amber-800">
+                  {t(circleStopped === true ? 'escrow.stalled.stopped' : 'escrow.stalled', {
+                    round: roundLabel,
+                    date: cancelAvailableOn,
+                  })}
+                </p>
+                {unpaidMembersLabel ? (
+                  <p className="mt-1 text-xs text-amber-900">
+                    {t('escrow.stalled.unpaid', { members: unpaidMembersLabel })}
+                  </p>
+                ) : null}
+                {refundAccess === 'unknown' ? (
+                  <p role="status" className="mt-2 text-xs text-amber-700">
+                    {t('escrow.cancel.membershipUnknown')}
+                  </p>
+                ) : null}
+              </div>
+              {refundAccess === 'offer' ? (
+                <button
+                  type="button"
+                  onClick={onCancelStalledRound}
+                  disabled={!isReady || busy === 'cancel' || !exitCoinType}
+                  className="inline-flex shrink-0 items-center justify-center rounded-full border border-amber-300 bg-white px-4 py-2 text-sm font-semibold text-amber-800 shadow-sm hover:bg-amber-100 disabled:opacity-50"
+                >
+                  {busy === 'cancel'
+                    ? t('escrow.action.cancellingRound')
+                    : t('escrow.action.cancelRound')}
+                </button>
+              ) : null}
+            </div>
+          ) : null}
 
           {stage === 'full-waiting-for-claim' &&
           isUserRecipient &&

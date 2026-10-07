@@ -93,6 +93,14 @@ export const SPONSORABLE_MOVE_FUNCTIONS: readonly string[] = Object.freeze([
   // else. Permissionless, so a gas-less member is never stuck waiting on
   // someone holding SUI to get their share back.
   'njangi_cycle_escrow::refund_expired_claim',
+  // A round that never filled, past its due date plus the 7-day grace (or in
+  // a circle whose recovery vote stopped it, the `_for_recovery` twin, which
+  // only adds a read of the circle's recovery state): sends each recorded
+  // share back to the member who paid it, and to nobody else. Permissionless
+  // like the refund above, moves no coin the caller could not move, and
+  // takes no gas coin, so the gas-coin rule is untouched.
+  'njangi_cycle_escrow::cancel_unfinalized_escrow',
+  'njangi_cycle_escrow::cancel_unfinalized_escrow_for_recovery',
   'njangi_cycle_escrow::open_cycle_stable',
   'njangi_cycle_escrow::open_cycle_stable_with_gate',
   'njangi_cycle_escrow::open_cycle_stable_indexed',
