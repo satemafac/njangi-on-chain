@@ -41,6 +41,9 @@ import {
   nativeTermsForCreate,
   readCircleAssetPolicy,
 } from '@/lib/v11-circle-tx';
+import type { SponsorRequest } from '@/lib/sponsored-first-signer';
+import { circleSponsorRequest } from '@/lib/recovery-sponsorship';
+import { assertTransactionSucceeded } from '@/lib/tx-effects-status';
 
 /**
  * Non-React helper that returns a client-side signer wrapper when the
@@ -99,10 +102,13 @@ async function tryClientSideSigner(
  */
 async function trySponsoredGas(args: {
   action: string;
-  build: (txb: Transaction, client: import('@mysten/sui/client').SuiClient) => void | Promise<void>;
+  /** Fills a fresh transaction... */
+  build?: (txb: Transaction, client: import('@mysten/sui/client').SuiClient) => void | Promise<void>;
+  /** ...or one a builder already assembled (sponsored from a copy). */
+  transaction?: Transaction;
   network: NetworkOverride;
   context: Record<string, unknown>;
-}): Promise<{ digest: string } | null> {
+}): Promise<{ digest: string; effects?: unknown } | null> {
   if (typeof window === 'undefined') return null;
   try {
     const [{ SuiClient }, { trySponsoredExecute }] = await Promise.all([
@@ -110,9 +116,11 @@ async function trySponsoredGas(args: {
       import('@/lib/sponsored-tx-client'),
     ]);
     const client = new SuiClient({ url: getNetworkConfig(args.network).rpcUrl });
+    const build = args.build;
     return await trySponsoredExecute({
       action: args.action,
-      buildKind: (txb) => args.build(txb, client),
+      buildKind: build ? (txb) => build(txb, client) : undefined,
+      transaction: args.transaction,
       client,
       context: args.context,
     });
@@ -148,6 +156,8 @@ async function signLocallyWithBuilder(args: {
   resolvePackageId: () => Promise<string> | string;
   build: (packageId: string) => Transaction;
   network?: NetworkOverride;
+  /** Ask the circle's sponsor to pay the network fee first (see sponsorFirst). */
+  sponsor?: SponsorRequest;
 }): Promise<{ digest: string; requireRelogin?: boolean }> {
   if (!args.account?.zkProofs?.proofPoints) {
     throw new ZkLoginError('Missing authentication data. Please login again.', true);
@@ -162,8 +172,37 @@ async function signLocallyWithBuilder(args: {
   }
 
   const packageId = await args.resolvePackageId();
-  const { digest } = await signer.signAndExecute({ transaction: args.build(packageId) });
+  const transaction = args.build(packageId);
+  const sponsored = await sponsorFirst(transaction, args.sponsor, args.network);
+  if (sponsored) return sponsored;
+  const { digest } = await signer.signAndExecute({ transaction });
   return { digest };
+}
+
+/**
+ * Try the sponsored path for a transaction a builder already assembled.
+ * Returns null when no sponsorship was requested or the sponsor declined,
+ * and the caller then signs it with the member's own gas, as before.
+ *
+ * The self-paid path dry-runs before it submits, so a refusal never lands.
+ * The sponsored one can land and still fail on chain. That raises here, rather
+ * than reading as success: the digest alone would hide a refused recovery.
+ */
+async function sponsorFirst(
+  transaction: Transaction,
+  sponsor: SponsorRequest | undefined,
+  network: NetworkOverride | undefined,
+): Promise<{ digest: string } | null> {
+  if (!sponsor) return null;
+  const sponsored = await trySponsoredGas({
+    action: sponsor.action,
+    transaction,
+    network: network ?? getCurrentNetwork(),
+    context: sponsor.context,
+  });
+  if (!sponsored) return null;
+  assertTransactionSucceeded(sponsored);
+  return { digest: sponsored.digest };
 }
 
 function withoutSigningKey(account: AccountData): AccountData {
@@ -542,6 +581,7 @@ export class ZkLoginClient {
     account: AccountData,
     tx: Transaction,
     network?: NetworkOverride,
+    sponsor?: SponsorRequest,
   ): Promise<{ digest: string; requireRelogin?: boolean }> {
     try {
       this.assertTransactionAccount(account);
@@ -554,6 +594,8 @@ export class ZkLoginClient {
         );
       }
 
+      const sponsored = await sponsorFirst(tx, sponsor, network);
+      if (sponsored) return sponsored;
       const { digest } = await signer.signAndExecute({ transaction: tx });
       return { digest };
     } catch (error) {
@@ -623,7 +665,12 @@ export class ZkLoginClient {
       circleId: request.circleId,
     });
 
-    return this.sendSerializedTransaction(account, tx, request.network);
+    return this.sendSerializedTransaction(
+      account,
+      tx,
+      request.network,
+      circleSponsorRequest('proposeEmergencyStop', request.circleId),
+    );
   }
 
   public async voteEmergencyStop(
@@ -637,7 +684,12 @@ export class ZkLoginClient {
       yesVote: request.yesVote,
     });
 
-    return this.sendSerializedTransaction(account, tx, request.network);
+    return this.sendSerializedTransaction(
+      account,
+      tx,
+      request.network,
+      circleSponsorRequest('voteEmergencyStop', request.circleId),
+    );
   }
 
   public async executeRecovery(
@@ -652,7 +704,12 @@ export class ZkLoginClient {
       stablecoinType: request.stablecoinType,
     });
 
-    return this.sendSerializedTransaction(account, tx, request.network);
+    return this.sendSerializedTransaction(
+      account,
+      tx,
+      request.network,
+      circleSponsorRequest('executeRecovery', request.circleId),
+    );
   }
 
   public async triggerAutoRelease(
@@ -667,7 +724,12 @@ export class ZkLoginClient {
       stablecoinType: request.stablecoinType,
     });
 
-    return this.sendSerializedTransaction(account, tx, request.network);
+    return this.sendSerializedTransaction(
+      account,
+      tx,
+      request.network,
+      circleSponsorRequest('triggerAutoRelease', request.circleId),
+    );
   }
 
   public async heartbeatAdminLiveness(
@@ -991,6 +1053,9 @@ export class ZkLoginClient {
             coinType: policy.settlement.coinType,
           })
           : buildAdminRemoveMemberTx({ packageId, circleId, memberAddress, walletId }),
+      // Returns the member's deposit to them. Only the v11 removal above is
+      // on the sponsor's list; the older one is declined and self-paid.
+      sponsor: circleSponsorRequest('returnDepositAndRemoveMember', circleId),
     });
   }
 

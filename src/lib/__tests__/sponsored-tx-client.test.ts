@@ -334,6 +334,36 @@ describe('trySponsoredExecute — never re-sign something already submitted', ()
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
+  it('builds the kind from a copy of a prebuilt transaction, leaving it as it was', async () => {
+    // Recovery builders hand over a finished Transaction, which the self-paid
+    // fallback signs if the sponsor declines: it must come back untouched.
+    const original = new Transaction();
+    contributeCall(original);
+    const before = JSON.stringify(original.getData());
+    let sentKind = '';
+    global.fetch = jest.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+      if (String(url).includes('/api/sponsor/prepare')) {
+        sentKind = JSON.parse(String(init?.body)).kindBytes;
+        return { ok: true, json: async () => ({ sponsored: false, reason: 'disabled' }) } as Response;
+      }
+      throw new Error(`unexpected request to ${String(url)}`);
+    }) as unknown as typeof fetch;
+
+    const result = await trySponsoredExecute({
+      action: 'executeRecovery',
+      transaction: original,
+      client: {} as SuiClient,
+      session,
+    });
+
+    expect(result).toBeNull();
+    const expected = new Transaction();
+    contributeCall(expected);
+    const { toBase64: b64 } = await import('@mysten/sui/utils');
+    expect(sentKind).toBe(b64(await expected.build({ client: {} as SuiClient, onlyTransactionKind: true })));
+    expect(JSON.stringify(original.getData())).toBe(before);
+  });
+
   it('falls back to self-paid when the reservation was never held', async () => {
     // 409 is unambiguous: nothing was submitted, so re-signing is safe.
     mockFetch(true, () => ({ ok: false, status: 409, json: async () => ({}) }) as Response);

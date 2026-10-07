@@ -121,7 +121,14 @@ async function landedAlready(
  */
 export async function trySponsoredExecute(args: {
   action: string;
-  buildKind: (txb: Transaction) => void | Promise<void>;
+  /** Fills a fresh transaction with the commands to sponsor. */
+  buildKind?: (txb: Transaction) => void | Promise<void>;
+  /**
+   * Or a transaction the caller already assembled. The kind is built from a
+   * copy, so the caller's own transaction stays as it was for the self-paid
+   * fallback.
+   */
+  transaction?: Transaction;
   client: SuiClient;
   context?: Record<string, unknown>;
   session?: ClientSignerSession | null;
@@ -132,8 +139,15 @@ export async function trySponsoredExecute(args: {
   try {
     // 1. Build the gas-less kind. No sender, no gas budget — the sponsor owns
     //    gas, and `onlyTransactionKind` discards any sender we set anyway.
-    const txb = new Transaction();
-    await args.buildKind(txb);
+    let txb: Transaction;
+    if (args.transaction) {
+      txb = Transaction.from(args.transaction);
+    } else if (args.buildKind) {
+      txb = new Transaction();
+      await args.buildKind(txb);
+    } else {
+      return null;
+    }
     const kindBytes = await txb.build({
       client: args.client,
       onlyTransactionKind: true,
