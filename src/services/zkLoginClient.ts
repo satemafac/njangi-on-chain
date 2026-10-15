@@ -428,8 +428,24 @@ export class ZkLoginClient {
     });
 
     if (!response.ok) {
+      // Keep the server's code: the sign-in button picks its message from it
+      // (src/lib/sign-in-start.ts).
       const errorText = await response.text();
-      throw new Error(`Failed to begin login: ${errorText}`);
+      let body: { error?: unknown; code?: unknown } = {};
+      try {
+        const parsed = JSON.parse(errorText);
+        if (parsed && typeof parsed === 'object') body = parsed;
+      } catch {
+        // Not JSON: the raw text is the message.
+      }
+      throw new ZkLoginError(
+        `Failed to begin login: ${typeof body.error === 'string' ? body.error : errorText}`,
+        false,
+        {
+          code: typeof body.code === 'string' ? body.code : `HTTP_${response.status}`,
+          stage: 'beginLogin',
+        },
+      );
     }
 
     const data = await response.json();

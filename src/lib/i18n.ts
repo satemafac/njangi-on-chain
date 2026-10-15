@@ -278,6 +278,14 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'auth.goToDashboard': 'Go to Dashboard',
     'auth.closePage': 'Close Page',
     'auth.poweredByZkLogin': 'Secure authentication powered by zkLogin',
+    'auth.startingProvider': 'Opening {provider}…',
+    'auth.startFailed.suiNetwork':
+      "Sign-in can't start right now because the Sui network isn't responding. Please try again in a few minutes.",
+    'auth.startFailed.offline':
+      "We couldn't reach Njangi On-Chain. Check your internet connection and try again.",
+    'auth.startFailed.refresh':
+      'Something went wrong preparing your sign-in. Refresh the page and try again.',
+    'auth.startFailed.generic': "We couldn't start your sign-in. Please try again in a moment.",
     // Create circle
     'create.eyebrow': 'Create circle',
     'create.stepCounter': 'Step {current} of {total}',
@@ -812,6 +820,14 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'auth.goToDashboard': 'Aller au tableau de bord',
     'auth.closePage': 'Fermer la page',
     'auth.poweredByZkLogin': 'Authentification sécurisée propulsée par zkLogin',
+    'auth.startingProvider': 'Ouverture de {provider}…',
+    'auth.startFailed.suiNetwork':
+      "La connexion ne peut pas démarrer pour l'instant, car le réseau Sui ne répond pas. Réessayez dans quelques minutes.",
+    'auth.startFailed.offline':
+      'Impossible de joindre Njangi On-Chain. Vérifiez votre connexion internet et réessayez.',
+    'auth.startFailed.refresh':
+      'Un problème est survenu pendant la préparation de votre connexion. Actualisez la page et réessayez.',
+    'auth.startFailed.generic': 'Impossible de démarrer votre connexion. Réessayez dans un instant.',
     // Création de cercle
     'create.eyebrow': 'Créer un cercle',
     'create.stepCounter': 'Étape {current} sur {total}',

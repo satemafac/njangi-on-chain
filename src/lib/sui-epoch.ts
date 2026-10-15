@@ -64,6 +64,19 @@ async function readEpochViaJsonRpc(network: NetworkType): Promise<number> {
 }
 
 /**
+ * No source could give the epoch: the chain is unreachable from here. Carries a
+ * code so `/api/zkLogin` answers 503 and the sign-in button can explain it.
+ */
+export class SuiNetworkUnavailableError extends Error {
+  readonly code = 'SUI_NETWORK_UNAVAILABLE';
+
+  constructor(network: NetworkType) {
+    super(`Could not reach the Sui ${network} network to start sign-in. Please try again in a few minutes.`);
+    this.name = 'SuiNetworkUnavailableError';
+  }
+}
+
+/**
  * The current epoch on `network`. Throws when neither GraphQL nor JSON-RPC
  * answers; it never guesses. A wrong epoch builds a nonce whose proof the
  * chain rejects, either as already expired or as more than 30 epochs ahead.
@@ -83,8 +96,6 @@ export async function readCurrentSuiEpoch(network: NetworkType): Promise<number>
     console.error(
       `[sui-epoch] no source answered on ${network}. GraphQL: ${describeError(graphqlError)}. JSON-RPC: ${describeError(rpcError)}`,
     );
-    throw new Error(
-      `Could not reach the Sui ${network} network to start sign-in. Please try again in a few minutes.`,
-    );
+    throw new SuiNetworkUnavailableError(network);
   }
 }

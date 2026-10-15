@@ -28,6 +28,7 @@ import { getHealthySuiClient } from '@/services/sui-rpc-failover';
 // stubbed to 410 Gone. Re-import here if a separately audited yield
 // product reintroduces those flows.
 import { getCanonicalBaseOrigin, normalizeOrigin, preferCanonicalOrigin } from '@/lib/canonical-host';
+import { SuiNetworkUnavailableError } from '@/lib/sui-epoch';
 import {
   normalizePackageId,
   resolveUpgradeAwarePackageId,
@@ -6739,6 +6740,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           'This action must be signed in your browser. Please refresh the page and try again.',
         code: 'CLIENT_SIGNING_REQUIRED',
       });
+    }
+    // Sign-in could not read the chain's epoch from any source: an upstream
+    // outage, not a fault here. A 503 with a code lets the button say so.
+    if (err instanceof SuiNetworkUnavailableError) {
+      console.warn('API error:', err.message);
+      return res.status(503).json({ error: err.message, code: err.code });
     }
     console.error('API error:', err);
     return res.status(500).json({ 

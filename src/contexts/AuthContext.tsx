@@ -228,8 +228,14 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       }
       window.location.href = loginUrl;
     } catch (err) {
-      console.error('Login error:', err);
+      // A warning, not an error: the button shows this failure to the user, and
+      // Next's dev overlay treats every console.error'd Error as a crash.
+      console.warn('Login did not start:', err);
       setError(err instanceof Error ? err.message : 'Failed to start login process');
+      // Rethrown for the button that started it. Nothing renders the context
+      // error, so swallowing it here left the sign-in modal sitting silently
+      // while the server returned 500 (2026-10-15).
+      throw err;
     } finally {
       setIsLoading(false);
     }

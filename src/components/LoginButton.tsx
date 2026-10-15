@@ -1,10 +1,23 @@
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import { Loader2 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
+import { useTranslation } from '../hooks/useTranslation';
+import {
+  IDLE_SIGN_IN_STATE,
+  startSignIn,
+  type SignInStartState,
+} from '../lib/sign-in-start';
 import type { OAuthProvider } from '../services/zkLoginService';
 
 type LoginButtonProps = {
   variant?: 'default' | 'landing';
   className?: string;
+};
+
+type LoginButtonViewProps = LoginButtonProps & {
+  state: SignInStartState;
+  onSelect: (provider: OAuthProvider) => void;
+  t: (key: string, vars?: Record<string, string | number>) => string;
 };
 
 const providers: OAuthProvider[] = ['Google', 'Facebook', 'Apple'];
@@ -60,20 +73,36 @@ function ProviderIcon({
   );
 }
 
-export function LoginButton({
+/** The buttons, given their state. Stateless so each state can be rendered in a test. */
+export function LoginButtonView({
   variant = 'default',
   className = '',
-}: LoginButtonProps) {
-  const { login } = useAuth();
-
-  const handleLogin = (provider: OAuthProvider) => {
-    // Remove in-app browser check - allow direct login for all browsers including Instagram
-    login(provider);
-  };
+  state,
+  onSelect,
+  t,
+}: LoginButtonViewProps) {
+  const busy = state.pending !== null;
+  const label = (provider: OAuthProvider) =>
+    state.pending === provider
+      ? t('auth.startingProvider', { provider })
+      : `Continue with ${provider}`;
+  // Every button locks while one provider opens; the others fade.
+  const busyTone = (provider: OAuthProvider) =>
+    !busy ? '' : state.pending === provider ? 'cursor-wait' : 'cursor-not-allowed opacity-50';
+  const failureNotice = (extraClass: string) =>
+    state.failure ? (
+      <p
+        role="alert"
+        className={`rounded-2xl border border-[#f1c4bc] bg-[#fff4f2] px-4 py-3 text-left text-sm leading-6 text-[#9b2c1f] ${extraClass}`.trim()}
+      >
+        {t(state.failure)}
+      </p>
+    ) : null;
 
   if (variant === 'landing') {
     return (
       <div className={`grid w-full gap-3 sm:grid-cols-3 ${className}`.trim()}>
+        {failureNotice('col-span-full')}
         {providers.map((provider) => {
           const providerTone =
             provider === 'Facebook'
@@ -86,8 +115,10 @@ export function LoginButton({
             <button
               key={provider}
               type="button"
-              onClick={() => handleLogin(provider)}
-              className="group flex items-center gap-3 rounded-2xl border border-[#d8d1c5] bg-white px-4 py-3 text-left text-[#1f2430] shadow-[0_18px_40px_-32px_rgba(15,23,42,0.45)] transition-all duration-200 hover:-translate-y-0.5 hover:border-[#c9c0b2] hover:bg-[#fcfbf8] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#70819b]/35"
+              onClick={() => onSelect(provider)}
+              disabled={busy}
+              aria-busy={state.pending === provider || undefined}
+              className={`group flex items-center gap-3 rounded-2xl border border-[#d8d1c5] bg-white px-4 py-3 text-left text-[#1f2430] shadow-[0_18px_40px_-32px_rgba(15,23,42,0.45)] transition-all duration-200 hover:-translate-y-0.5 hover:border-[#c9c0b2] hover:bg-[#fcfbf8] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#70819b]/35 disabled:hover:translate-y-0 ${busyTone(provider)}`.trim()}
             >
               <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-[#ece5db] bg-[#f7f4ee]">
                 <ProviderIcon
@@ -100,23 +131,27 @@ export function LoginButton({
                   {provider}
                 </span>
                 <span className="block text-xs text-[#667085]">
-                  Continue with {provider}
+                  {label(provider)}
                 </span>
               </span>
-              <svg
-                className="h-4 w-4 shrink-0 text-[#98a2b3] transition-transform duration-200 group-hover:translate-x-0.5"
-                viewBox="0 0 16 16"
-                fill="none"
-                aria-hidden="true"
-              >
-                <path
-                  d="M3.333 8h9.334m0 0L8.667 4m4 4-4 4"
-                  stroke="currentColor"
-                  strokeWidth="1.4"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
+              {state.pending === provider ? (
+                <Loader2 className="h-4 w-4 shrink-0 animate-spin text-[#98a2b3]" aria-hidden="true" />
+              ) : (
+                <svg
+                  className="h-4 w-4 shrink-0 text-[#98a2b3] transition-transform duration-200 group-hover:translate-x-0.5"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  aria-hidden="true"
+                >
+                  <path
+                    d="M3.333 8h9.334m0 0L8.667 4m4 4-4 4"
+                    stroke="currentColor"
+                    strokeWidth="1.4"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              )}
             </button>
           );
         })}
@@ -126,32 +161,70 @@ export function LoginButton({
 
   return (
     <div className={`flex flex-col items-center gap-4 ${className}`.trim()}>
+      {failureNotice('w-full max-w-sm')}
       <button
         type="button"
-        onClick={() => handleLogin('Google')}
-        className="inline-flex items-center rounded-lg bg-blue-600 px-6 py-2 font-medium text-white transition-colors duration-200 hover:bg-blue-700"
+        onClick={() => onSelect('Google')}
+        disabled={busy}
+        aria-busy={state.pending === 'Google' || undefined}
+        className={`inline-flex items-center rounded-lg bg-blue-600 px-6 py-2 font-medium text-white transition-colors duration-200 hover:bg-blue-700 ${busyTone('Google')}`.trim()}
       >
         <ProviderIcon provider="Google" className="mr-2 h-5 w-5" />
-        Continue with Google
+        {label('Google')}
       </button>
 
       <button
         type="button"
-        onClick={() => handleLogin('Facebook')}
-        className="inline-flex items-center rounded-lg bg-[#1877F2] px-6 py-2 font-medium text-white transition-colors duration-200 hover:bg-[#0C63D4]"
+        onClick={() => onSelect('Facebook')}
+        disabled={busy}
+        aria-busy={state.pending === 'Facebook' || undefined}
+        className={`inline-flex items-center rounded-lg bg-[#1877F2] px-6 py-2 font-medium text-white transition-colors duration-200 hover:bg-[#0C63D4] ${busyTone('Facebook')}`.trim()}
       >
         <ProviderIcon provider="Facebook" className="mr-2 h-5 w-5" />
-        Continue with Facebook
+        {label('Facebook')}
       </button>
 
       <button
         type="button"
-        onClick={() => handleLogin('Apple')}
-        className="inline-flex items-center rounded-lg bg-black px-6 py-2 font-medium text-white transition-colors duration-200 hover:bg-gray-800"
+        onClick={() => onSelect('Apple')}
+        disabled={busy}
+        aria-busy={state.pending === 'Apple' || undefined}
+        className={`inline-flex items-center rounded-lg bg-black px-6 py-2 font-medium text-white transition-colors duration-200 hover:bg-gray-800 ${busyTone('Apple')}`.trim()}
       >
         <ProviderIcon provider="Apple" className="mr-2 h-5 w-5" />
-        Continue with Apple
+        {label('Apple')}
       </button>
     </div>
   );
+}
+
+export function LoginButton(props: LoginButtonProps) {
+  const { login } = useAuth();
+  const { t } = useTranslation();
+  const [state, setState] = useState<SignInStartState>(IDLE_SIGN_IN_STATE);
+  // A second click before the first re-render must not start a second login.
+  const inFlight = useRef(false);
+
+  useEffect(() => {
+    // The back button can restore this page from the back-forward cache with a
+    // provider still "opening"; start over instead.
+    const onPageShow = (event: PageTransitionEvent) => {
+      if (!event.persisted) return;
+      inFlight.current = false;
+      setState(IDLE_SIGN_IN_STATE);
+    };
+    window.addEventListener('pageshow', onPageShow);
+    return () => window.removeEventListener('pageshow', onPageShow);
+  }, []);
+
+  const handleSelect = (provider: OAuthProvider) => {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    void startSignIn(provider, login, (next) => {
+      if (next.pending === null) inFlight.current = false;
+      setState(next);
+    });
+  };
+
+  return <LoginButtonView {...props} state={state} onSelect={handleSelect} t={t} />;
 }
