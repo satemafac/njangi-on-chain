@@ -67,9 +67,11 @@ const DEFAULT_RPC_ALT_URLS: Record<NetworkType, string> = {
   testnet: 'https://sui-testnet-endpoint.blockvision.org',
   mainnet: 'https://sui-mainnet-endpoint.blockvision.org',
 };
+// Sui's GraphQL service. The old sui-{testnet,mainnet}.mystenlabs.com/graphql
+// hosts no longer resolve (checked 2026-10-15).
 const DEFAULT_GRAPHQL_URLS: Record<NetworkType, string> = {
-  testnet: 'https://sui-testnet.mystenlabs.com/graphql',
-  mainnet: 'https://sui-mainnet.mystenlabs.com/graphql',
+  testnet: 'https://graphql.testnet.sui.io/graphql',
+  mainnet: 'https://graphql.mainnet.sui.io/graphql',
 };
 
 function readRawPublicEnv(): RawPublicEnv {
