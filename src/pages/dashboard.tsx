@@ -24,6 +24,7 @@ import {
 import { RAMP_PROVIDER_LABELS, type RampProviderId } from '@/lib/ramp-geo';
 import { resolveCircleLifecycleState } from '@/lib/circle-chain';
 import { discoverMemberCircleIds, isCurrentMemberOrAdmin } from '@/lib/membership-discovery';
+import { isGoneObjectResponse } from '@/lib/sui-read';
 import { readObjects } from '@/lib/sui-read';
 import { cetusService } from '@/lib/cetus-service';
 import { ZkLoginClient } from '@/services/zkLoginClient';
@@ -2406,42 +2407,38 @@ export default function Dashboard() {
     if (configObjectId && client) {
       console.log('Found CircleConfig field:', configObjectId);
 
-      try {
-        const configFields = await getCircleConfigFieldsByObjectId(client, configObjectId);
+      // Throws when the config can't be read. Falling through to the
+      // defaults below would show a 3-member cap and zero amounts as this
+      // circle's real terms; the caller counts the circle as unreadable.
+      const configFields = await getCircleConfigFieldsByObjectId(client, configObjectId);
+      if (!configFields) {
+        throw new Error(`CircleConfig ${configObjectId} could not be read`);
+      }
 
-        if (configFields) {
-          console.log('CircleConfig fields:', configFields);
+      console.log('CircleConfig fields:', configFields);
 
-          if ('max_members' in configFields) {
-            configValues.maxMembers = Number(configFields.max_members);
-            console.log('Successfully extracted max_members from fetched object:', configValues.maxMembers);
-          }
-          if ('contribution_amount' in configFields) {
-            configValues.contributionAmount = Number(configFields.contribution_amount) / 1e9;
-          }
-          if ('contribution_amount_local' in configFields) {
-            configValues.contributionAmountUsd = Number(configFields.contribution_amount_local) / 100;
-          }
-          if ('security_deposit' in configFields) {
-            configValues.securityDeposit = Number(configFields.security_deposit) / 1e9;
-          }
-          if ('security_deposit_local' in configFields) {
-            configValues.securityDepositUsd = Number(configFields.security_deposit_local) / 100;
-          }
-          if ('cycle_length' in configFields) {
-            configValues.cycleLength = Number(configFields.cycle_length);
-          }
-          if ('cycle_day' in configFields) {
-            configValues.cycleDay = Number(configFields.cycle_day);
-            console.log('Found cycle_day in fetched object:', configValues.cycleDay);
-          }
-        }
-      } catch (error) {
-        console.error(`Error fetching CircleConfig object with ID ${configObjectId}:`, error);
-
-        if (error instanceof Error && error.message.includes('Failed to fetch')) {
-          console.warn(`Circle config object ${configObjectId} not found on current network. This might be from a different network.`);
-        }
+      if ('max_members' in configFields) {
+        configValues.maxMembers = Number(configFields.max_members);
+        console.log('Successfully extracted max_members from fetched object:', configValues.maxMembers);
+      }
+      if ('contribution_amount' in configFields) {
+        configValues.contributionAmount = Number(configFields.contribution_amount) / 1e9;
+      }
+      if ('contribution_amount_local' in configFields) {
+        configValues.contributionAmountUsd = Number(configFields.contribution_amount_local) / 100;
+      }
+      if ('security_deposit' in configFields) {
+        configValues.securityDeposit = Number(configFields.security_deposit) / 1e9;
+      }
+      if ('security_deposit_local' in configFields) {
+        configValues.securityDepositUsd = Number(configFields.security_deposit_local) / 100;
+      }
+      if ('cycle_length' in configFields) {
+        configValues.cycleLength = Number(configFields.cycle_length);
+      }
+      if ('cycle_day' in configFields) {
+        configValues.cycleDay = Number(configFields.cycle_day);
+        console.log('Found cycle_day in fetched object:', configValues.cycleDay);
       }
     }
     
@@ -3787,6 +3784,9 @@ export default function Dashboard() {
       // users load all their circles in a single batch with no inter-batch wait.
       const batchSize = 50;
       const allProcessedCircles: Circle[] = [];
+      // Circles left out of this pass because a read FAILED. They are not
+      // gone, so the list is incomplete and the degraded merge keeps them.
+      let unreadableCircles = 0;
 
       for (let i = 0; i < circleIds.length; i += batchSize) {
         const batch = circleIds.slice(i, i + batchSize);
@@ -3852,6 +3852,7 @@ export default function Dashboard() {
         // Skip this batch if all retries failed
         if (!batchObjectsData) {
           console.warn(`⏭️ Skipping batch of ${batch.length} circles due to network errors`);
+          unreadableCircles += batch.length;
           continue;
         }
         
@@ -3865,9 +3866,13 @@ export default function Dashboard() {
           try {
             console.log(`⚡ Processing circle ${i + batchIndex + 1}/${circleIds.length}: ${circleId}`);
             
-            // Skip if object doesn't exist
             if (!objectData?.data || objectData.error) {
-              console.log(`Circle ${circleId} no longer exists, skipping...`);
+              if (isGoneObjectResponse(objectData)) {
+                console.log(`Circle ${circleId} no longer exists, skipping...`);
+              } else {
+                console.warn(`Circle ${circleId} could not be read this time, keeping it out of this pass`);
+                unreadableCircles += 1;
+              }
               return null;
             }
             
@@ -3877,16 +3882,13 @@ export default function Dashboard() {
               objectCacheKey,
               async () => {
                   // **OPTIMIZATION 3**: Get dynamic fields without delay (already rate-limited by batch processing)
-                  let dynamicFieldsResult;
-                  try {
-                    dynamicFieldsResult = await client.getDynamicFields({
-                      parentId: circleId
-                    });
-                    console.log(`📋 Dynamic fields for circle ${circleId}:`, dynamicFieldsResult.data.length, 'fields');
-                  } catch (error) {
-                    console.warn(`⚠️ No dynamic fields for circle ${circleId}`);
-                    dynamicFieldsResult = { data: [] };
-                  }
+                  // A failed read must throw, not become `[]`: with no fields the
+                  // circle's config is never found, and the card showed (and
+                  // cached) default amounts and a 3-member cap as if real.
+                  const dynamicFieldsResult = await client.getDynamicFields({
+                    parentId: circleId
+                  });
+                  console.log(`📋 Dynamic fields for circle ${circleId}:`, dynamicFieldsResult.data.length, 'fields');
                   
                   // Add transaction input data if we have it
                   const transactionInput = transactionInputMap.get(circleId);
@@ -3920,16 +3922,8 @@ export default function Dashboard() {
                 metadata.transactionDigest
               );
             } catch (error) {
-              console.error(`Error processing circle ${circleId}:`, error);
-              
-              // If it's a fetch error, it might be due to network mismatch
-              if (error instanceof Error && error.message.includes('Failed to fetch')) {
-                console.warn(`Circle ${circleId} might be from a different network. Skipping...`);
-                return null;
-              }
-              
-              // For other errors, still skip but log more details
-              console.error(`Unexpected error processing circle ${circleId}:`, error);
+              console.warn(`Could not process circle ${circleId}; keeping it out of this pass:`, error);
+              unreadableCircles += 1;
               return null;
             }
             
@@ -3983,7 +3977,8 @@ export default function Dashboard() {
               }
               return null;
           } catch (error) {
-            console.error(`Error fetching circle details for ${circleId}:`, error);
+            console.warn(`Could not read circle ${circleId}; keeping it out of this pass:`, error);
+            unreadableCircles += 1;
             return null;
           }
         });
@@ -4007,6 +4002,11 @@ export default function Dashboard() {
         }
       }
       
+      if (unreadableCircles > 0) {
+        console.warn(`[dashboard] ${unreadableCircles} circle(s) could not be read; marking the scan incomplete`);
+        initialResults = { ...initialResults, degraded: true };
+      }
+
       // allProcessedCircles is already populated from batch processing above
       console.log(`Successfully processed ${allProcessedCircles.length} circles`);
       

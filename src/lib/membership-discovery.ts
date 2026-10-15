@@ -21,7 +21,7 @@ import type { SuiClient } from '@mysten/sui/client';
 import { getCurrentNetwork, type NetworkType } from '@/services/network-config';
 import { getPooledSuiClient } from '@/services/sui-rpc-failover';
 import { getPublishedPackageMetadata } from './circle-chain';
-import { cachedRead } from './sui-read';
+import { cachedRead, isGoneObjectResponse } from './sui-read';
 
 const MEMBERSHIP_STRUCT_SUFFIX = 'njangi_circles::CircleMembership';
 
@@ -92,10 +92,6 @@ export async function discoverMemberCircleIds(
   }, opts.ttlMs);
 }
 
-// The chain's own words for "this object is not there", as opposed to "could
-// not be read".
-const OBJECT_GONE = new Set(['notExists', 'deleted']);
-
 /**
  * Whether `userAddress` is CURRENTLY the admin or a member of `circleId`, read
  * live from the circle and its members table: the verification step a receipt
@@ -114,7 +110,7 @@ export async function isCurrentMemberOrAdmin(
     return null;
   }
   if (circle.error) {
-    return OBJECT_GONE.has(circle.error.code) ? false : null;
+    return isGoneObjectResponse(circle) ? false : null;
   }
   const content = circle.data?.content;
   if (!content || content.dataType !== 'moveObject') return null;
