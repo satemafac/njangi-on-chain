@@ -5742,6 +5742,9 @@ export default function Dashboard() {
   const memberCircles = circles.filter((circle) => !circle.isAdmin);
   const activeCirclesCount = circles.filter((circle) => circle.isActive).length;
   const inactiveCirclesCount = Math.max(0, circles.length - activeCirclesCount);
+  // Empty because the load failed, not because the user has no circles. The
+  // counts and "create your first circle" copy would be false, so they hide.
+  const circlesUnknown = !loading && circles.length === 0 && networkError.type !== null;
   const fundedTokens = allCoins.filter((coin) => Number(coin.balance) > 0);
   const networkLabel = network === 'mainnet' ? 'Mainnet' : 'Testnet';
   const walletValueDisplay = balanceVisible
@@ -6575,137 +6578,162 @@ export default function Dashboard() {
                     </div>
                   </div>
 
-                  <div className="grid gap-3 md:hidden">
-                    <div className="rounded-[24px] border border-stone-200 bg-stone-50/80 p-4">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                            Circle Types
-                          </p>
-                          <p className="mt-1 text-sm text-slate-600">
-                            Jump straight to the right circle view.
-                          </p>
+                  {/* The degraded load paths set networkError; until now nothing showed it,
+                      so a failed load looked like "No circles yet" or like a complete list. */}
+                  {networkError.type && !error && (
+                    <div
+                      role="alert"
+                      className="flex flex-col gap-3 rounded-[24px] border border-amber-200 bg-amber-50 px-5 py-4 sm:flex-row sm:items-center sm:justify-between"
+                    >
+                      <p className="text-sm leading-6 text-amber-900">{networkError.message}</p>
+                      {networkError.canRetry && (
+                        <button
+                          type="button"
+                          onClick={handleManualRefresh}
+                          disabled={loading || isBackgroundRefreshing}
+                          className={secondaryActionClass}
+                        >
+                          Try again
+                        </button>
+                      )}
+                    </div>
+                  )}
+
+                  {!circlesUnknown && (
+                    <div className="grid gap-3 md:hidden">
+                      <div className="rounded-[24px] border border-stone-200 bg-stone-50/80 p-4">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                              Circle Types
+                            </p>
+                            <p className="mt-1 text-sm text-slate-600">
+                              Jump straight to the right circle view.
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => scrollToCirclePortfolio('all')}
+                            className="text-sm font-medium text-slate-600 transition hover:text-slate-950"
+                          >
+                            Open list
+                          </button>
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => scrollToCirclePortfolio('all')}
-                          className="text-sm font-medium text-slate-600 transition hover:text-slate-950"
-                        >
-                          Open list
-                        </button>
-                      </div>
 
-                      <div className="mt-4 grid grid-cols-3 gap-2">
-                        <button
-                          type="button"
-                          onClick={() => scrollToCirclePortfolio('all')}
-                          className="rounded-[20px] border border-stone-200 bg-white px-3 py-3 text-left transition hover:border-stone-300 hover:bg-stone-50"
-                        >
-                          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
-                            All
-                          </p>
-                          <p className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
-                            {circles.length}
-                          </p>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => scrollToCirclePortfolio('admin')}
-                          className="rounded-[20px] border border-stone-200 bg-white px-3 py-3 text-left transition hover:border-stone-300 hover:bg-stone-50"
-                        >
-                          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
-                            Admin
-                          </p>
-                          <p className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
-                            {adminCircles.length}
-                          </p>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => scrollToCirclePortfolio('member')}
-                          className="rounded-[20px] border border-stone-200 bg-white px-3 py-3 text-left transition hover:border-stone-300 hover:bg-stone-50"
-                        >
-                          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
-                            Member
-                          </p>
-                          <p className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
-                            {memberCircles.length}
-                          </p>
-                        </button>
-                      </div>
+                        <div className="mt-4 grid grid-cols-3 gap-2">
+                          <button
+                            type="button"
+                            onClick={() => scrollToCirclePortfolio('all')}
+                            className="rounded-[20px] border border-stone-200 bg-white px-3 py-3 text-left transition hover:border-stone-300 hover:bg-stone-50"
+                          >
+                            <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                              All
+                            </p>
+                            <p className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
+                              {circles.length}
+                            </p>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => scrollToCirclePortfolio('admin')}
+                            className="rounded-[20px] border border-stone-200 bg-white px-3 py-3 text-left transition hover:border-stone-300 hover:bg-stone-50"
+                          >
+                            <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                              Admin
+                            </p>
+                            <p className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
+                              {adminCircles.length}
+                            </p>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => scrollToCirclePortfolio('member')}
+                            className="rounded-[20px] border border-stone-200 bg-white px-3 py-3 text-left transition hover:border-stone-300 hover:bg-stone-50"
+                          >
+                            <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                              Member
+                            </p>
+                            <p className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
+                              {memberCircles.length}
+                            </p>
+                          </button>
+                        </div>
 
-                      <div className="mt-3 flex flex-wrap gap-2">
-                        <button
-                          type="button"
-                          onClick={() => scrollToCirclePortfolio('all')}
-                          className="inline-flex items-center rounded-full border border-stone-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:border-stone-300 hover:bg-stone-50"
-                        >
-                          {activeCirclesCount} active
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => scrollToCirclePortfolio('all')}
-                          className="inline-flex items-center rounded-full border border-stone-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:border-stone-300 hover:bg-stone-50"
-                        >
-                          {inactiveCirclesCount} inactive
-                        </button>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            onClick={() => scrollToCirclePortfolio('all')}
+                            className="inline-flex items-center rounded-full border border-stone-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:border-stone-300 hover:bg-stone-50"
+                          >
+                            {activeCirclesCount} active
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => scrollToCirclePortfolio('all')}
+                            className="inline-flex items-center rounded-full border border-stone-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:border-stone-300 hover:bg-stone-50"
+                          >
+                            {inactiveCirclesCount} inactive
+                          </button>
+                        </div>
                       </div>
                     </div>
-                  </div>
+                  )}
 
-                  <div className="hidden gap-4 md:grid md:grid-cols-3">
-                    <button
-                      type="button"
-                      onClick={() => scrollToCirclePortfolio('all')}
-                      className="rounded-[24px] border border-stone-200 bg-stone-50/80 p-5 text-left transition hover:border-stone-300 hover:bg-stone-50"
-                    >
-                      <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">
-                        Total circles
-                      </p>
-                      <p className="mt-3 text-3xl font-semibold tracking-tight text-slate-950">
-                        {circles.length}
-                      </p>
-                      <p className="mt-2 text-sm text-slate-500">
-                        {memberCircles.length > 0
-                          ? `${memberCircles.length} member role${memberCircles.length === 1 ? '' : 's'}`
-                          : 'No member-only roles yet'}
-                      </p>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => scrollToCirclePortfolio('admin')}
-                      className="rounded-[24px] border border-stone-200 bg-stone-50/80 p-5 text-left transition hover:border-stone-300 hover:bg-stone-50"
-                    >
-                      <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">
-                        Admin roles
-                      </p>
-                      <p className="mt-3 text-3xl font-semibold tracking-tight text-slate-950">
-                        {adminCircles.length}
-                      </p>
-                      <p className="mt-2 text-sm text-slate-500">
-                        {adminCircles.length > 0
-                          ? 'You can manage members, links, and payout flow here.'
-                          : 'Create a circle to become an admin.'}
-                      </p>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => scrollToCirclePortfolio('all')}
-                      className="rounded-[24px] border border-stone-200 bg-stone-50/80 p-5 text-left transition hover:border-stone-300 hover:bg-stone-50"
-                    >
-                      <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">
-                        Active circles
-                      </p>
-                      <p className="mt-3 text-3xl font-semibold tracking-tight text-slate-950">
-                        {activeCirclesCount}
-                      </p>
-                      <p className="mt-2 text-sm text-slate-500">
-                        {circles.length === 0
-                          ? 'Your circle activity will appear once you join or create one.'
-                          : `${inactiveCirclesCount} inactive circle${inactiveCirclesCount === 1 ? '' : 's'}`}
-                      </p>
-                    </button>
-                  </div>
+                  {!circlesUnknown && (
+                    <div className="hidden gap-4 md:grid md:grid-cols-3">
+                      <button
+                        type="button"
+                        onClick={() => scrollToCirclePortfolio('all')}
+                        className="rounded-[24px] border border-stone-200 bg-stone-50/80 p-5 text-left transition hover:border-stone-300 hover:bg-stone-50"
+                      >
+                        <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">
+                          Total circles
+                        </p>
+                        <p className="mt-3 text-3xl font-semibold tracking-tight text-slate-950">
+                          {circles.length}
+                        </p>
+                        <p className="mt-2 text-sm text-slate-500">
+                          {memberCircles.length > 0
+                            ? `${memberCircles.length} member role${memberCircles.length === 1 ? '' : 's'}`
+                            : 'No member-only roles yet'}
+                        </p>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => scrollToCirclePortfolio('admin')}
+                        className="rounded-[24px] border border-stone-200 bg-stone-50/80 p-5 text-left transition hover:border-stone-300 hover:bg-stone-50"
+                      >
+                        <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">
+                          Admin roles
+                        </p>
+                        <p className="mt-3 text-3xl font-semibold tracking-tight text-slate-950">
+                          {adminCircles.length}
+                        </p>
+                        <p className="mt-2 text-sm text-slate-500">
+                          {adminCircles.length > 0
+                            ? 'You can manage members, links, and payout flow here.'
+                            : 'Create a circle to become an admin.'}
+                        </p>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => scrollToCirclePortfolio('all')}
+                        className="rounded-[24px] border border-stone-200 bg-stone-50/80 p-5 text-left transition hover:border-stone-300 hover:bg-stone-50"
+                      >
+                        <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">
+                          Active circles
+                        </p>
+                        <p className="mt-3 text-3xl font-semibold tracking-tight text-slate-950">
+                          {activeCirclesCount}
+                        </p>
+                        <p className="mt-2 text-sm text-slate-500">
+                          {circles.length === 0
+                            ? 'Your circle activity will appear once you join or create one.'
+                            : `${inactiveCirclesCount} inactive circle${inactiveCirclesCount === 1 ? '' : 's'}`}
+                        </p>
+                      </button>
+                    </div>
+                  )}
 
                   <div className="flex flex-wrap gap-3">
                     <button
@@ -7538,17 +7566,19 @@ export default function Dashboard() {
                     </p>
                   </div>
 
-                  <div className="flex flex-wrap gap-3">
-                    <div className="inline-flex items-center rounded-full border border-stone-200 bg-stone-50 px-4 py-2 text-sm font-medium text-slate-600">
-                      {circles.length} total
+                  {!circlesUnknown && (
+                    <div className="flex flex-wrap gap-3">
+                      <div className="inline-flex items-center rounded-full border border-stone-200 bg-stone-50 px-4 py-2 text-sm font-medium text-slate-600">
+                        {circles.length} total
+                      </div>
+                      <div className="inline-flex items-center rounded-full border border-stone-200 bg-stone-50 px-4 py-2 text-sm font-medium text-slate-600">
+                        {adminCircles.length} admin
+                      </div>
+                      <div className="inline-flex items-center rounded-full border border-stone-200 bg-stone-50 px-4 py-2 text-sm font-medium text-slate-600">
+                        {activeCirclesCount} active
+                      </div>
                     </div>
-                    <div className="inline-flex items-center rounded-full border border-stone-200 bg-stone-50 px-4 py-2 text-sm font-medium text-slate-600">
-                      {adminCircles.length} admin
-                    </div>
-                    <div className="inline-flex items-center rounded-full border border-stone-200 bg-stone-50 px-4 py-2 text-sm font-medium text-slate-600">
-                      {activeCirclesCount} active
-                    </div>
-                  </div>
+                  )}
                 </div>
 
                 {loading ? (
@@ -7668,6 +7698,23 @@ export default function Dashboard() {
                       </Tab.Panel>
                     </Tab.Panels>
                   </Tab.Group>
+                ) : circlesUnknown ? (
+                  <div className="rounded-[28px] border border-amber-200 bg-amber-50/70 px-6 py-14 text-center">
+                    <h3 className="text-base font-semibold text-amber-950">Your circles couldn&apos;t be loaded</h3>
+                    <p className="mx-auto mt-2 max-w-md text-sm text-amber-900">
+                      This list is empty because the network didn&apos;t answer, not because you have no circles.
+                    </p>
+                    <div className="mt-6">
+                      <button
+                        type="button"
+                        onClick={handleManualRefresh}
+                        disabled={loading || isBackgroundRefreshing}
+                        className={secondaryActionClass}
+                      >
+                        Try again
+                      </button>
+                    </div>
+                  </div>
                 ) : (
                   <div className="rounded-[28px] border border-dashed border-stone-300 bg-stone-50/80 px-6 py-14 text-center">
                     <svg

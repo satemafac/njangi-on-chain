@@ -43,4 +43,19 @@ describe('dashboard circle reads during an RPC outage', () => {
     );
     expect(SOURCE).not.toMatch(/const userIsCurrentMemberOrAdmin/);
   });
+
+  // The degraded paths always set networkError, but nothing rendered it: a
+  // failed load showed "No circles yet" or a stale list with no warning.
+  it('shows networkError to the user, with a retry', () => {
+    expect(SOURCE).toMatch(/\{networkError\.type && !error && \([\s\S]{0,400}\{networkError\.message\}/);
+  });
+
+  it('does not show the empty state or zero counts when the list is unknown', () => {
+    expect(SOURCE).toMatch(
+      /const circlesUnknown = !loading && circles\.length === 0 && networkError\.type !== null;/,
+    );
+    expect(SOURCE).toMatch(/\) : circlesUnknown \? \([\s\S]{0,200}Your circles couldn&apos;t be loaded/);
+    expect(SOURCE.match(/\{!circlesUnknown && \(/g)?.length).toBeGreaterThanOrEqual(3);
+  });
 });
+
