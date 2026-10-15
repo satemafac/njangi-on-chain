@@ -4,7 +4,8 @@ import { ZkLoginClient } from '@/services/zkLoginClient';
 import { LegalAcceptanceGate } from '@/components/LegalAcceptanceModal';
 import { AddressDriftGate } from '@/components/AddressDriftModal';
 import { useIdleTimer } from '@/hooks/useIdleTimer';
-import { getCurrentNetwork, getNetworkConfig } from '@/services/network-config';
+import { getCurrentNetwork } from '@/services/network-config';
+import { getSigningSuiClient } from '@/services/sui-rpc-failover';
 import { refreshAdminHeartbeatsAfterAuth } from '@/lib/admin-heartbeat-refresh';
 import { isDeleteCircleWalletFundsAbort } from '@/lib/custody-wallet-balance';
 import {
@@ -493,8 +494,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       // could constrain, because it makes no Move call at all. With the
       // session cookie it was enough to drain a wallet. The server can no
       // longer perform it.
-      const [{ SuiClient }, signerModule, { buildSendTokensTx }] = await Promise.all([
-        import('@mysten/sui/client'),
+      const [signerModule, { buildSendTokensTx }] = await Promise.all([
         import('@/lib/zklogin-client-signer'),
         import('@/lib/send-tokens-tx'),
       ]);
@@ -502,9 +502,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       if (!signerSession) {
         throw new Error('Your signing session is unavailable. Please sign in again.');
       }
-      const suiClient = new SuiClient({
-        url: getNetworkConfig(signerSession.network).rpcUrl,
-      });
+      const suiClient = getSigningSuiClient(signerSession.network);
 
       const { digest } = await signerModule.signAndExecuteWithZkLogin(
         signerSession,

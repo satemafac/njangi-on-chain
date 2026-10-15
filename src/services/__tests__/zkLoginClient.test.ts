@@ -8,7 +8,7 @@ jest.mock('../circle-service', () => ({
 jest.mock('../network-config', () => ({
   getCurrentNetwork: jest.fn(() => 'testnet'),
   getCurrentPackageId: jest.fn(() => '0xabc'),
-  getNetworkConfig: jest.fn(() => ({ rpcUrl: 'https://rpc.invalid' })),
+  getNetworkConfig: jest.fn(() => ({ rpcUrl: 'https://rpc.invalid', rpcAltUrl: '' })),
 }));
 
 jest.mock('@/lib/zklogin-client-signer', () => ({

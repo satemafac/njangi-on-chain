@@ -62,6 +62,7 @@ import {
   getPooledSuiClient,
   getRpcCandidateUrls,
   getRpcCandidateUrlsForRpcUrl,
+  getSigningSuiClient,
   isCapabilityGapError,
   isRateLimitedSuiRpcError,
   isRetriableSuiRpcError,
@@ -264,6 +265,39 @@ describe('sui-rpc-failover', () => {
     expect(client.transport).toBeDefined();
   });
 
+  describe('getSigningSuiClient', () => {
+    type TransportClient = {
+      transport: { request: (input: { method: string; params: unknown[] }) => Promise<unknown> };
+    };
+    const signed = { method: 'sui_executeTransactionBlock', params: ['dHhieXRlcw==', ['c2ln'], {}] };
+
+    it('submits through the configured primary while it is healthy', async () => {
+      const client = getSigningSuiClient('testnet') as unknown as TransportClient;
+      transportRequestMocks.get('https://primary.rpc')!.mockResolvedValueOnce({ digest: 'D1' });
+
+      await expect(client.transport.request(signed)).resolves.toEqual({ digest: 'D1' });
+      expect(transportRequestMocks.get('https://alt.rpc')).not.toHaveBeenCalled();
+    });
+
+    // The 2026-10-15 shape: reads failed over, signing was pinned to the
+    // primary, so a publicnode outage stopped every transaction.
+    it('resubmits the same signed bytes to the next endpoint when the primary is down', async () => {
+      const client = getSigningSuiClient('testnet') as unknown as TransportClient;
+      transportRequestMocks.get('https://primary.rpc')!.mockRejectedValueOnce(
+        new Error('Unexpected status code: 503'),
+      );
+      transportRequestMocks.get('https://alt.rpc')!.mockResolvedValueOnce({ digest: 'D1' });
+
+      await expect(client.transport.request(signed)).resolves.toEqual({ digest: 'D1' });
+      expect(transportRequestMocks.get('https://primary.rpc')).toHaveBeenCalledWith(signed);
+      expect(transportRequestMocks.get('https://alt.rpc')).toHaveBeenCalledWith(signed);
+    });
+
+    it('is the pooled failover client for that network', () => {
+      expect(getSigningSuiClient('testnet')).toBe(getPooledSuiClient({ network: 'testnet' }));
+    });
+  });
+
   it('cools down an RPC after 429 so the next request starts with the alternate', async () => {
     const client = getPooledSuiClient({
       network: 'testnet',
@@ -432,5 +466,28 @@ describe('capability gaps vs ill health', () => {
     const msg = 'Could not find the referenced transaction events [TransactionDigest(x)].';
     expect(isCapabilityGapError(msg)).toBe(true);
     expect(isRetriableSuiRpcError(new Error(msg))).toBe(true);
+  });
+});
+
+// Every client that signs or submits a transaction must fail over. A
+// `new SuiClient({ url })` in these files pins the money path to one endpoint.
+describe('signing paths never pin a single RPC endpoint', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { readFileSync } = require('fs') as typeof import('fs');
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { join } = require('path') as typeof import('path');
+  const root = join(__dirname, '..', '..', '..');
+  const SIGNING_FILES = [
+    'src/services/zkLoginClient.ts',
+    'src/hooks/useZkLoginSigner.ts',
+    'src/contexts/AuthContext.tsx',
+    'src/lib/zklogin-client-signer.ts',
+    'src/lib/sponsored-tx-client.ts',
+    'src/lib/sponsored-first-signer.ts',
+  ];
+
+  it.each(SIGNING_FILES)('%s constructs no SuiClient of its own', (file) => {
+    const source = readFileSync(join(root, file), 'utf8');
+    expect(source).not.toMatch(/new\s+SuiClient\s*\(/);
   });
 });

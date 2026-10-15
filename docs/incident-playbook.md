@@ -170,6 +170,25 @@ lock across every open control until discovery confirms the new escrow
 open outright once published. Watching a round in an E2E run: poll the last
 `escrow_history` entry, not an escrow id captured earlier.
 
+## Scenario 6 — Sui RPC provider outage
+
+Symptoms: "I can't sign in", pages that say they couldn't reach the
+network, transactions failing with 503 / 429 / `Internal error`. Funds are
+untouched: the chain is fine, the app just cannot talk to it.
+
+1. Probe the endpoints directly (`sui_getLatestCheckpointSequenceNumber`
+   against publicnode and blockvision; `{ epoch { epochId } }` against
+   `graphql.testnet.sui.io/graphql`). If only the JSON-RPC providers fail,
+   it is a provider outage, not ours.
+2. Check `vercel logs --query zkLogin` for `beginLogin` errors. Sign-in
+   should survive via GraphQL; if it does not, that is a regression.
+3. Say plainly that balances and circles are safe on chain and the app is
+   waiting on a network provider. Do not tell anyone to retry transactions
+   in a loop.
+4. The levers and what still breaks are in
+   [sui-rpc-outage-plan.md](sui-rpc-outage-plan.md). The fastest lever is a
+   keyed JSON-RPC provider in `NEXT_PUBLIC_TESTNET_RPC_ALT` (owner decision).
+
 ## Contact chain
 
 - Counsel: {{COUNSEL_CONTACT}} (fill when the A6 engagement closes)
@@ -179,7 +198,14 @@ open outright once published. Watching a round in an E2E run: poll the last
 
 ## Incident log
 
-_Append dated entries here. None yet._
+_Append dated entries here._
+
+- **2026-10-15 — testnet JSON-RPC outage (Scenario 6).** publicnode 503
+  "no available nodes", blockvision `-32603` / 429, Sui fullnodes long since
+  JSON-RPC-free. Nobody could sign in (`beginLogin` epoch read). Fixed
+  sign-in via GraphQL (`fix/login-epoch-graphql-fallback`) and made signing
+  fail over (`getSigningSuiClient`). Pages and transactions still depend on
+  JSON-RPC: see [sui-rpc-outage-plan.md](sui-rpc-outage-plan.md).
 
 ## Reads that lie — the recurring bug family
 
