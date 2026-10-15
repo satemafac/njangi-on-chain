@@ -23,8 +23,8 @@ import {
   getNetworkConfig,
   NetworkType,
 } from './network-config';
-import { withSuiRpcFailover } from './sui-rpc-failover';
 import { getCanonicalBaseOrigin, preferCanonicalOrigin } from '@/lib/canonical-host';
+import { readCurrentSuiEpoch } from '@/lib/sui-epoch';
 
 // Dynamic RPC URL based on network configuration
 function getNetworkRpcUrl(): string {
@@ -270,13 +270,9 @@ export class EnokiZkLoginService {
       redirectUri: resolvedRedirectUri,
     });
 
-    // Create a nonce
-    const { epoch } = await withSuiRpcFailover(
-      effectiveNetwork,
-      'enoki.beginLogin.getLatestSuiSystemState',
-      async (suiClient) => suiClient.getLatestSuiSystemState(),
-    );
-    const maxEpoch = Number(epoch) + MAX_EPOCH;
+    // Create a nonce. GraphQL first, JSON-RPC as fallback: see sui-epoch.ts.
+    const epoch = await readCurrentSuiEpoch(effectiveNetwork);
+    const maxEpoch = epoch + MAX_EPOCH;
 
     // The public key arrives from the browser; the private half never leaves
     // it. `generateNonce` needs only the public key, so nothing here requires
