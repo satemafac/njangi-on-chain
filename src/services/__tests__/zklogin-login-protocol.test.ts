@@ -99,6 +99,37 @@ describe('zkLogin login protocol', () => {
       await expect(ZkLoginClient.getInstance().beginLogin('Google')).rejects.toThrow('bad key');
       expect(loadPendingLogin()).toBeNull();
     });
+
+    // The sign-in button picks its message from this code (sign-in-start.ts).
+    it("keeps the server's error code, so the button can say what went wrong", async () => {
+      const message =
+        'Could not reach the Sui testnet network to start sign-in. Please try again in a few minutes.';
+      global.fetch = jest.fn(async () => ({
+        ok: false,
+        status: 503,
+        text: async () => JSON.stringify({ error: message, code: 'SUI_NETWORK_UNAVAILABLE' }),
+      } as Response)) as unknown as typeof fetch;
+
+      const failure = ZkLoginClient.getInstance().beginLogin('Google');
+      await expect(failure).rejects.toMatchObject({
+        code: 'SUI_NETWORK_UNAVAILABLE',
+        message: `Failed to begin login: ${message}`,
+      });
+      expect(loadPendingLogin()).toBeNull();
+    });
+
+    it('labels an uncoded failure with its HTTP status', async () => {
+      global.fetch = jest.fn(async () => ({
+        ok: false,
+        status: 500,
+        text: async () => JSON.stringify({ error: 'Internal error' }),
+      } as Response)) as unknown as typeof fetch;
+
+      await expect(ZkLoginClient.getInstance().beginLogin('Google')).rejects.toMatchObject({
+        code: 'HTTP_500',
+        message: 'Failed to begin login: Internal error',
+      });
+    });
   });
 
   describe('legacy server-signing actions', () => {
