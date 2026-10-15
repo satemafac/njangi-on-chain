@@ -418,6 +418,24 @@ export function getPooledSuiClient(args: SharedSuiClientArgs = {}): SuiClient {
   return failoverClientPool.get(cacheKey)!;
 }
 
+/**
+ * The client every signing path builds and submits transactions with.
+ *
+ * Signing used to construct `new SuiClient({ url: rpcUrl })`: one endpoint, no
+ * failover. Reads failed over and transactions did not, so a primary outage
+ * stopped every deposit, contribution and payout while the pages that offered
+ * them still loaded.
+ *
+ * Failing over a submission is safe. A retry carries the same signed bytes,
+ * hence the same digest, and Sui executes a digest at most once: the next node
+ * either lands it or answers with the effects already recorded. Nothing can be
+ * paid twice, which is not true of a user who retries by hand after an error
+ * and signs a fresh transaction.
+ */
+export function getSigningSuiClient(network?: NetworkType): SuiClient {
+  return getPooledSuiClient({ network });
+}
+
 export function clearSuiRpcClientPool(): void {
   directClientPool.clear();
   failoverClientPool.clear();

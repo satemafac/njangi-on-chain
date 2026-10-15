@@ -291,7 +291,13 @@ zkProofs.)
   (`src/lib/rate-limit.ts`). Never consume-then-do.
 
 **RPC Connection Issues**:
-- Use `sui-rpc-failover` service for reliability
+- Use `sui-rpc-failover` service for reliability. Signing paths take
+  `getSigningSuiClient(network)`, never `new SuiClient({ url })` (a test
+  enforces it): a single-endpoint client turns a primary outage into "no
+  transaction can be sent".
+- Every testnet JSON-RPC endpoint can be down at once (2026-10-15). Sui's
+  GraphQL (`graphql.testnet.sui.io`) and gRPC kept answering; what still
+  breaks and the ranked fix list are in `docs/sui-rpc-outage-plan.md`.
 - Check Sui testnet status: https://status.sui.io
 - Verify RPC endpoints in configuration
 - Implement retry logic for transient failures

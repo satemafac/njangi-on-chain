@@ -30,6 +30,7 @@ import {
   type CreateCircleTransactionData,
 } from '@/lib/zklogin-tx-builders';
 import { getCircleTransactionPackageId } from './circle-service';
+import { getSigningSuiClient } from './sui-rpc-failover';
 import { getCurrentNetwork, getCurrentPackageId, getNetworkConfig } from './network-config';
 import { isV11AssetTermsEnabled } from '@/config/feature-flags';
 import {
@@ -69,15 +70,10 @@ async function tryClientSideSigner(
 > {
   if (typeof window === 'undefined') return null;
   try {
-    const [{ SuiClient }, signerModule] = await Promise.all([
-      import('@mysten/sui/client'),
-      import('@/lib/zklogin-client-signer'),
-    ]);
+    const signerModule = await import('@/lib/zklogin-client-signer');
     const session = signerModule.loadSignerSession();
     if (!session) return null;
-    const client = new SuiClient({
-      url: getNetworkConfig(networkOverride ?? session.network).rpcUrl,
-    });
+    const client = getSigningSuiClient(networkOverride ?? session.network);
     return {
       signAndExecute: async (input) => {
         const res = await signerModule.signAndExecuteWithZkLogin(
@@ -113,11 +109,8 @@ async function trySponsoredGas(args: {
 }): Promise<{ digest: string; effects?: unknown } | null> {
   if (typeof window === 'undefined') return null;
   try {
-    const [{ SuiClient }, { trySponsoredExecute }] = await Promise.all([
-      import('@mysten/sui/client'),
-      import('@/lib/sponsored-tx-client'),
-    ]);
-    const client = new SuiClient({ url: getNetworkConfig(args.network).rpcUrl });
+    const { trySponsoredExecute } = await import('@/lib/sponsored-tx-client');
+    const client = getSigningSuiClient(args.network);
     const build = args.build;
     return await trySponsoredExecute({
       action: args.action,
@@ -241,8 +234,7 @@ export class ZkLoginError extends Error {
 }
 
 async function rpcClientFor(network: NetworkOverride) {
-  const { SuiClient } = await import('@mysten/sui/client');
-  return new SuiClient({ url: getNetworkConfig(network).rpcUrl });
+  return getSigningSuiClient(network);
 }
 
 /**

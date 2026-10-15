@@ -1,5 +1,4 @@
-import { useCallback, useMemo, useRef } from 'react';
-import { SuiClient } from '@mysten/sui/client';
+import { useCallback, useMemo } from 'react';
 import {
   loadSignerSession,
   type ClientSignerResult,
@@ -11,7 +10,7 @@ import {
   type SponsoredFirstResult,
   type SponsorRequest,
 } from '@/lib/sponsored-first-signer';
-import { getCurrentRpcUrl, getNetworkConfig } from '@/services/network-config';
+import { getSigningSuiClient } from '@/services/sui-rpc-failover';
 
 /**
  * React hook wrapper over the framework-agnostic client-side zkLogin
@@ -24,19 +23,10 @@ import { getCurrentRpcUrl, getNetworkConfig } from '@/services/network-config';
  * work; this hook is the Phase 2 migration path for non-custodial UIs.
  */
 export function useZkLoginSigner() {
-  const clientRef = useRef<SuiClient | null>(null);
-  const clientNetworkRef = useRef<'testnet' | 'mainnet' | null>(null);
-
   const session: ClientSignerSession | null = useMemo(() => loadSignerSession(), []);
 
-  const getClient = useCallback((network: 'testnet' | 'mainnet') => {
-    if (!clientRef.current || clientNetworkRef.current !== network) {
-      const url = network ? getNetworkConfig(network).rpcUrl : getCurrentRpcUrl();
-      clientRef.current = new SuiClient({ url });
-      clientNetworkRef.current = network;
-    }
-    return clientRef.current;
-  }, []);
+  // Pooled per network, so there is nothing to memoise here.
+  const getClient = useCallback((network: 'testnet' | 'mainnet') => getSigningSuiClient(network), []);
 
   const signAndExecute = useCallback(
     async (
