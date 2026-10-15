@@ -23,7 +23,7 @@ import {
 } from '@/lib/onramp-provider';
 import { RAMP_PROVIDER_LABELS, type RampProviderId } from '@/lib/ramp-geo';
 import { resolveCircleLifecycleState } from '@/lib/circle-chain';
-import { discoverMemberCircleIds } from '@/lib/membership-discovery';
+import { discoverMemberCircleIds, isCurrentMemberOrAdmin } from '@/lib/membership-discovery';
 import { readObjects } from '@/lib/sui-read';
 import { cetusService } from '@/lib/cetus-service';
 import { ZkLoginClient } from '@/services/zkLoginClient';
@@ -214,41 +214,6 @@ const isGracefulDashboardQueryError = (error: unknown): boolean => (
   isCrossPackageQueryError(error) ||
   isEmptyEffectsError(error)
 );
-
-// Verify a receipt-discovered circle still reflects CURRENT membership. The
-// soulbound CircleMembership receipt is only a discovery hint: it persists
-// after an admin removes a member, so before trusting a receipt-only candidate
-// we confirm the user is the admin or is present in the circle's live members
-// table (removed members are deleted from that table). Bounded by the user's
-// own memberships — O(user), not O(protocol). Mirrors the MemberRemoved
-// filtering the event-discovery path already performs.
-const userIsCurrentMemberOrAdmin = async (
-  client: SuiClient,
-  circleId: string,
-  userAddress: string,
-): Promise<boolean> => {
-  try {
-    const obj = await client.getObject({ id: circleId, options: { showContent: true } });
-    const content = obj.data?.content;
-    if (!content || !('fields' in content)) return false;
-    const fields = content.fields as {
-      admin?: string;
-      members?: { fields?: { id?: { id?: string } } };
-    };
-    if (fields.admin === userAddress) return true;
-    const membersTableId = fields.members?.fields?.id?.id;
-    if (!membersTableId) return false;
-    const memberField = await client.getDynamicFieldObject({
-      parentId: membersTableId,
-      name: { type: 'address', value: userAddress },
-    });
-    return Boolean(memberField.data?.content);
-  } catch {
-    // On a transient read failure, fail closed (don't surface an unverified
-    // circle). The event path / next refresh will pick it up.
-    return false;
-  }
-};
 
 // Global request queue and rate limiting
 interface QueuedRequest {
@@ -3745,11 +3710,20 @@ export default function Dashboard() {
       try {
         const receiptCircleIds = await discoverMemberCircleIds(userAddress, { network: currentNetwork });
         const undiscovered = receiptCircleIds.filter((cid) => !allUserCircleIds.has(cid));
+        let unverifiable = 0;
         const verified = await Promise.all(
-          undiscovered.map(async (cid) =>
-            (await userIsCurrentMemberOrAdmin(client, cid, userAddress)) ? cid : null,
-          ),
+          undiscovered.map(async (cid) => {
+            const current = await isCurrentMemberOrAdmin(client, cid, userAddress);
+            if (current === null) unverifiable += 1;
+            return current ? cid : null;
+          }),
         );
+        if (unverifiable > 0) {
+          // Unknown is not "not a member": report the list as incomplete so
+          // the merge below keeps what the user already saw.
+          console.warn(`🎟️ Could not verify ${unverifiable} receipt circle(s); marking the scan incomplete`);
+          initialResults = { ...initialResults, degraded: true };
+        }
         let surfaced = 0;
         for (const cid of verified) {
           if (!cid) continue;
@@ -3766,7 +3740,10 @@ export default function Dashboard() {
           console.log(`🎟️ Membership receipts surfaced ${surfaced} verified circle(s) the event scan missed`);
         }
       } catch (membershipError) {
-        console.warn('Membership receipt discovery failed (non-fatal, falling back to event scan):', membershipError);
+        // Circles known only by their receipt are missing from this pass, so
+        // the list is incomplete, not final.
+        console.warn('Membership receipt discovery failed; marking the scan incomplete:', membershipError);
+        initialResults = { ...initialResults, degraded: true };
       }
 
       // Circles we know about ONLY because the event scan found them hold no

@@ -13,7 +13,7 @@ jest.mock('@/lib/circle-chain', () => ({
   getPublishedPackageMetadata: () => ({ originalId: mockOriginalId, publishedAt: '0xnew' }),
 }));
 
-import { discoverMemberCircleIds } from '@/lib/membership-discovery';
+import { discoverMemberCircleIds, isCurrentMemberOrAdmin } from '@/lib/membership-discovery';
 import { clearSuiReadCache } from '@/lib/sui-read';
 
 const receipt = (circleId: string) => ({ data: { content: { fields: { circle_id: circleId } } } });
@@ -63,4 +63,51 @@ it('returns empty when the package lineage is unknown (no RPC call)', async () =
   const ids = await discoverMemberCircleIds('0xuser');
   expect(ids).toEqual([]);
   expect(getOwnedObjects).not.toHaveBeenCalled();
+});
+
+describe('isCurrentMemberOrAdmin', () => {
+  const USER = '0xuser';
+  const circle = (fields: Record<string, unknown>) => ({
+    data: { content: { dataType: 'moveObject', fields } },
+  });
+  const withTable = { admin: '0xadmin', members: { fields: { id: { id: '0xtable' } } } };
+  const clientWith = (
+    getObject: () => Promise<unknown>,
+    getDynamicFieldObject: () => Promise<unknown> = async () => ({ data: { content: {} } }),
+  ) => ({ getObject: jest.fn(getObject), getDynamicFieldObject: jest.fn(getDynamicFieldObject) }) as never;
+
+  it('confirms the admin without reading the members table', async () => {
+    const client = clientWith(async () => circle({ ...withTable, admin: USER }));
+    await expect(isCurrentMemberOrAdmin(client, '0xc', USER)).resolves.toBe(true);
+  });
+
+  it('confirms a member found in the live members table', async () => {
+    const client = clientWith(async () => circle(withTable));
+    await expect(isCurrentMemberOrAdmin(client, '0xc', USER)).resolves.toBe(true);
+  });
+
+  it('answers false for a member the table no longer holds (removed)', async () => {
+    const client = clientWith(
+      async () => circle(withTable),
+      async () => ({ error: { code: 'dynamicFieldNotFound' } }),
+    );
+    await expect(isCurrentMemberOrAdmin(client, '0xc', USER)).resolves.toBe(false);
+  });
+
+  it('answers false for a circle that no longer exists', async () => {
+    const client = clientWith(async () => ({ error: { code: 'deleted' } }));
+    await expect(isCurrentMemberOrAdmin(client, '0xc', USER)).resolves.toBe(false);
+  });
+
+  // The swallow this replaces returned false for all of these, hiding the
+  // user's circle whenever the RPC had a bad moment.
+  it.each([
+    ['the circle read throws', clientWith(async () => { throw new Error('Unexpected status code: 503'); })],
+    ['the circle read errors without saying it is gone', clientWith(async () => ({ error: { code: 'unknown' } }))],
+    ['the member lookup throws', clientWith(async () => circle(withTable), async () => { throw new Error('429'); })],
+    ['the member lookup errors otherwise', clientWith(async () => circle(withTable), async () => ({ error: { code: 'unknown' } }))],
+    ['the circle has no members table', clientWith(async () => circle({ admin: '0xadmin' }))],
+  ])('is unknown (null) when %s', async (_label, client) => {
+    await expect(isCurrentMemberOrAdmin(client, '0xc', USER)).resolves.toBeNull();
+  });
 });
