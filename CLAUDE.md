@@ -292,9 +292,13 @@ zkProofs.)
 
 **RPC Connection Issues**:
 - Use `sui-rpc-failover` service for reliability. Signing paths take
-  `getSigningSuiClient(network)`, never `new SuiClient({ url })` (a test
-  enforces it): a single-endpoint client turns a primary outage into "no
-  transaction can be sent".
+  `getSigningSuiClient(network)` (`src/lib/signing-sui-client.ts`), never
+  `new SuiClient({ url })` (a test enforces it). It builds, submits and
+  confirms through `@mysten/sui` 2.x (installed as the alias
+  `@mysten/sui-v2`: Sui gRPC, then GraphQL) and only then JSON-RPC, and maps
+  results and abort errors back to the JSON-RPC text the app parses
+  (`src/lib/v2-tx-mapping.ts`). 2.x is ESM-only: import it ONLY from
+  `src/lib/v2-sui-client.ts`, lazily, never in code Jest loads.
 - Every testnet JSON-RPC endpoint can be down at once (2026-10-15). Sui's
   GraphQL (`graphql.testnet.sui.io`) and gRPC kept answering; what still
   breaks and the ranked fix list are in `docs/sui-rpc-outage-plan.md`.

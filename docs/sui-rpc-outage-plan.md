@@ -156,7 +156,7 @@ fix them before or alongside any fallback work:
 **0. Sign-in. Done** on `fix/login-epoch-graphql-fallback`.
 
 **1. Signing fails over across JSON-RPC endpoints. Done on this branch.**
-`getSigningSuiClient(network)` in `src/services/sui-rpc-failover.ts`
+`getSigningSuiClient(network)` (now `src/lib/signing-sui-client.ts`)
 replaces the five `new SuiClient({ url: rpcUrl })` signing clients
 (`zkLoginClient.ts` ×3, `useZkLoginSigner.ts`, `AuthContext.tsx`
 send-tokens). Healthy behaviour is unchanged: the configured primary is still
