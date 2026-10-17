@@ -45,6 +45,7 @@
     "@mysten/dapp-kit": "^0.14.48",
     "@mysten/enoki": "^0.6.13",
     "@mysten/sui": "^1.21.2",
+    "@mysten/sui-v2": "npm:@mysten/sui@^2.36.0",
     "@mysten/sui.js": "^0.54.1",
     "@mysten/wallet-kit": "^0.8.6",
     "@mysten/wallet-standard": "^0.13.23",

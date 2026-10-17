@@ -21,6 +21,7 @@ import {
   type V11CircleAssetPolicy,
 } from '@/lib/v11-circle-tx';
 import type { CreateCircleTransactionData } from '@/lib/zklogin-tx-builders';
+import { V2_READS_KEY } from '@/lib/tx-transport';
 
 const ADDR = (b: string) => `0x${b.repeat(64)}`;
 const PKG = ADDR('a');
@@ -413,5 +414,61 @@ describe('v11 refunds, removal, conversion and rounds', () => {
 
   it('rejects a malformed coin type', () => {
     expect(() => buildRefundAssetTx({ ...base, coinType: 'usdc' })).toThrow('Coin type is invalid.');
+  });
+});
+
+// The signing client reads the policy through @mysten/sui 2.x, whose JSON
+// renders vector<u8> as base64 (JSON-RPC: a byte array). Fixture: the live
+// policy of circle 0x7beabc6c…, as gRPC and GraphQL both returned it on
+// 2026-10-17.
+describe('readCircleAssetPolicy on the signing client (2.x)', () => {
+  const USDC_B64 =
+    'MjZiM2JjNjdiZWZjMjE0MDU4Y2E3OGVhOWEyNjkwMjk4ZDczMWEyZDQzMDk0ODVlYzNkNDAxOTgwNjNjNGFiYzo6dXNkYzo6VVNEQw==';
+  const LIVE_POLICY = {
+    assets: [{ asset: USDC_B64, contribution_amount: '100000', decimals: 6, security_deposit: '50000' }],
+    legacy_ledger_entries: '0',
+    set_at_ms: '1791324965197',
+    settlement_asset: USDC_B64,
+    wallet_id: '0x0299a8e39218a5f2082a32ac93f681361066f0227aee7a89b85a02db9a2cb2d7',
+  };
+  const CIRCLE = '0x7beabc6c151fef9d1e2ce503295d05686457d433ad0993da07fe78890130ff6c';
+  const signingClient = (dynamicFieldValueJson: jest.Mock) => ({
+    [V2_READS_KEY]: { dynamicFieldValueJson },
+    getDynamicFields: jest.fn().mockRejectedValue(new Error('JSON-RPC must not be used')),
+    getObject: jest.fn().mockRejectedValue(new Error('JSON-RPC must not be used')),
+  });
+
+  it('decodes the base64 asset fields and parses the live policy', async () => {
+    const reads = jest.fn().mockResolvedValue(LIVE_POLICY);
+    const policy = await readCircleAssetPolicy(signingClient(reads) as never, CIRCLE);
+    expect(reads).toHaveBeenCalledWith(CIRCLE, '::njangi_circles::AssetPolicyKey');
+    expect(policy).toEqual({
+      settlement: {
+        coinType: '0x26b3bc67befc214058ca78ea9a2690298d731a2d4309485ec3d40198063c4abc::usdc::USDC',
+        decimals: 6,
+        contributionAmount: BigInt(100000),
+        securityDeposit: BigInt(50000),
+      },
+      assets: [
+        {
+          coinType: '0x26b3bc67befc214058ca78ea9a2690298d731a2d4309485ec3d40198063c4abc::usdc::USDC',
+          decimals: 6,
+          contributionAmount: BigInt(100000),
+          securityDeposit: BigInt(50000),
+        },
+      ],
+      setAtMs: 1791324965197,
+      walletId: LIVE_POLICY.wallet_id,
+      legacyLedgerEntries: 0,
+    });
+  });
+
+  it('answers "no terms" when the circle has no policy field', async () => {
+    await expect(readCircleAssetPolicy(signingClient(jest.fn().mockResolvedValue(null)) as never, CIRCLE)).resolves.toBeNull();
+  });
+
+  it('refuses rather than guessing when the policy does not parse', async () => {
+    const reads = jest.fn().mockResolvedValue({ ...LIVE_POLICY, wallet_id: undefined });
+    await expect(readCircleAssetPolicy(signingClient(reads) as never, CIRCLE)).rejects.toThrow("asset terms could not be read");
   });
 });

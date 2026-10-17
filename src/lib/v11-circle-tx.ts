@@ -17,7 +17,10 @@
 
 import type { SuiClient } from '@mysten/sui/client';
 import { Transaction } from '@mysten/sui/transactions';
+import { fromBase64 } from '@mysten/sui/utils';
 import { normalizePackageId } from '@/lib/circle-chain';
+import { attachedV2Reads } from '@/lib/tx-transport';
+import { isTxTransportError } from '@/lib/v2-tx-mapping';
 import { normalizeRequiredObjectId } from '@/lib/sui-object-id';
 import {
   parseCreateCircleData,
@@ -170,6 +173,38 @@ export function parseCircleAssetPolicy(value: unknown): V11CircleAssetPolicy | n
 
 type PolicyReaderClient = Pick<SuiClient, 'getDynamicFields' | 'getObject'>;
 
+const ASSET_POLICY_KEY_SUFFIX = '::njangi_circles::AssetPolicyKey';
+
+/**
+ * 2.x JSON renders `vector<u8>` as base64 where JSON-RPC gives a byte array;
+ * `asset` and `settlement_asset` are the policy's vector<u8> fields (verified
+ * live 2026-10-17 on gRPC and GraphQL). Decoded explicitly here, by field name,
+ * rather than guessing which strings are base64.
+ */
+export function v2AssetPolicyJsonToJsonRpc(value: unknown): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  const bytes = (v: unknown) => {
+    if (typeof v !== 'string') return v;
+    try {
+      return Array.from(fromBase64(v));
+    } catch {
+      return v;
+    }
+  };
+  const record = value as Record<string, unknown>;
+  return {
+    ...record,
+    settlement_asset: bytes(record.settlement_asset),
+    assets: Array.isArray(record.assets)
+      ? record.assets.map((entry) =>
+          entry && typeof entry === 'object' && !Array.isArray(entry)
+            ? { ...(entry as Record<string, unknown>), asset: bytes((entry as Record<string, unknown>).asset) }
+            : entry,
+        )
+      : record.assets,
+  };
+}
+
 /**
  * Reads a circle's pinned terms by object read (no event scan). Resolves to
  * `null` when the circle has no terms (created before v11 and not converted).
@@ -181,12 +216,28 @@ export async function readCircleAssetPolicy(
   circleId: string,
 ): Promise<V11CircleAssetPolicy | null> {
   const parentId = normalizeRequiredObjectId(circleId, 'Circle ID');
+
+  // On the signing client this read goes off JSON-RPC (signing-sui-client.ts).
+  const v2 = attachedV2Reads(client);
+  if (v2) {
+    try {
+      const value = await v2.dynamicFieldValueJson(parentId, ASSET_POLICY_KEY_SUFFIX);
+      if (value === null) return null;
+      const policy = parseCircleAssetPolicy(v2AssetPolicyJsonToJsonRpc(value));
+      if (!policy) throw new Error('This circle\'s asset terms could not be read.');
+      return policy;
+    } catch (error) {
+      if (!isTxTransportError(error)) throw error;
+      console.warn('[v11-circle-tx] asset policy read via 2.x failed, using JSON-RPC:', error);
+    }
+  }
+
   let cursor: string | null | undefined = null;
   do {
     const page = await client.getDynamicFields({ parentId, cursor });
     const entry = page.data.find((field) =>
       typeof field.name?.type === 'string'
-      && field.name.type.endsWith('::njangi_circles::AssetPolicyKey'),
+      && field.name.type.endsWith(ASSET_POLICY_KEY_SUFFIX),
     );
     if (entry) {
       const object = await client.getObject({ id: entry.objectId, options: { showContent: true } });
