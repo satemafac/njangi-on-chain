@@ -38,6 +38,8 @@ const STRINGS = {
     'Sell your USDC (or convert to USDT) and cash out in XAF via P2P — MTN Mobile Money or Orange Money. Use high-rating merchants and confirm the mobile-money payment is actually in your account before releasing.',
   invalidAddress: 'Enter a valid Sui address (0x followed by 64 hex characters).',
   overBalance: 'Amount exceeds your available balance.',
+  balanceUnavailable:
+    "We couldn't load your balance, so this amount can't be checked. Refresh your balance on the dashboard and try again.",
   successPrefix: 'Sent! Digest: ',
 } as const;
 
@@ -50,6 +52,8 @@ export interface CashOutGuideProps {
   onClose: () => void;
   availableUsdc: number;
   availableSui: number;
+  /** The balances above are not a reading (the read failed): show no figure and block sending. */
+  balancesUnavailable?: boolean;
   onSend: (args: {
     toAddress: string;
     amount: number;
@@ -68,6 +72,7 @@ export function CashOutGuide({
   onClose,
   availableUsdc,
   availableSui,
+  balancesUnavailable = false,
   onSend,
 }: CashOutGuideProps) {
   const [coin, setCoin] = useState<Coin>('USDC');
@@ -84,7 +89,8 @@ export function CashOutGuide({
   const trimmed = toAddress.trim();
   const addressValid = SUI_ADDR_RE.test(trimmed);
   const amountNum = Number(amount);
-  const amountValid = Number.isFinite(amountNum) && amountNum > 0 && amountNum <= available;
+  const amountValid =
+    !balancesUnavailable && Number.isFinite(amountNum) && amountNum > 0 && amountNum <= available;
 
   const checksumEcho = useMemo(() => {
     if (!addressValid) return null;
@@ -196,9 +202,11 @@ export function CashOutGuide({
                   >
                     {c}
                     <span className="ml-1 text-xs opacity-70">
-                      ({(c === 'USDC' ? availableUsdc : availableSui).toLocaleString(undefined, {
-                        maximumFractionDigits: 4,
-                      })})
+                      ({balancesUnavailable
+                        ? '—'
+                        : (c === 'USDC' ? availableUsdc : availableSui).toLocaleString(undefined, {
+                            maximumFractionDigits: 4,
+                          })})
                     </span>
                   </button>
                 ))}
@@ -245,7 +253,8 @@ export function CashOutGuide({
                 <button
                   type="button"
                   onClick={() => setAmount(String(available))}
-                  className="rounded-xl border border-slate-300 px-3 text-sm font-medium text-slate-600 hover:border-slate-400"
+                  disabled={balancesUnavailable}
+                  className="rounded-xl border border-slate-300 px-3 text-sm font-medium text-slate-600 hover:border-slate-400 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {STRINGS.max}
                 </button>
@@ -257,8 +266,12 @@ export function CashOutGuide({
               >
                 {STRINGS.testFirst}
               </button>
-              {amount.length > 0 && !amountValid && (
-                <p className="mt-1 text-xs text-red-600">{STRINGS.overBalance}</p>
+              {balancesUnavailable ? (
+                <p className="mt-1 text-xs text-amber-700">{STRINGS.balanceUnavailable}</p>
+              ) : (
+                amount.length > 0 && !amountValid && (
+                  <p className="mt-1 text-xs text-red-600">{STRINGS.overBalance}</p>
+                )
               )}
             </div>
 
