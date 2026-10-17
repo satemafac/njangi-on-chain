@@ -11,6 +11,7 @@ import { appLogger } from '../../../utils/logger';
 import { getActiveWhatsAppRegistries } from '../../../services/whatsapp-registry-service';
 import { getCircleStatus, formatCircleStatusForWhatsAppWithNames } from '../../../services/circle-status.service';
 import { getPooledSuiClient } from '../../../services/sui-rpc-failover';
+import { getRpcUrlForNetwork } from '../../../services/network-config';
 import { fetchAndDecryptPII } from '../../../lib/walrus-pii';
 import { isRefusedWalrusReadError, isTransientWalrusReadError } from '../../../lib/walrus-read-error';
 import { WHATSAPP_GRAPH_API_VERSION } from '../../../lib/whatsapp-graph-api';
@@ -150,10 +151,7 @@ async function scanRegistryAndDecryptForPhone(
     }
 
     const registry = registries[0];
-    const rpcUrl = network === 'testnet'
-      ? (process.env.NEXT_PUBLIC_TESTNET_RPC_URL || 'https://sui-testnet-rpc.publicnode.com')
-      : (process.env.NEXT_PUBLIC_MAINNET_RPC_URL || 'https://sui-rpc.publicnode.com');
-    const suiClient = getPooledSuiClient({ network, rpcUrl });
+    const suiClient = getPooledSuiClient({ network, rpcUrl: getRpcUrlForNetwork(network) });
 
     const normalizedPhone = phoneNumber.replace(/^\+/, '');
 
