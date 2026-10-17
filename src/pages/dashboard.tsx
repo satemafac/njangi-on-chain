@@ -32,6 +32,11 @@ import { isSwapsEnabled } from '@/config/feature-flags';
 import { getCircleConfigFieldsByObjectId, getCircleConfigObjectId } from '@/lib/circle-config';
 import { clearWalletBalanceCache, refreshWalletBalances } from '@/lib/wallet';
 import {
+  afterBalanceRead,
+  isWalletBalanceKnown,
+  type WalletBalanceStatus,
+} from '@/lib/wallet-balance-status';
+import {
   buildWalletCoins,
   findSupportedWalletCoin,
   walletCoinAmount,
@@ -1652,6 +1657,12 @@ export default function Dashboard() {
   // One row per exact coin type (src/lib/wallet-coins.ts); only SUI and the
   // network's USDC carry decimals.
   const [allCoins, setAllCoins] = useState<WalletCoin[]>([]);
+  // Whether `balance` / `allCoins` are a real reading; their initial zeros are
+  // not one (src/lib/wallet-balance-status.ts).
+  const [walletBalanceStatus, setWalletBalanceStatus] = useState<WalletBalanceStatus>('loading');
+  const walletBalanceKnown = isWalletBalanceKnown(walletBalanceStatus);
+  const walletStatusText =
+    walletBalanceStatus === 'loading' ? 'Loading balances…' : "Balance couldn't be loaded";
   const [showFullAddress, setShowFullAddress] = useState(false);
   const [isReceiveOpen, setIsReceiveOpen] = useState(false);
   const [isCashOutOpen, setIsCashOutOpen] = useState(false);
@@ -2072,6 +2083,7 @@ export default function Dashboard() {
 
         setBalance(findSupportedWalletCoin(processedCoins, 'SUI')?.balance || '0');
         setAllCoins(processedCoins);
+        setWalletBalanceStatus((prev) => afterBalanceRead(prev, true));
         console.log('Wallet balances by coin type:', processedCoins);
         return true;
       } catch (error) {
@@ -2091,6 +2103,7 @@ export default function Dashboard() {
     }
 
     console.warn(`Unable to fetch wallet balances on ${activeNetwork}: ${lastErrorMessage}`);
+    setWalletBalanceStatus((prev) => afterBalanceRead(prev, false));
     if (showFailureToast) {
       toast.error(`Failed to refresh balance on ${activeNetwork}`);
     }
@@ -2135,6 +2148,10 @@ export default function Dashboard() {
   };
 
   useEffect(() => {
+    // Another account or network: the previous reading is not this wallet's.
+    setBalance('0');
+    setAllCoins([]);
+    setWalletBalanceStatus('loading');
     void fetchBalance(false);
   }, [userAddress, network, fetchBalance]);
 
@@ -2214,6 +2231,11 @@ export default function Dashboard() {
 
     if (!hasValidSwapAmount) {
       toast.error('Enter an amount before swapping.');
+      return;
+    }
+
+    if (!walletBalanceKnown) {
+      toast.error("We couldn't load your balance. Refresh it and try again.");
       return;
     }
 
@@ -4234,6 +4256,7 @@ export default function Dashboard() {
         setCircles([]);
         setBalance('0');
         setAllCoins([]);
+        setWalletBalanceStatus('loading');
         setLoading(true);
         
         // Force page reload to re-initialize with new network
@@ -5518,6 +5541,9 @@ export default function Dashboard() {
     const selectedCoin = sendableCoin(formData.selectedToken);
     if (!formData.amount.trim()) {
       errors.amount = 'Amount is required';
+    } else if (!walletBalanceKnown) {
+      errors.balance =
+        "We couldn't load your balance, so this amount can't be checked. Refresh your balance and try again.";
     } else if (!selectedCoin || selectedCoin.decimals === null) {
       errors.amount = 'Choose SUI or USDC to send';
     } else {
@@ -5568,7 +5594,7 @@ export default function Dashboard() {
   useEffect(() => {
     const validation = validateTransferForm(transferForm);
     setTransferValidation(validation);
-  }, [transferForm, allCoins, suiPrice, userAddress, recentContacts]);
+  }, [transferForm, allCoins, walletBalanceKnown, suiPrice, userAddress, recentContacts]);
 
   // Handle transfer form submission
   const handleTransferSubmit = async () => {
@@ -5747,17 +5773,29 @@ export default function Dashboard() {
   const circlesUnknown = !loading && circles.length === 0 && networkError.type !== null;
   const fundedTokens = allCoins.filter((coin) => Number(coin.balance) > 0);
   const networkLabel = network === 'mainnet' ? 'Mainnet' : 'Testnet';
-  const walletValueDisplay = balanceVisible
-    ? formatCurrency(totalWalletLocalValue, selectedCurrency)
-    : formatBalanceDisplay(totalWalletLocalValue, true);
+  const walletValueDisplay = !walletBalanceKnown
+    ? '—'
+    : balanceVisible
+      ? formatCurrency(totalWalletLocalValue, selectedCurrency)
+      : formatBalanceDisplay(totalWalletLocalValue, true);
+  const walletTokensLine = !walletBalanceKnown
+    ? walletStatusText
+    : `${fundedTokens.length} funded token${fundedTokens.length === 1 ? '' : 's'} ${
+        walletBalanceStatus === 'stale' ? '· may be out of date' : 'tracked'
+      }`;
+  const walletAssetCount = walletBalanceKnown
+    ? `${allCoins.length} asset${allCoins.length === 1 ? '' : 's'}`
+    : '—';
   const walletAddressDisplay = showFullAddress ? userAddress : shortenAddress(userAddress);
   const walletPreviewSymbols = (fundedTokens.length > 0 ? fundedTokens : allCoins)
     .slice(0, 3)
     .map((coin) => coin.symbol)
     .join(', ');
-  const walletHoldingsSummary = allCoins.length > 0
-    ? `${allCoins.length} asset${allCoins.length === 1 ? '' : 's'} tracked${walletPreviewSymbols ? ` - ${walletPreviewSymbols}` : ''}`
-    : 'Holdings will appear after the wallet is funded.';
+  const walletHoldingsSummary = !walletBalanceKnown
+    ? walletStatusText
+    : allCoins.length > 0
+      ? `${allCoins.length} asset${allCoins.length === 1 ? '' : 's'} tracked${walletPreviewSymbols ? ` - ${walletPreviewSymbols}` : ''}`
+      : 'Holdings will appear after the wallet is funded.';
 
   const openTransactionHistory = useCallback(() => {
     setIsTransactionHistoryOpen(true);
@@ -5919,6 +5957,32 @@ export default function Dashboard() {
     'inline-flex items-center justify-center rounded-full border border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-700 transition hover:bg-red-100 focus:outline-none focus:ring-2 focus:ring-red-300 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50';
 
   const renderHoldingsList = (variant: 'desktop' | 'sheet' = 'desktop') => {
+    if (walletBalanceStatus === 'unavailable') {
+      return (
+        <div className={variant === 'desktop' ? 'mt-4' : ''}>
+          <p className="text-sm text-amber-900">
+            We couldn&apos;t load your balances. That&apos;s a network problem, not an empty wallet.
+          </p>
+          <button
+            type="button"
+            onClick={handleRefreshBalance}
+            disabled={isRefreshingBalance}
+            className="mt-3 inline-flex items-center rounded-full border border-stone-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:border-stone-300 disabled:opacity-60"
+          >
+            Refresh balance
+          </button>
+        </div>
+      );
+    }
+
+    if (walletBalanceStatus === 'loading') {
+      return (
+        <p className={variant === 'desktop' ? 'mt-4 text-sm text-slate-500' : 'text-sm text-slate-500'}>
+          Loading balances…
+        </p>
+      );
+    }
+
     if (allCoins.length === 0) {
       return (
         <p className={variant === 'desktop' ? 'mt-4 text-sm text-slate-500' : 'text-sm text-slate-500'}>
@@ -6795,7 +6859,7 @@ export default function Dashboard() {
                           {walletValueDisplay}
                         </p>
                         <p className="mt-2 text-sm text-slate-500">
-                          {fundedTokens.length} funded token{fundedTokens.length === 1 ? '' : 's'} tracked
+                          {walletTokensLine}
                         </p>
                       </div>
                       <button
@@ -6903,7 +6967,7 @@ export default function Dashboard() {
                           {walletValueDisplay}
                         </p>
                         <p className="mt-2 text-sm text-slate-500">
-                          {fundedTokens.length} funded token{fundedTokens.length === 1 ? '' : 's'} tracked
+                          {walletTokensLine}
                         </p>
                       </div>
                       <div className="flex items-center gap-2">
@@ -6980,7 +7044,7 @@ export default function Dashboard() {
                         Holdings
                       </p>
                       <p className="mt-2 text-sm font-medium text-slate-950">
-                        {allCoins.length} asset{allCoins.length === 1 ? '' : 's'}
+                        {walletAssetCount}
                       </p>
                       <p className="mt-1 text-xs leading-5 text-slate-500">
                         {walletHoldingsSummary}
@@ -7055,7 +7119,7 @@ export default function Dashboard() {
                           {walletValueDisplay}
                         </p>
                         <p className="mt-2 text-sm text-slate-500">
-                          {fundedTokens.length} funded token{fundedTokens.length === 1 ? '' : 's'} tracked
+                          {walletTokensLine}
                         </p>
                       </div>
                       <div className="flex items-center gap-2">
@@ -7213,7 +7277,7 @@ export default function Dashboard() {
                         Holdings
                       </p>
                       <p className="mt-1 text-sm text-slate-500">
-                        {allCoins.length} asset{allCoins.length === 1 ? '' : 's'} tracked
+                        {walletBalanceKnown ? `${walletAssetCount} tracked` : walletStatusText}
                       </p>
                     </div>
                   </div>
@@ -7352,7 +7416,7 @@ export default function Dashboard() {
                       <div>
                         <p className="text-sm font-semibold text-slate-500">2. Enter one amount</p>
                         <p className="mt-1 text-xs text-slate-500">
-                          Available now: {formatManualSwapAmount(sourceBalance, sourceSymbol)}
+                          Available now: {walletBalanceKnown ? formatManualSwapAmount(sourceBalance, sourceSymbol) : walletStatusText.toLowerCase()}
                         </p>
                       </div>
                       <button
@@ -7457,7 +7521,16 @@ export default function Dashboard() {
                       </div>
                     )}
 
-                    {hasValidSwapAmount && !hasEnoughSourceBalance && (
+                    {hasValidSwapAmount && !walletBalanceKnown && (
+                      <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-4">
+                        <p className="text-sm font-semibold text-amber-900">
+                          We couldn&apos;t load your balance, so this swap can&apos;t be checked.
+                        </p>
+                        <p className="mt-1 text-sm text-amber-800">Refresh your balance and try again.</p>
+                      </div>
+                    )}
+
+                    {hasValidSwapAmount && walletBalanceKnown && !hasEnoughSourceBalance && (
                       <div className="mt-4 rounded-xl border border-blue-200 bg-blue-50 px-4 py-4">
                         <p className="text-sm font-semibold text-blue-900">
                           You need more {sourceSymbol} for this swap.
@@ -7503,13 +7576,13 @@ export default function Dashboard() {
                       <div className="rounded-xl border border-stone-200 bg-stone-50 px-4 py-3">
                         <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">SUI</p>
                         <p className="mt-1 text-xl font-semibold text-slate-950">
-                          {formatManualSwapAmount(getManualSwapBalance(allCoins, 'SUI'), 'SUI')}
+                          {walletBalanceKnown ? formatManualSwapAmount(getManualSwapBalance(allCoins, 'SUI'), 'SUI') : '—'}
                         </p>
                       </div>
                       <div className="rounded-xl border border-stone-200 bg-stone-50 px-4 py-3">
                         <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">USDC</p>
                         <p className="mt-1 text-xl font-semibold text-slate-950">
-                          {formatManualSwapAmount(getManualSwapBalance(allCoins, 'USDC'), 'USDC')}
+                          {walletBalanceKnown ? formatManualSwapAmount(getManualSwapBalance(allCoins, 'USDC'), 'USDC') : '—'}
                         </p>
                       </div>
                     </div>
@@ -8037,7 +8110,7 @@ export default function Dashboard() {
                       {walletValueDisplay}
                     </p>
                     <p className="mt-2 text-sm text-slate-500">
-                      {fundedTokens.length} funded token{fundedTokens.length === 1 ? '' : 's'} tracked
+                      {walletTokensLine}
                     </p>
                   </div>
                 </div>
@@ -8165,7 +8238,7 @@ export default function Dashboard() {
                       {walletValueDisplay}
                     </p>
                     <p className="mt-2 text-sm text-slate-500">
-                      {fundedTokens.length} funded token{fundedTokens.length === 1 ? '' : 's'} tracked
+                      {walletTokensLine}
                     </p>
                   </div>
                   <button
@@ -8977,6 +9050,7 @@ export default function Dashboard() {
         onClose={() => setIsCashOutOpen(false)}
         availableUsdc={walletCoinAmount(findSupportedWalletCoin(allCoins, 'USDC')) ?? 0}
         availableSui={walletCoinAmount(findSupportedWalletCoin(allCoins, 'SUI')) ?? 0}
+        balancesUnavailable={!walletBalanceKnown}
         onSend={async ({ toAddress, amountText, coin }) => {
           const sendCoin = supportedCoinBySymbol(coin, getCurrentNetwork());
           if (!sendCoin) {

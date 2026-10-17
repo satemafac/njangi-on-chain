@@ -59,3 +59,34 @@ describe('dashboard circle reads during an RPC outage', () => {
   });
 });
 
+describe('dashboard wallet figures during an RPC outage', () => {
+  it('records whether each balance read succeeded', () => {
+    expect(SOURCE).toContain('setWalletBalanceStatus((prev) => afterBalanceRead(prev, true));');
+    expect(SOURCE).toContain('setWalletBalanceStatus((prev) => afterBalanceRead(prev, false));');
+  });
+
+  it('never renders the funded-token count or wallet value from an unknown reading', () => {
+    expect(SOURCE).not.toContain("{fundedTokens.length} funded token{fundedTokens.length === 1 ? '' : 's'} tracked");
+    expect(SOURCE).toMatch(/const walletValueDisplay = !walletBalanceKnown\s*\?\s*'—'/);
+    expect(SOURCE).toMatch(/const walletTokensLine = !walletBalanceKnown/);
+  });
+
+  it('says the holdings could not be loaded instead of "will appear after your wallet is funded"', () => {
+    expect(SOURCE).toMatch(
+      /if \(walletBalanceStatus === 'unavailable'\) \{[\s\S]{0,500}not an empty wallet/,
+    );
+  });
+
+  it('blocks money actions on an unknown balance with the real reason', () => {
+    expect(SOURCE).toMatch(/\} else if \(!walletBalanceKnown\) \{\s*errors\.balance =/);
+    expect(SOURCE).toContain('balancesUnavailable={!walletBalanceKnown}');
+    expect(SOURCE).toMatch(/if \(!walletBalanceKnown\) \{\s*toast\.error\("We couldn't load your balance/);
+  });
+
+  it('starts over on a new account or network instead of showing the previous wallet', () => {
+    expect(SOURCE).toMatch(
+      /setAllCoins\(\[\]\);\s*setWalletBalanceStatus\('loading'\);\s*void fetchBalance\(false\);/,
+    );
+  });
+});
+
