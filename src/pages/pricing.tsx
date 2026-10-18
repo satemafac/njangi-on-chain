@@ -196,7 +196,6 @@ export default function PricingPage({ freeTier, premiumTier }: PricingPageProps)
     t('pricing.premium.feature.members', { count: premiumTier.maxMembers }),
     t('pricing.premium.feature.circles', { count: premiumTier.maxCircles }),
     t('pricing.premium.feature.whatsapp'),
-    t('pricing.premium.feature.goals'),
     t('pricing.premium.feature.everything'),
   ];
 
