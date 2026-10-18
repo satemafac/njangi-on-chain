@@ -410,11 +410,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             //
             // Deliberately does NOT block the login. The user must be able to
             // get in to see the explanation, and — more importantly — to
-            // reach claim, refund and recovery. Commitment surfaces (circle
-            // create/join, contribute, ramp session) refuse separately via
-            // assertNoAddressDrift. Fail-closed on new commitments, fail-open
-            // on fund access: the same split src/lib/sanctions.ts uses, for
-            // the same reason.
+            // reach claim, refund and recovery. The server-side commitment
+            // routes (circle join requests, ramp sessions, WhatsApp circle
+            // linking) refuse separately, each through getDriftStatusFor*.
+            // Circle creation and contributions are signed in the browser and
+            // have no server gate. Fail-closed on new commitments where the
+            // server sees them, fail-open on fund access: the same split
+            // src/lib/sanctions.ts uses, for the same reason.
             const drift = await checkAddressDrift({
               iss: result.iss ?? null,
               sub: result.sub,

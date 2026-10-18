@@ -345,12 +345,19 @@ Practical consequences:
    put one in a `NEXT_PUBLIC_*` var — that inlines it into the browser bundle,
    which is exactly how `9b2ce…` leaked (fixed in `8165cd4`).
 3. Address drift IS detected now: `src/lib/zklogin-address-bindings.ts`
-   (shipped `8d8a149`) keeps an append-only (iss, sub) → address history,
-   warns on login when a returning identity resolves to a new address, and
-   fail-closes commitment surfaces (circle create/join, contribute, ramp
-   sessions) while leaving claim/refund/recovery reachable. It deliberately
-   treats providers as distinct identities, so Facebook-you and Google-you
-   never trip it.
+   (shipped `8d8a149`) keeps an append-only (iss, sub) → address history
+   and warns on login when a returning identity resolves to a new address
+   (`AddressDriftGate`, a dismissible modal). Only requests that pass
+   through the server can be refused, with 409 `ADDRESS_DRIFT_BLOCKED`:
+   circle join requests, the three ramp sessions and WhatsApp circle
+   linking. Circle creation and contributions are signed in the browser
+   and go straight to the chain, so no server gate covers them; whether
+   they need one is an open product decision. (`assertNoAddressDrift`
+   exists, but nothing calls it: each route reads `getDriftStatusFor*`.)
+   Claim, refund and recovery are never refused, and detection fails open
+   when the bindings table cannot be read. It deliberately treats
+   providers as distinct identities, so Facebook-you and Google-you never
+   trip it.
 4. What users still lack is a provider badge next to the signed-in address —
    without it, one human with two provider logins reads their own second
    wallet as a stranger's.
@@ -450,6 +457,17 @@ until that package is live. Upgrade with the CLI: `suiup install
 sui@testnet -y` when it lags the network, then `sui client upgrade
 --upgrade-capability <cap from Published.toml>` from `move/` — the CLI holds
 the deployer key and rewrites `Published.toml` itself.
+
+**Mainnet (decided 2026-10-18)**: mainnet launches on a FRESH package
+lineage; the runbook is `docs/mainnet-publish-scope.md`. Never run
+`sui client upgrade` against the March 2026 v1 package `0x7bf52748…`
+(`[published.mainnet]` in `move/Published.toml`, and still the mainnet
+entry in `src/lib/circle-chain.ts` and `src/services/circle-service.ts`).
+A compatible upgrade cannot remove public functions, so that lineage
+would keep its retired entry points for good. The fresh lineage's
+UpgradeCap and its AssetRegistry admin (`transfer_registry_admin`) both
+go to the operator multisig before the app points at the package. Any
+mainnet publish needs the owner's explicit go-ahead.
 
 **Re-running the bootstrap manually**:
 `node scripts/bootstrap-package.mjs <packageId>` — re-issues the registry
