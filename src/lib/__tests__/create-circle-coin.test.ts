@@ -3,10 +3,32 @@ import * as path from 'path';
 
 import {
   canPickSui,
+  CREATE_CIRCLE_COINS_BY_NETWORK,
+  createCircleCoinsForNetwork,
   DEFAULT_CREATE_CIRCLE_COIN,
   formatCreateCoinAmount,
   settlementAssetForCreate,
 } from '../create-circle-coin';
+
+describe('createCircleCoinsForNetwork', () => {
+  it('offers USDC and SUI on testnet and USDC only on mainnet (launch decision 2026-10-18)', () => {
+    expect(createCircleCoinsForNetwork('testnet')).toEqual(['USDC', 'SUI']);
+    expect(createCircleCoinsForNetwork('mainnet')).toEqual(['USDC']);
+    expect(CREATE_CIRCLE_COINS_BY_NETWORK.mainnet).not.toContain('SUI');
+  });
+
+  it('lists USDC first on every network, so the default needs no click', () => {
+    for (const network of ['testnet', 'mainnet'] as const) {
+      expect(createCircleCoinsForNetwork(network)[0]).toBe(DEFAULT_CREATE_CIRCLE_COIN);
+    }
+  });
+
+  it('is the only coin list the create page uses', () => {
+    const page = fs.readFileSync(path.join(__dirname, '..', '..', 'pages', 'create-circle.tsx'), 'utf8');
+    expect(page).toContain('createCircleCoinsForNetwork(');
+    expect(page).not.toMatch(/\[\s*'USDC'\s*,\s*'SUI'\s*\]\s*as const/);
+  });
+});
 
 describe('settlementAssetForCreate', () => {
   it('sends SUI only when the organizer picked it', () => {
@@ -19,6 +41,12 @@ describe('settlementAssetForCreate', () => {
     expect(settlementAssetForCreate(undefined)).toBe('USDC');
     expect(settlementAssetForCreate('sui')).toBe('USDC');
     expect(settlementAssetForCreate(null)).toBe('USDC');
+  });
+
+  it('falls back to USDC when the network does not offer SUI, such as a testnet draft opened on mainnet', () => {
+    expect(settlementAssetForCreate('SUI', 'testnet')).toBe('SUI');
+    expect(settlementAssetForCreate('SUI', 'mainnet')).toBe('USDC');
+    expect(settlementAssetForCreate('USDC', 'mainnet')).toBe('USDC');
   });
 });
 
