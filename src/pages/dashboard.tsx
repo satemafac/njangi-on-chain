@@ -23,7 +23,8 @@ import {
 } from '@/lib/onramp-provider';
 import { RAMP_PROVIDER_LABELS, type RampProviderId } from '@/lib/ramp-geo';
 import { resolveCircleLifecycleState } from '@/lib/circle-chain';
-import { discoverMemberCircleIds } from '@/lib/membership-discovery';
+import { discoverMemberCircleIds, isCurrentMemberOrAdmin } from '@/lib/membership-discovery';
+import { isGoneObjectResponse } from '@/lib/sui-read';
 import { readObjects } from '@/lib/sui-read';
 import { cetusService } from '@/lib/cetus-service';
 import { ZkLoginClient } from '@/services/zkLoginClient';
@@ -214,41 +215,6 @@ const isGracefulDashboardQueryError = (error: unknown): boolean => (
   isCrossPackageQueryError(error) ||
   isEmptyEffectsError(error)
 );
-
-// Verify a receipt-discovered circle still reflects CURRENT membership. The
-// soulbound CircleMembership receipt is only a discovery hint: it persists
-// after an admin removes a member, so before trusting a receipt-only candidate
-// we confirm the user is the admin or is present in the circle's live members
-// table (removed members are deleted from that table). Bounded by the user's
-// own memberships — O(user), not O(protocol). Mirrors the MemberRemoved
-// filtering the event-discovery path already performs.
-const userIsCurrentMemberOrAdmin = async (
-  client: SuiClient,
-  circleId: string,
-  userAddress: string,
-): Promise<boolean> => {
-  try {
-    const obj = await client.getObject({ id: circleId, options: { showContent: true } });
-    const content = obj.data?.content;
-    if (!content || !('fields' in content)) return false;
-    const fields = content.fields as {
-      admin?: string;
-      members?: { fields?: { id?: { id?: string } } };
-    };
-    if (fields.admin === userAddress) return true;
-    const membersTableId = fields.members?.fields?.id?.id;
-    if (!membersTableId) return false;
-    const memberField = await client.getDynamicFieldObject({
-      parentId: membersTableId,
-      name: { type: 'address', value: userAddress },
-    });
-    return Boolean(memberField.data?.content);
-  } catch {
-    // On a transient read failure, fail closed (don't surface an unverified
-    // circle). The event path / next refresh will pick it up.
-    return false;
-  }
-};
 
 // Global request queue and rate limiting
 interface QueuedRequest {
@@ -2441,42 +2407,38 @@ export default function Dashboard() {
     if (configObjectId && client) {
       console.log('Found CircleConfig field:', configObjectId);
 
-      try {
-        const configFields = await getCircleConfigFieldsByObjectId(client, configObjectId);
+      // Throws when the config can't be read. Falling through to the
+      // defaults below would show a 3-member cap and zero amounts as this
+      // circle's real terms; the caller counts the circle as unreadable.
+      const configFields = await getCircleConfigFieldsByObjectId(client, configObjectId);
+      if (!configFields) {
+        throw new Error(`CircleConfig ${configObjectId} could not be read`);
+      }
 
-        if (configFields) {
-          console.log('CircleConfig fields:', configFields);
+      console.log('CircleConfig fields:', configFields);
 
-          if ('max_members' in configFields) {
-            configValues.maxMembers = Number(configFields.max_members);
-            console.log('Successfully extracted max_members from fetched object:', configValues.maxMembers);
-          }
-          if ('contribution_amount' in configFields) {
-            configValues.contributionAmount = Number(configFields.contribution_amount) / 1e9;
-          }
-          if ('contribution_amount_local' in configFields) {
-            configValues.contributionAmountUsd = Number(configFields.contribution_amount_local) / 100;
-          }
-          if ('security_deposit' in configFields) {
-            configValues.securityDeposit = Number(configFields.security_deposit) / 1e9;
-          }
-          if ('security_deposit_local' in configFields) {
-            configValues.securityDepositUsd = Number(configFields.security_deposit_local) / 100;
-          }
-          if ('cycle_length' in configFields) {
-            configValues.cycleLength = Number(configFields.cycle_length);
-          }
-          if ('cycle_day' in configFields) {
-            configValues.cycleDay = Number(configFields.cycle_day);
-            console.log('Found cycle_day in fetched object:', configValues.cycleDay);
-          }
-        }
-      } catch (error) {
-        console.error(`Error fetching CircleConfig object with ID ${configObjectId}:`, error);
-
-        if (error instanceof Error && error.message.includes('Failed to fetch')) {
-          console.warn(`Circle config object ${configObjectId} not found on current network. This might be from a different network.`);
-        }
+      if ('max_members' in configFields) {
+        configValues.maxMembers = Number(configFields.max_members);
+        console.log('Successfully extracted max_members from fetched object:', configValues.maxMembers);
+      }
+      if ('contribution_amount' in configFields) {
+        configValues.contributionAmount = Number(configFields.contribution_amount) / 1e9;
+      }
+      if ('contribution_amount_local' in configFields) {
+        configValues.contributionAmountUsd = Number(configFields.contribution_amount_local) / 100;
+      }
+      if ('security_deposit' in configFields) {
+        configValues.securityDeposit = Number(configFields.security_deposit) / 1e9;
+      }
+      if ('security_deposit_local' in configFields) {
+        configValues.securityDepositUsd = Number(configFields.security_deposit_local) / 100;
+      }
+      if ('cycle_length' in configFields) {
+        configValues.cycleLength = Number(configFields.cycle_length);
+      }
+      if ('cycle_day' in configFields) {
+        configValues.cycleDay = Number(configFields.cycle_day);
+        console.log('Found cycle_day in fetched object:', configValues.cycleDay);
       }
     }
     
@@ -3745,11 +3707,20 @@ export default function Dashboard() {
       try {
         const receiptCircleIds = await discoverMemberCircleIds(userAddress, { network: currentNetwork });
         const undiscovered = receiptCircleIds.filter((cid) => !allUserCircleIds.has(cid));
+        let unverifiable = 0;
         const verified = await Promise.all(
-          undiscovered.map(async (cid) =>
-            (await userIsCurrentMemberOrAdmin(client, cid, userAddress)) ? cid : null,
-          ),
+          undiscovered.map(async (cid) => {
+            const current = await isCurrentMemberOrAdmin(client, cid, userAddress);
+            if (current === null) unverifiable += 1;
+            return current ? cid : null;
+          }),
         );
+        if (unverifiable > 0) {
+          // Unknown is not "not a member": report the list as incomplete so
+          // the merge below keeps what the user already saw.
+          console.warn(`🎟️ Could not verify ${unverifiable} receipt circle(s); marking the scan incomplete`);
+          initialResults = { ...initialResults, degraded: true };
+        }
         let surfaced = 0;
         for (const cid of verified) {
           if (!cid) continue;
@@ -3766,7 +3737,10 @@ export default function Dashboard() {
           console.log(`🎟️ Membership receipts surfaced ${surfaced} verified circle(s) the event scan missed`);
         }
       } catch (membershipError) {
-        console.warn('Membership receipt discovery failed (non-fatal, falling back to event scan):', membershipError);
+        // Circles known only by their receipt are missing from this pass, so
+        // the list is incomplete, not final.
+        console.warn('Membership receipt discovery failed; marking the scan incomplete:', membershipError);
+        initialResults = { ...initialResults, degraded: true };
       }
 
       // Circles we know about ONLY because the event scan found them hold no
@@ -3810,6 +3784,9 @@ export default function Dashboard() {
       // users load all their circles in a single batch with no inter-batch wait.
       const batchSize = 50;
       const allProcessedCircles: Circle[] = [];
+      // Circles left out of this pass because a read FAILED. They are not
+      // gone, so the list is incomplete and the degraded merge keeps them.
+      let unreadableCircles = 0;
 
       for (let i = 0; i < circleIds.length; i += batchSize) {
         const batch = circleIds.slice(i, i + batchSize);
@@ -3875,6 +3852,7 @@ export default function Dashboard() {
         // Skip this batch if all retries failed
         if (!batchObjectsData) {
           console.warn(`⏭️ Skipping batch of ${batch.length} circles due to network errors`);
+          unreadableCircles += batch.length;
           continue;
         }
         
@@ -3888,9 +3866,13 @@ export default function Dashboard() {
           try {
             console.log(`⚡ Processing circle ${i + batchIndex + 1}/${circleIds.length}: ${circleId}`);
             
-            // Skip if object doesn't exist
             if (!objectData?.data || objectData.error) {
-              console.log(`Circle ${circleId} no longer exists, skipping...`);
+              if (isGoneObjectResponse(objectData)) {
+                console.log(`Circle ${circleId} no longer exists, skipping...`);
+              } else {
+                console.warn(`Circle ${circleId} could not be read this time, keeping it out of this pass`);
+                unreadableCircles += 1;
+              }
               return null;
             }
             
@@ -3900,16 +3882,13 @@ export default function Dashboard() {
               objectCacheKey,
               async () => {
                   // **OPTIMIZATION 3**: Get dynamic fields without delay (already rate-limited by batch processing)
-                  let dynamicFieldsResult;
-                  try {
-                    dynamicFieldsResult = await client.getDynamicFields({
-                      parentId: circleId
-                    });
-                    console.log(`📋 Dynamic fields for circle ${circleId}:`, dynamicFieldsResult.data.length, 'fields');
-                  } catch (error) {
-                    console.warn(`⚠️ No dynamic fields for circle ${circleId}`);
-                    dynamicFieldsResult = { data: [] };
-                  }
+                  // A failed read must throw, not become `[]`: with no fields the
+                  // circle's config is never found, and the card showed (and
+                  // cached) default amounts and a 3-member cap as if real.
+                  const dynamicFieldsResult = await client.getDynamicFields({
+                    parentId: circleId
+                  });
+                  console.log(`📋 Dynamic fields for circle ${circleId}:`, dynamicFieldsResult.data.length, 'fields');
                   
                   // Add transaction input data if we have it
                   const transactionInput = transactionInputMap.get(circleId);
@@ -3943,16 +3922,8 @@ export default function Dashboard() {
                 metadata.transactionDigest
               );
             } catch (error) {
-              console.error(`Error processing circle ${circleId}:`, error);
-              
-              // If it's a fetch error, it might be due to network mismatch
-              if (error instanceof Error && error.message.includes('Failed to fetch')) {
-                console.warn(`Circle ${circleId} might be from a different network. Skipping...`);
-                return null;
-              }
-              
-              // For other errors, still skip but log more details
-              console.error(`Unexpected error processing circle ${circleId}:`, error);
+              console.warn(`Could not process circle ${circleId}; keeping it out of this pass:`, error);
+              unreadableCircles += 1;
               return null;
             }
             
@@ -4006,7 +3977,8 @@ export default function Dashboard() {
               }
               return null;
           } catch (error) {
-            console.error(`Error fetching circle details for ${circleId}:`, error);
+            console.warn(`Could not read circle ${circleId}; keeping it out of this pass:`, error);
+            unreadableCircles += 1;
             return null;
           }
         });
@@ -4030,6 +4002,11 @@ export default function Dashboard() {
         }
       }
       
+      if (unreadableCircles > 0) {
+        console.warn(`[dashboard] ${unreadableCircles} circle(s) could not be read; marking the scan incomplete`);
+        initialResults = { ...initialResults, degraded: true };
+      }
+
       // allProcessedCircles is already populated from batch processing above
       console.log(`Successfully processed ${allProcessedCircles.length} circles`);
       
@@ -5765,6 +5742,9 @@ export default function Dashboard() {
   const memberCircles = circles.filter((circle) => !circle.isAdmin);
   const activeCirclesCount = circles.filter((circle) => circle.isActive).length;
   const inactiveCirclesCount = Math.max(0, circles.length - activeCirclesCount);
+  // Empty because the load failed, not because the user has no circles. The
+  // counts and "create your first circle" copy would be false, so they hide.
+  const circlesUnknown = !loading && circles.length === 0 && networkError.type !== null;
   const fundedTokens = allCoins.filter((coin) => Number(coin.balance) > 0);
   const networkLabel = network === 'mainnet' ? 'Mainnet' : 'Testnet';
   const walletValueDisplay = balanceVisible
@@ -6598,137 +6578,162 @@ export default function Dashboard() {
                     </div>
                   </div>
 
-                  <div className="grid gap-3 md:hidden">
-                    <div className="rounded-[24px] border border-stone-200 bg-stone-50/80 p-4">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                            Circle Types
-                          </p>
-                          <p className="mt-1 text-sm text-slate-600">
-                            Jump straight to the right circle view.
-                          </p>
+                  {/* The degraded load paths set networkError; until now nothing showed it,
+                      so a failed load looked like "No circles yet" or like a complete list. */}
+                  {networkError.type && !error && (
+                    <div
+                      role="alert"
+                      className="flex flex-col gap-3 rounded-[24px] border border-amber-200 bg-amber-50 px-5 py-4 sm:flex-row sm:items-center sm:justify-between"
+                    >
+                      <p className="text-sm leading-6 text-amber-900">{networkError.message}</p>
+                      {networkError.canRetry && (
+                        <button
+                          type="button"
+                          onClick={handleManualRefresh}
+                          disabled={loading || isBackgroundRefreshing}
+                          className={secondaryActionClass}
+                        >
+                          Try again
+                        </button>
+                      )}
+                    </div>
+                  )}
+
+                  {!circlesUnknown && (
+                    <div className="grid gap-3 md:hidden">
+                      <div className="rounded-[24px] border border-stone-200 bg-stone-50/80 p-4">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                              Circle Types
+                            </p>
+                            <p className="mt-1 text-sm text-slate-600">
+                              Jump straight to the right circle view.
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => scrollToCirclePortfolio('all')}
+                            className="text-sm font-medium text-slate-600 transition hover:text-slate-950"
+                          >
+                            Open list
+                          </button>
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => scrollToCirclePortfolio('all')}
-                          className="text-sm font-medium text-slate-600 transition hover:text-slate-950"
-                        >
-                          Open list
-                        </button>
-                      </div>
 
-                      <div className="mt-4 grid grid-cols-3 gap-2">
-                        <button
-                          type="button"
-                          onClick={() => scrollToCirclePortfolio('all')}
-                          className="rounded-[20px] border border-stone-200 bg-white px-3 py-3 text-left transition hover:border-stone-300 hover:bg-stone-50"
-                        >
-                          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
-                            All
-                          </p>
-                          <p className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
-                            {circles.length}
-                          </p>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => scrollToCirclePortfolio('admin')}
-                          className="rounded-[20px] border border-stone-200 bg-white px-3 py-3 text-left transition hover:border-stone-300 hover:bg-stone-50"
-                        >
-                          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
-                            Admin
-                          </p>
-                          <p className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
-                            {adminCircles.length}
-                          </p>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => scrollToCirclePortfolio('member')}
-                          className="rounded-[20px] border border-stone-200 bg-white px-3 py-3 text-left transition hover:border-stone-300 hover:bg-stone-50"
-                        >
-                          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
-                            Member
-                          </p>
-                          <p className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
-                            {memberCircles.length}
-                          </p>
-                        </button>
-                      </div>
+                        <div className="mt-4 grid grid-cols-3 gap-2">
+                          <button
+                            type="button"
+                            onClick={() => scrollToCirclePortfolio('all')}
+                            className="rounded-[20px] border border-stone-200 bg-white px-3 py-3 text-left transition hover:border-stone-300 hover:bg-stone-50"
+                          >
+                            <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                              All
+                            </p>
+                            <p className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
+                              {circles.length}
+                            </p>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => scrollToCirclePortfolio('admin')}
+                            className="rounded-[20px] border border-stone-200 bg-white px-3 py-3 text-left transition hover:border-stone-300 hover:bg-stone-50"
+                          >
+                            <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                              Admin
+                            </p>
+                            <p className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
+                              {adminCircles.length}
+                            </p>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => scrollToCirclePortfolio('member')}
+                            className="rounded-[20px] border border-stone-200 bg-white px-3 py-3 text-left transition hover:border-stone-300 hover:bg-stone-50"
+                          >
+                            <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                              Member
+                            </p>
+                            <p className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
+                              {memberCircles.length}
+                            </p>
+                          </button>
+                        </div>
 
-                      <div className="mt-3 flex flex-wrap gap-2">
-                        <button
-                          type="button"
-                          onClick={() => scrollToCirclePortfolio('all')}
-                          className="inline-flex items-center rounded-full border border-stone-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:border-stone-300 hover:bg-stone-50"
-                        >
-                          {activeCirclesCount} active
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => scrollToCirclePortfolio('all')}
-                          className="inline-flex items-center rounded-full border border-stone-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:border-stone-300 hover:bg-stone-50"
-                        >
-                          {inactiveCirclesCount} inactive
-                        </button>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            onClick={() => scrollToCirclePortfolio('all')}
+                            className="inline-flex items-center rounded-full border border-stone-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:border-stone-300 hover:bg-stone-50"
+                          >
+                            {activeCirclesCount} active
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => scrollToCirclePortfolio('all')}
+                            className="inline-flex items-center rounded-full border border-stone-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:border-stone-300 hover:bg-stone-50"
+                          >
+                            {inactiveCirclesCount} inactive
+                          </button>
+                        </div>
                       </div>
                     </div>
-                  </div>
+                  )}
 
-                  <div className="hidden gap-4 md:grid md:grid-cols-3">
-                    <button
-                      type="button"
-                      onClick={() => scrollToCirclePortfolio('all')}
-                      className="rounded-[24px] border border-stone-200 bg-stone-50/80 p-5 text-left transition hover:border-stone-300 hover:bg-stone-50"
-                    >
-                      <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">
-                        Total circles
-                      </p>
-                      <p className="mt-3 text-3xl font-semibold tracking-tight text-slate-950">
-                        {circles.length}
-                      </p>
-                      <p className="mt-2 text-sm text-slate-500">
-                        {memberCircles.length > 0
-                          ? `${memberCircles.length} member role${memberCircles.length === 1 ? '' : 's'}`
-                          : 'No member-only roles yet'}
-                      </p>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => scrollToCirclePortfolio('admin')}
-                      className="rounded-[24px] border border-stone-200 bg-stone-50/80 p-5 text-left transition hover:border-stone-300 hover:bg-stone-50"
-                    >
-                      <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">
-                        Admin roles
-                      </p>
-                      <p className="mt-3 text-3xl font-semibold tracking-tight text-slate-950">
-                        {adminCircles.length}
-                      </p>
-                      <p className="mt-2 text-sm text-slate-500">
-                        {adminCircles.length > 0
-                          ? 'You can manage members, links, and payout flow here.'
-                          : 'Create a circle to become an admin.'}
-                      </p>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => scrollToCirclePortfolio('all')}
-                      className="rounded-[24px] border border-stone-200 bg-stone-50/80 p-5 text-left transition hover:border-stone-300 hover:bg-stone-50"
-                    >
-                      <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">
-                        Active circles
-                      </p>
-                      <p className="mt-3 text-3xl font-semibold tracking-tight text-slate-950">
-                        {activeCirclesCount}
-                      </p>
-                      <p className="mt-2 text-sm text-slate-500">
-                        {circles.length === 0
-                          ? 'Your circle activity will appear once you join or create one.'
-                          : `${inactiveCirclesCount} inactive circle${inactiveCirclesCount === 1 ? '' : 's'}`}
-                      </p>
-                    </button>
-                  </div>
+                  {!circlesUnknown && (
+                    <div className="hidden gap-4 md:grid md:grid-cols-3">
+                      <button
+                        type="button"
+                        onClick={() => scrollToCirclePortfolio('all')}
+                        className="rounded-[24px] border border-stone-200 bg-stone-50/80 p-5 text-left transition hover:border-stone-300 hover:bg-stone-50"
+                      >
+                        <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">
+                          Total circles
+                        </p>
+                        <p className="mt-3 text-3xl font-semibold tracking-tight text-slate-950">
+                          {circles.length}
+                        </p>
+                        <p className="mt-2 text-sm text-slate-500">
+                          {memberCircles.length > 0
+                            ? `${memberCircles.length} member role${memberCircles.length === 1 ? '' : 's'}`
+                            : 'No member-only roles yet'}
+                        </p>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => scrollToCirclePortfolio('admin')}
+                        className="rounded-[24px] border border-stone-200 bg-stone-50/80 p-5 text-left transition hover:border-stone-300 hover:bg-stone-50"
+                      >
+                        <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">
+                          Admin roles
+                        </p>
+                        <p className="mt-3 text-3xl font-semibold tracking-tight text-slate-950">
+                          {adminCircles.length}
+                        </p>
+                        <p className="mt-2 text-sm text-slate-500">
+                          {adminCircles.length > 0
+                            ? 'You can manage members, links, and payout flow here.'
+                            : 'Create a circle to become an admin.'}
+                        </p>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => scrollToCirclePortfolio('all')}
+                        className="rounded-[24px] border border-stone-200 bg-stone-50/80 p-5 text-left transition hover:border-stone-300 hover:bg-stone-50"
+                      >
+                        <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">
+                          Active circles
+                        </p>
+                        <p className="mt-3 text-3xl font-semibold tracking-tight text-slate-950">
+                          {activeCirclesCount}
+                        </p>
+                        <p className="mt-2 text-sm text-slate-500">
+                          {circles.length === 0
+                            ? 'Your circle activity will appear once you join or create one.'
+                            : `${inactiveCirclesCount} inactive circle${inactiveCirclesCount === 1 ? '' : 's'}`}
+                        </p>
+                      </button>
+                    </div>
+                  )}
 
                   <div className="flex flex-wrap gap-3">
                     <button
@@ -7561,17 +7566,19 @@ export default function Dashboard() {
                     </p>
                   </div>
 
-                  <div className="flex flex-wrap gap-3">
-                    <div className="inline-flex items-center rounded-full border border-stone-200 bg-stone-50 px-4 py-2 text-sm font-medium text-slate-600">
-                      {circles.length} total
+                  {!circlesUnknown && (
+                    <div className="flex flex-wrap gap-3">
+                      <div className="inline-flex items-center rounded-full border border-stone-200 bg-stone-50 px-4 py-2 text-sm font-medium text-slate-600">
+                        {circles.length} total
+                      </div>
+                      <div className="inline-flex items-center rounded-full border border-stone-200 bg-stone-50 px-4 py-2 text-sm font-medium text-slate-600">
+                        {adminCircles.length} admin
+                      </div>
+                      <div className="inline-flex items-center rounded-full border border-stone-200 bg-stone-50 px-4 py-2 text-sm font-medium text-slate-600">
+                        {activeCirclesCount} active
+                      </div>
                     </div>
-                    <div className="inline-flex items-center rounded-full border border-stone-200 bg-stone-50 px-4 py-2 text-sm font-medium text-slate-600">
-                      {adminCircles.length} admin
-                    </div>
-                    <div className="inline-flex items-center rounded-full border border-stone-200 bg-stone-50 px-4 py-2 text-sm font-medium text-slate-600">
-                      {activeCirclesCount} active
-                    </div>
-                  </div>
+                  )}
                 </div>
 
                 {loading ? (
@@ -7691,6 +7698,23 @@ export default function Dashboard() {
                       </Tab.Panel>
                     </Tab.Panels>
                   </Tab.Group>
+                ) : circlesUnknown ? (
+                  <div className="rounded-[28px] border border-amber-200 bg-amber-50/70 px-6 py-14 text-center">
+                    <h3 className="text-base font-semibold text-amber-950">Your circles couldn&apos;t be loaded</h3>
+                    <p className="mx-auto mt-2 max-w-md text-sm text-amber-900">
+                      This list is empty because the network didn&apos;t answer, not because you have no circles.
+                    </p>
+                    <div className="mt-6">
+                      <button
+                        type="button"
+                        onClick={handleManualRefresh}
+                        disabled={loading || isBackgroundRefreshing}
+                        className={secondaryActionClass}
+                      >
+                        Try again
+                      </button>
+                    </div>
+                  </div>
                 ) : (
                   <div className="rounded-[28px] border border-dashed border-stone-300 bg-stone-50/80 px-6 py-14 text-center">
                     <svg

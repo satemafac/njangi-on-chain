@@ -17,10 +17,11 @@
 // across upgrades, so the StructType filter MUST use originalId, not
 // published-at.
 
+import type { SuiClient } from '@mysten/sui/client';
 import { getCurrentNetwork, type NetworkType } from '@/services/network-config';
 import { getPooledSuiClient } from '@/services/sui-rpc-failover';
 import { getPublishedPackageMetadata } from './circle-chain';
-import { cachedRead } from './sui-read';
+import { cachedRead, isGoneObjectResponse } from './sui-read';
 
 const MEMBERSHIP_STRUCT_SUFFIX = 'njangi_circles::CircleMembership';
 
@@ -89,4 +90,49 @@ export async function discoverMemberCircleIds(
 
     return Array.from(circleIds);
   }, opts.ttlMs);
+}
+
+/**
+ * Whether `userAddress` is CURRENTLY the admin or a member of `circleId`, read
+ * live from the circle and its members table: the verification step a receipt
+ * needs. Null when the chain could not be read. An RPC outage is not "not a
+ * member", and treating it as one hid the user's circles on a bad RPC day.
+ */
+export async function isCurrentMemberOrAdmin(
+  client: SuiClient,
+  circleId: string,
+  userAddress: string,
+): Promise<boolean | null> {
+  let circle;
+  try {
+    circle = await client.getObject({ id: circleId, options: { showContent: true } });
+  } catch {
+    return null;
+  }
+  if (circle.error) {
+    return isGoneObjectResponse(circle) ? false : null;
+  }
+  const content = circle.data?.content;
+  if (!content || content.dataType !== 'moveObject') return null;
+  const fields = content.fields as {
+    admin?: string;
+    members?: { fields?: { id?: { id?: string } } };
+  };
+  if (fields.admin === userAddress) return true;
+  const membersTableId = fields.members?.fields?.id?.id;
+  if (!membersTableId) return null;
+
+  let member;
+  try {
+    member = await client.getDynamicFieldObject({
+      parentId: membersTableId,
+      name: { type: 'address', value: userAddress },
+    });
+  } catch {
+    return null;
+  }
+  if (member.error) {
+    return member.error.code === 'dynamicFieldNotFound' ? false : null;
+  }
+  return member.data?.content ? true : null;
 }

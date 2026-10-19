@@ -65,13 +65,28 @@ export function expectedIssuerAddress(): string | null {
 const complianceConfigIdCache = new Map<NetworkType, string>();
 
 /**
+ * A read failed before the ComplianceConfig was found, so whether one exists
+ * is unknown. Distinct from `null` ("none on this lineage"): telling a member
+ * during an RPC outage that verification "is not configured, contact support"
+ * was a confident falsehood.
+ */
+export class ComplianceConfigUnavailableError extends Error {
+  constructor(readonly cause: unknown) {
+    super('Could not read the compliance configuration from the chain.');
+    this.name = 'ComplianceConfigUnavailableError';
+  }
+}
+
+/**
  * Resolves the shared ComplianceConfig singleton's object id by replaying
  * the ComplianceConfigCreated audit event. Sui keys event types by the
  * module's DEFINING package id — on an upgraded lineage that is the
  * original publish, not the active package — so the lookup walks every
  * lineage id (current, published-at, original) instead of just the
- * configured one. Returns null when no config exists on this lineage
- * (the gated entrypoints cannot be called at all in that case).
+ * configured one. Returns null only when every read answered and no config
+ * exists on this lineage (the gated entrypoints cannot be called at all in
+ * that case); throws ComplianceConfigUnavailableError when a read failed and
+ * none was found.
  */
 export async function resolveComplianceConfigId(
   network: NetworkType,
@@ -97,6 +112,7 @@ export async function resolveComplianceConfigId(
     network === 'mainnet'
       ? process.env.NEXT_PUBLIC_MAINNET_NJANGI_COMPLIANCE_CONFIG_ID
       : process.env.NEXT_PUBLIC_TESTNET_NJANGI_COMPLIANCE_CONFIG_ID;
+  let readFailure: unknown = null;
   if (pinned) {
     try {
       const obj = await rpcClient.getObject({ id: pinned, options: { showType: true } });
@@ -108,9 +124,10 @@ export async function resolveComplianceConfigId(
       console.warn(
         '[compliance-gate] pinned config id does not verify as a ComplianceConfig; falling back to event replay',
       );
-    } catch {
+    } catch (err) {
       // Object read failed — fall through to the replay rather than
       // trusting an unverified pin.
+      readFailure = err;
     }
   }
   const lookupIds = getPackageLookupIds({
@@ -134,11 +151,38 @@ export async function resolveComplianceConfigId(
         complianceConfigIdCache.set(network, configId);
         return configId;
       }
-    } catch {
-      // Wrong lineage id for this event type — try the next candidate.
+    } catch (err) {
+      // A query for a lineage id that never defined the event answers with
+      // no rows; a throw is a failed read. Try the next candidate, but
+      // remember that "none found" is no longer an answer.
+      readFailure = err;
     }
   }
+  if (readFailure) throw new ComplianceConfigUnavailableError(readFailure);
   return null;
+}
+
+export const COMPLIANCE_CONFIG_MISSING_MESSAGE =
+  'Verification is required in your region but is not configured yet. Please contact support.';
+export const COMPLIANCE_CONFIG_UNREADABLE_MESSAGE =
+  "We couldn't reach the network to check verification, so nothing was sent. Please try again in a moment.";
+
+/**
+ * For the gated flows: the config id, or the message to show instead of
+ * building a transaction. An unreadable chain and a missing config get
+ * different messages; neither one builds anything.
+ */
+export async function requireComplianceConfigId(
+  network: NetworkType,
+  opts: { missingMessage?: string; client?: SuiClient } = {},
+): Promise<{ id: string } | { error: string }> {
+  try {
+    const id = await resolveComplianceConfigId(network, opts.client);
+    return id ? { id } : { error: opts.missingMessage ?? COMPLIANCE_CONFIG_MISSING_MESSAGE };
+  } catch (err) {
+    console.warn('[compliance-gate] could not read the compliance config', err);
+    return { error: COMPLIANCE_CONFIG_UNREADABLE_MESSAGE };
+  }
 }
 
 export interface AttestationRow {
