@@ -466,8 +466,10 @@ entry in `src/lib/circle-chain.ts` and `src/services/circle-service.ts`).
 A compatible upgrade cannot remove public functions, so that lineage
 would keep its retired entry points for good. The fresh lineage's
 UpgradeCap and its AssetRegistry admin (`transfer_registry_admin`) both
-go to the operator multisig before the app points at the package. Any
-mainnet publish needs the owner's explicit go-ahead.
+go to the operator multisig before the app points at the package;
+`npm run registry:setup -- <status|bless|register-usdc|transfer-admin|transfer-upgrade-cap>`
+(`scripts/registry-setup.mjs`) does those steps dry-run first and signs
+only with `--yes`. Any mainnet publish needs the owner's explicit go-ahead.
 
 **Re-running the bootstrap manually**:
 `node scripts/bootstrap-package.mjs <packageId>` — re-issues the registry
