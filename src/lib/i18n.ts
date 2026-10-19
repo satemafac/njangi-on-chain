@@ -456,7 +456,6 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     // WhatsApp copy here and in billing.whatsappSuite.* names only updates
     // listed in src/content/whatsapp-updates.ts (guard: copy-guards.test.ts).
     'pricing.premium.feature.whatsapp': 'Circle updates on WhatsApp, sent to the number you link',
-    'pricing.premium.feature.goals': 'Smart savings goals for your circles',
     'pricing.premium.feature.everything': 'Everything in Free',
     'pricing.alwaysFreeNoteLabel': 'Always free, on every plan:',
     'pricing.alwaysFreeNoteBody':
@@ -999,7 +998,6 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'pricing.premium.feature.members': "Jusqu'à {count} membres par cercle",
     'pricing.premium.feature.circles': "Gérez jusqu'à {count} cercles à la fois",
     'pricing.premium.feature.whatsapp': 'Mises à jour du cercle sur WhatsApp, envoyées au numéro que vous reliez',
-    'pricing.premium.feature.goals': "Objectifs d'épargne intelligents pour vos cercles",
     'pricing.premium.feature.everything': 'Tout ce qui est inclus dans Gratuit',
     'pricing.alwaysFreeNoteLabel': 'Toujours gratuit, sur tous les forfaits :',
     'pricing.alwaysFreeNoteBody':
