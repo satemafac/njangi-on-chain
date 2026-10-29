@@ -98,7 +98,11 @@ function coinTypeFromPoolType(typeTag: string | undefined): string {
   return m ? m[1] : '';
 }
 
-/** Lists GoalPools opened by an admin (newest first). Used by the dashboard. */
+/**
+ * Lists GoalPools opened by an admin (newest first). Used by the dashboard.
+ * Throws when the events can't be read: `[]` would read as "no pools", and the
+ * dashboard cached that. Its caller keeps the cached pools on a throw.
+ */
 export async function findGoalPoolsByAdmin(
   client: SuiClient,
   network: NetworkType,
@@ -109,31 +113,27 @@ export async function findGoalPoolsByAdmin(
   const limit = opts?.limit ?? 100;
   const target = normalizeAddress(adminAddress);
   const out: GoalPoolSummary[] = [];
-  try {
-    const events = await client.queryEvents({
-      query: { MoveEventType: `${packageId}::njangi_goal_pool::GoalPoolOpened` },
-      limit,
-      order: 'descending',
+  const events = await client.queryEvents({
+    query: { MoveEventType: `${packageId}::njangi_goal_pool::GoalPoolOpened` },
+    limit,
+    order: 'descending',
+  });
+  for (const event of events.data) {
+    const p = (event.parsedJson ?? {}) as Record<string, unknown>;
+    if (typeof p.admin !== 'string' || normalizeAddress(p.admin) !== target) continue;
+    out.push({
+      poolId: String(p.pool_id),
+      name: typeof p.name === 'string' ? p.name : decodeBytesToType(p.name),
+      admin: String(p.admin),
+      beneficiary: String(p.beneficiary),
+      goalKind: Number(p.goal_kind),
+      targetAmount: String(p.target_amount ?? '0'),
+      targetDateMs: String(p.target_date_ms ?? '0'),
+      deadlineMs: String(p.deadline_ms ?? '0'),
+      assetType: decodeBytesToType(p.asset_type),
+      requiresAttestation: Boolean(p.requires_attestation),
+      openedAtMs: Number(p.opened_at_ms ?? 0),
     });
-    for (const event of events.data) {
-      const p = (event.parsedJson ?? {}) as Record<string, unknown>;
-      if (typeof p.admin !== 'string' || normalizeAddress(p.admin) !== target) continue;
-      out.push({
-        poolId: String(p.pool_id),
-        name: typeof p.name === 'string' ? p.name : decodeBytesToType(p.name),
-        admin: String(p.admin),
-        beneficiary: String(p.beneficiary),
-        goalKind: Number(p.goal_kind),
-        targetAmount: String(p.target_amount ?? '0'),
-        targetDateMs: String(p.target_date_ms ?? '0'),
-        deadlineMs: String(p.deadline_ms ?? '0'),
-        assetType: decodeBytesToType(p.asset_type),
-        requiresAttestation: Boolean(p.requires_attestation),
-        openedAtMs: Number(p.opened_at_ms ?? 0),
-      });
-    }
-  } catch {
-    return [];
   }
   return out;
 }
@@ -192,7 +192,10 @@ export interface GoalPoolContributor {
   amount: string;
 }
 
-/** Lists contributors via ContributionRecorded events (gross, newest first). */
+/**
+ * Lists contributors via ContributionRecorded events (gross, newest first).
+ * Throws when the events can't be read, rather than reporting nobody paid.
+ */
 export async function listGoalPoolContributors(
   client: SuiClient,
   network: NetworkType,
@@ -203,19 +206,15 @@ export async function listGoalPoolContributors(
   const limit = opts?.limit ?? 200;
   const target = normalizeAddress(poolId);
   const out: GoalPoolContributor[] = [];
-  try {
-    const events = await client.queryEvents({
-      query: { MoveEventType: `${packageId}::njangi_goal_pool::ContributionRecorded` },
-      limit,
-      order: 'descending',
-    });
-    for (const event of events.data) {
-      const p = (event.parsedJson ?? {}) as Record<string, unknown>;
-      if (typeof p.pool_id !== 'string' || normalizeAddress(p.pool_id) !== target) continue;
-      out.push({ contributor: String(p.contributor), amount: String(p.amount ?? '0') });
-    }
-  } catch {
-    return [];
+  const events = await client.queryEvents({
+    query: { MoveEventType: `${packageId}::njangi_goal_pool::ContributionRecorded` },
+    limit,
+    order: 'descending',
+  });
+  for (const event of events.data) {
+    const p = (event.parsedJson ?? {}) as Record<string, unknown>;
+    if (typeof p.pool_id !== 'string' || normalizeAddress(p.pool_id) !== target) continue;
+    out.push({ contributor: String(p.contributor), amount: String(p.amount ?? '0') });
   }
   return out;
 }

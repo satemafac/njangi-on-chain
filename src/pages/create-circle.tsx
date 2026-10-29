@@ -39,7 +39,7 @@ import {
   preflightSanctionsCheck,
   SANCTIONS_BLOCKED_MESSAGE,
 } from '../lib/sanctions-preflight';
-import { resolveComplianceConfigId, isComplianceGateEnabled } from '../lib/compliance-gate';
+import { requireComplianceConfigId, isComplianceGateEnabled } from '../lib/compliance-gate';
 import GoalPotProgress from '../components/goals/GoalPotProgress';
 import { goalDisplayFont } from '../lib/fonts';
 import { useZkLoginSigner } from '../hooks/useZkLoginSigner';
@@ -952,14 +952,12 @@ export default function CreateCircle() {
     const gated = isComplianceGateEnabled();
     let complianceConfigId: string | undefined;
     if (gated) {
-      complianceConfigId =
-        (await resolveComplianceConfigId(network).catch(() => null)) ?? undefined;
-      if (!complianceConfigId) {
-        setError(
-          'Verification is required in your region but is not configured yet. Please contact support.',
-        );
+      const config = await requireComplianceConfigId(network);
+      if ('error' in config) {
+        setError(config.error);
         return;
       }
+      complianceConfigId = config.id;
     }
 
     try {

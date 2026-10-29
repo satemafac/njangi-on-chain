@@ -14,6 +14,7 @@ jest.mock('@/services/network-config', () => ({
 }));
 
 import {
+  isGoneObjectResponse,
   readObject,
   readObjects,
   cachedRead,
@@ -166,5 +167,20 @@ describe('queryEventsCached', () => {
     await queryEventsCached({ query: filter, limit: 50 });
 
     expect(queryEvents).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('isGoneObjectResponse', () => {
+  it.each(['notExists', 'deleted'])('is true when the chain says %s', (code) => {
+    expect(isGoneObjectResponse({ error: { code } })).toBe(true);
+  });
+
+  it.each([
+    ['another error code', { error: { code: 'unknown' } }],
+    ['a dynamic-field miss (not an object answer)', { error: { code: 'dynamicFieldNotFound' } }],
+    ['no response at all', null],
+    ['a response with no error', { error: null }],
+  ])('is false for %s: that is a failed or different read, not a gone object', (_label, response) => {
+    expect(isGoneObjectResponse(response)).toBe(false);
   });
 });

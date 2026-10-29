@@ -16,12 +16,15 @@ import { getEntitlements } from './entitlement-gate';
 import { fetchCircleAdminAddress } from './circle-admin-verification';
 import { getPooledSuiClient } from '../services/sui-rpc-failover';
 import { getNetworkConfig } from '../services/network-config';
+import { isGoneObjectResponse } from './sui-read';
 import type { NetworkType } from '../services/whatsapp-registry-service';
 
 /**
  * Reads the `circle_id` recorded on a CycleEscrow object so we can find its
- * circle (and thus its admin). Returns null on any miss; callers treat null
- * as "cannot confirm admin -> do not sponsor".
+ * circle (and thus its admin). Returns null when the object answers without a
+ * circle id; THROWS when it can't be read, so the decline is logged as a
+ * lookup failure and not as "no circle". Either way the caller does not
+ * sponsor.
  *
  * MUST only be handed a CycleEscrow id. The Move `Circle` struct
  * (njangi_circles.move:110-129) has no `circle_id` field — only CycleEscrow
@@ -35,18 +38,16 @@ export async function circleIdForEscrow(
   escrowId: string,
   network: NetworkType,
 ): Promise<string | null> {
-  try {
-    const networkConfig = getNetworkConfig(network);
-    const suiClient = getPooledSuiClient({ network, rpcUrl: networkConfig.rpcUrl });
-    const obj = await suiClient.getObject({ id: escrowId, options: { showContent: true } });
-    const content = obj.data?.content;
-    if (!content || content.dataType !== 'moveObject') return null;
-    const fields = (content as { fields: { circle_id?: string } }).fields;
-    return fields?.circle_id ?? null;
-  } catch (err) {
-    console.error('[gas-sponsorship] circleIdForEscrow failed', err);
-    return null;
+  const networkConfig = getNetworkConfig(network);
+  const suiClient = getPooledSuiClient({ network, rpcUrl: networkConfig.rpcUrl });
+  const obj = await suiClient.getObject({ id: escrowId, options: { showContent: true } });
+  if (obj.error && !isGoneObjectResponse(obj)) {
+    throw new Error(`escrow ${escrowId} could not be read: ${obj.error.code}`);
   }
+  const content = obj.data?.content;
+  if (!content || content.dataType !== 'moveObject') return null;
+  const fields = (content as { fields: { circle_id?: string } }).fields;
+  return fields?.circle_id ?? null;
 }
 
 /** True when the given address holds a premium entitlement. Fails safe (false). */
@@ -97,8 +98,19 @@ export async function resolveEscrowSponsorship(
     return { sponsor: false, reason: 'no_circle_id', circleId: null };
   }
 
-  const circleId =
-    input.circleId ?? (await circleIdForEscrow(input.escrowId, input.network));
+  // Failing closed is the policy: an unreadable chain never enables a spend,
+  // so the member pays their own gas (the client falls back silently and the
+  // transaction is otherwise unchanged). The reason only keeps the logs
+  // honest: an outage is not a circle without an id.
+  let circleId = input.circleId ?? null;
+  if (!circleId) {
+    try {
+      circleId = await circleIdForEscrow(input.escrowId, input.network);
+    } catch (err) {
+      console.error('[gas-sponsorship] escrow lookup failed; not sponsoring', err);
+      return { sponsor: false, reason: 'escrow_lookup_failed', circleId: null };
+    }
+  }
   if (!circleId) {
     return { sponsor: false, reason: 'no_circle_id', circleId: null };
   }
