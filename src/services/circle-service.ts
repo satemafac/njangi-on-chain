@@ -377,17 +377,8 @@ export async function getObjectTransactionPackageId(objectId: string): Promise<s
  */
 export async function getUserPackageIds(userAddress: string): Promise<string[]> {
   try {
-    // Use official Sui RPC to avoid rate limits during package discovery
     const currentNetwork = getCurrentNetwork();
-    const officialRpcUrl = currentNetwork === 'mainnet'
-      ? 'https://sui-rpc.publicnode.com'
-      : 'https://sui-testnet-rpc.publicnode.com';
-
-    console.log(`🔍 getUserPackageIds: Using official RPC ${officialRpcUrl} for package discovery`);
-    const client = getPooledSuiClient({
-      network: currentNetwork,
-      rpcUrl: officialRpcUrl,
-    });
+    const client = getPooledSuiClient({ network: currentNetwork });
     const packageIds = new Set<string>();
     
     // Always include the full known lookup set for the current network so

@@ -18,10 +18,15 @@ const RETRIABLE_STATUS_CODES = new Set([408, 429, 500, 502, 503, 504]);
 const KNOWN_NETWORKS: NetworkType[] = ['testnet', 'mainnet'];
 const RATE_LIMIT_COOLDOWN_MS = 30_000;
 const TRANSIENT_FAILURE_COOLDOWN_MS = 10_000;
+// An endpoint that has retired JSON-RPC will not come back within a page's
+// lifetime; asking it first on every request only adds a round trip.
+const WITHDRAWN_COOLDOWN_MS = 10 * 60_000;
 const rpcCooldowns = new Map<string, { until: number; reason: string }>();
 const SHARED_RPC_FALLBACK_URLS: Record<NetworkType, string[]> = {
+  // publicnode retired testnet JSON-RPC on 2026-10-16 ("Sui JSON-RPC endpoint
+  // has been deprecated. Please use the gRPC endpoint instead"), so it is no
+  // longer a fallback here. docs/testnet-rpc-after-publicnode.md has the options.
   testnet: [
-    'https://sui-testnet-rpc.publicnode.com',
     'https://sui-testnet-endpoint.blockvision.org',
   ],
   mainnet: [
@@ -264,6 +269,17 @@ class SuiFailoverTransport implements SuiTransport {
   private markCooldown(rpcUrl: string, error: unknown): void {
     const message = getSuiRpcErrorMessage(error);
 
+    // The endpoint has retired JSON-RPC outright, for every method. Unlike a
+    // capability gap it serves nothing, so it sits out long enough that later
+    // requests stop paying a round trip to learn that again.
+    if (isJsonRpcWithdrawnError(message)) {
+      rpcCooldowns.set(rpcUrl, { until: Date.now() + WITHDRAWN_COOLDOWN_MS, reason: message });
+      console.warn(
+        `[sui.transport] ${rpcUrl} has retired JSON-RPC; skipping it for ${WITHDRAWN_COOLDOWN_MS / 60_000} min: ${message}`,
+      );
+      return;
+    }
+
     // A capability gap is not ill health. publicnode serves object reads
     // perfectly but has no event history, so every queryEvents against it
     // fails — benching it for 10s over that took the ONE endpoint that
@@ -443,6 +459,22 @@ export function clearSuiRpcClientPool(): void {
 }
 
 /**
+ * True when the endpoint has retired its whole JSON-RPC surface. Seen as HTTP
+ * 200 with a JSON-RPC error body, so it arrives as an application error:
+ *   - Sui's public fullnodes (2026-08): `-32601 Method not found. JSON-RPC on
+ *     public fullnodes has been deprecated`
+ *   - publicnode testnet (2026-10-16): `-32000 Sui JSON-RPC endpoint has been
+ *     deprecated. Please use the gRPC endpoint instead: …`
+ * Matched loosely ("json-rpc"/"jsonrpc" + "deprecated") because each provider
+ * words it differently, and an exact phrase list is how the second one slipped
+ * past failover.
+ */
+export function isJsonRpcWithdrawnError(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return /json-?rpc/.test(normalized) && normalized.includes('deprecated');
+}
+
+/**
  * True when the endpoint is healthy but does not serve THIS method or data.
  *
  * Distinct from a transient failure: retrying later against the same endpoint
@@ -454,12 +486,13 @@ export function clearSuiRpcClientPool(): void {
  * Callers should fail OVER on these, and must NOT cool the endpoint down.
  */
 export function isCapabilityGapError(message: string): boolean {
+  // A retired JSON-RPC surface is not a per-method gap: see
+  // isJsonRpcWithdrawnError, which also cools the endpoint down.
+  if (isJsonRpcWithdrawnError(message)) return false;
   const normalized = message.toLowerCase();
   return (
     normalized.includes('could not find the referenced transaction') ||
-    normalized.includes('method not found') ||
-    normalized.includes('json-rpc on public fullnodes has been deprecated') ||
-    normalized.includes('jsonrpc has been deprecated')
+    normalized.includes('method not found')
   );
 }
 
@@ -494,20 +527,19 @@ export function isRetriableSuiRpcError(error: unknown): boolean {
     normalized.includes('could not find the referenced transaction') ||
     normalized.includes('could not find object') ||
     normalized.includes('transaction not found') ||
-    // An endpoint that has withdrawn its JSON-RPC surface. Sui deprecated
-    // JSON-RPC on its public fullnodes, which `fullnode.*.sui.io` serves as
-    // HTTP 200 carrying a JSON-RPC error body — so it reaches us as an
-    // application error, not a transport failure, and every check above
-    // misses it. The endpoint is permanently dead rather than blipping, but
-    // "try the next host" is exactly the right response and is what failover
-    // exists for: without this, a healthy alternate is never attempted and
-    // the whole app loses chain access behind one retired primary.
+    // An endpoint that has withdrawn its JSON-RPC surface (Sui's public
+    // fullnodes, then publicnode testnet) answers HTTP 200 with a JSON-RPC
+    // error body — so it reaches us as an application error, not a transport
+    // failure, and every check above misses it. The endpoint is permanently
+    // dead rather than blipping, but "try the next host" is exactly the right
+    // response and is what failover exists for: without this, a healthy
+    // alternate is never attempted and the whole app loses chain access
+    // behind one retired primary.
     //
     // Cost when the method is genuinely absent everywhere: we walk the host
     // list before failing. That is a slower failure, not a wrong one.
     normalized.includes('method not found') ||
-    normalized.includes('json-rpc on public fullnodes has been deprecated') ||
-    normalized.includes('jsonrpc has been deprecated')
+    isJsonRpcWithdrawnError(normalized)
   );
 }
 

@@ -1,4 +1,5 @@
 import { getPooledSuiClient } from '@/services/sui-rpc-failover';
+import { getRpcUrlForNetwork } from '@/services/network-config';
 import { SUI_COIN_TYPE, usdcCoinTypeForNetwork } from '@/config/coin-types';
 
 export type WalletNetwork = 'testnet' | 'mainnet';
@@ -50,16 +51,9 @@ function resolveRpcUrl(network: WalletNetwork, override?: string): string {
   if (override && override.trim()) {
     return override.trim();
   }
-  // `||` after trim, not `??`: a blank env value is unset, not an empty URL.
-  if (network === 'mainnet') {
-    return (
-      process.env.NEXT_PUBLIC_MAINNET_RPC_URL?.trim() ||
-      'https://sui-rpc.publicnode.com'
-    );
-  }
-  return (
-    process.env.NEXT_PUBLIC_TESTNET_RPC_URL?.trim() || 'https://sui-testnet-rpc.publicnode.com'
-  );
+  // The config resolver applies the env vars and the defaults; a host
+  // hardcoded here outlived publicnode's testnet JSON-RPC.
+  return getRpcUrlForNetwork(network);
 }
 
 function resolveUsdcCoinType(
