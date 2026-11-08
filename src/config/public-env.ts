@@ -57,10 +57,11 @@ const warnedLegacyKeys = new Set<string>();
 // They remain valid hosts for gRPC/GraphQL — so if this app ever migrates off
 // JSON-RPC, revisit these rather than assuming the hosts are gone.
 //
-// publicnode serves JSON-RPC for both networks and already backs the failover
-// list in sui-rpc-failover.ts.
+// publicnode serves mainnet JSON-RPC. It retired TESTNET JSON-RPC on 2026-10-16
+// ("Please use the gRPC endpoint instead"), which leaves blockvision as the
+// only keyless testnet JSON-RPC; see docs/testnet-rpc-after-publicnode.md.
 const DEFAULT_RPC_URLS: Record<NetworkType, string> = {
-  testnet: 'https://sui-testnet-rpc.publicnode.com',
+  testnet: 'https://sui-testnet-endpoint.blockvision.org',
   mainnet: 'https://sui-rpc.publicnode.com',
 };
 const DEFAULT_RPC_ALT_URLS: Record<NetworkType, string> = {
