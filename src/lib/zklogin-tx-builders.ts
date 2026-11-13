@@ -9,6 +9,18 @@ const CREATE_CIRCLE_GAS_BUDGET = 50_000_000;
 const RECOVERY_VOTE_GAS_BUDGET = 50_000_000;
 const RECOVERY_EXECUTION_GAS_BUDGET = 100_000_000;
 
+/**
+ * The penalty switches both create-circle builders send: always both off.
+ * Nothing on chain enforces penalties (the contract stores fixed constants
+ * that are only read back, and a circle's penalty balance never moves), so
+ * sending the organizer's switches would record a promise the contract never
+ * keeps. This is a fixed product decision, not a fallback for a missing or
+ * malformed field: the form's value is never read. The vector stays in the
+ * call only because a published Move function's parameters cannot change
+ * (NJA-2593).
+ */
+export const NO_PENALTY_RULES: readonly [false, false] = [false, false];
+
 export interface CircleOptionU8 {
   some?: number;
   none?: null;
@@ -33,7 +45,12 @@ export interface CreateCircleTransactionData {
   circle_type: number;
   max_members: number;
   rotation_style: number;
-  penalty_rules: boolean[];
+  /**
+   * Never read: the builders always send NO_PENALTY_RULES (NJA-2593). Optional
+   * and ignored so existing callers still compile; it is not validated and
+   * has no effect on the transaction.
+   */
+  penalty_rules?: boolean[];
   goal_type?: CircleOptionU8;
   target_amount?: CircleOptionU64;
   target_amount_local?: CircleOptionU64 | string | number | bigint;
@@ -149,7 +166,6 @@ export interface ParsedCreateCircleData {
   circleType: number;
   maxMembers: number;
   rotationStyle: number;
-  penaltyRules: boolean[];
   goalType: number | null;
   targetAmount: bigint | null;
   targetAmountLocal: bigint | null;
@@ -168,10 +184,6 @@ export interface ParsedCreateCircleData {
 export function parseCreateCircleData(circleData: CreateCircleTransactionData): ParsedCreateCircleData {
   if (!circleData.name || circleData.name.trim().length === 0) {
     throw new Error('Circle name is required.');
-  }
-
-  if (!Array.isArray(circleData.penalty_rules)) {
-    throw new Error('Penalty rules are required.');
   }
 
   const contributionAmount = toU64(circleData.contribution_amount, 'Contribution amount');
@@ -254,7 +266,6 @@ export function parseCreateCircleData(circleData: CreateCircleTransactionData): 
     circleType,
     maxMembers,
     rotationStyle,
-    penaltyRules: circleData.penalty_rules,
     goalType: toOptionalU8(circleData.goal_type),
     targetAmount: toOptionalU64(circleData.target_amount),
     targetAmountLocal: toOptionalU64(circleData.target_amount_local),
@@ -291,7 +302,7 @@ export function buildCreateCircleTx({
       tx.pure.u8(parsed.circleType),
       tx.pure.u64(parsed.maxMembers),
       tx.pure.u8(parsed.rotationStyle),
-      tx.pure.vector('bool', parsed.penaltyRules),
+      tx.pure.vector('bool', [...NO_PENALTY_RULES]),
       tx.pure.option('u8', parsed.goalType),
       tx.pure.option('u64', parsed.targetAmount),
       tx.pure.option('u64', parsed.targetAmountLocal),
