@@ -20,6 +20,7 @@ import { Transaction } from '@mysten/sui/transactions';
 import { normalizePackageId } from '@/lib/circle-chain';
 import { normalizeRequiredObjectId } from '@/lib/sui-object-id';
 import {
+  NO_PENALTY_RULES,
   parseCreateCircleData,
   type CreateCircleTransactionData,
 } from '@/lib/zklogin-tx-builders';
@@ -345,7 +346,7 @@ export function buildCreateCircleWithAssetTx(input: BuildCreateCircleWithAssetTx
       tx.pure.u8(parsed.circleType),
       tx.pure.u64(parsed.maxMembers),
       tx.pure.u8(parsed.rotationStyle),
-      tx.pure.vector('bool', parsed.penaltyRules),
+      tx.pure.vector('bool', [...NO_PENALTY_RULES]),
       tx.pure.option('u8', parsed.goalType),
       tx.pure.option('u64', parsed.targetAmount),
       tx.pure.option('u64', parsed.targetAmountLocal),

@@ -176,10 +176,8 @@ export class CircleService {
           tx.pure.u8(formData.cycleType === 'rotational' ? CIRCLE_TYPE_ROTATIONAL : CIRCLE_TYPE_SMART_GOAL), // circle_type: u8
           tx.pure.u64(formData.numberOfMembers), // max_members: u64
           tx.pure.u8(ROTATION_STYLE_FIXED),     // rotation_style: u8
-          tx.pure(bcs.vector(bcs.bool()).serialize([
-            formData.penaltyRules.latePayment,
-            formData.penaltyRules.missedMeeting
-          ])),                                  // penalty_rules: vector<bool>
+          // Always [false, false]: nothing on chain enforces penalties (NJA-2593).
+          tx.pure(bcs.vector(bcs.bool()).serialize([false, false])), // penalty_rules: vector<bool>
           tx.pure(bcs.vector(bcs.u8()).serialize(goalType)),     // goal_type: Option<u8>
           tx.pure(bcs.vector(bcs.u64()).serialize(targetAmount)), // target_amount: Option<u64>
           tx.pure(bcs.vector(bcs.u64()).serialize(targetAmountLocal)), // target_amount_local: Option<u64>
