@@ -1,4 +1,5 @@
 import { getPooledSuiClient } from '@/services/sui-rpc-failover';
+import { getGraphqlUrlForNetwork } from '@/services/network-config';
 import { SUI_COIN_TYPE, usdcCoinTypeForNetwork } from '@/config/coin-types';
 
 export type WalletNetwork = 'testnet' | 'mainnet';
@@ -111,6 +112,105 @@ function writeCachedBalance(key: string, value: WalletBalanceResult): void {
   });
 }
 
+const GRAPHQL_TIMEOUT_MS = 8_000;
+const BALANCE_QUERY =
+  'query($owner: SuiAddress!, $type: String!) { address(address: $owner) { balance(coinType: $type) { totalBalance } } }';
+
+// A balance is a decimal string of base units. Anything else (undefined,
+// null, a number, '', a negative value) is not a reading.
+function parseTotalBalance(raw: unknown): string | null {
+  return typeof raw === 'string' && /^\d+$/.test(raw) ? raw : null;
+}
+
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+// Sui GraphQL first (NJA-2839): JSON-RPC is refused by every configured
+// provider. A null `address` or a GraphQL error is a failed read, never 0;
+// only the literal string '0' is an empty wallet.
+async function readBalanceViaGraphql(
+  network: WalletNetwork,
+  owner: string,
+  coinType: string,
+): Promise<string> {
+  const url = getGraphqlUrlForNetwork(network);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), GRAPHQL_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ query: BALANCE_QUERY, variables: { owner, type: coinType } }),
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw new Error(`GraphQL ${url} answered ${response.status}`);
+    }
+    const body = await response.json();
+    const totalBalance = parseTotalBalance(body?.data?.address?.balance?.totalBalance);
+    if (totalBalance === null) {
+      const reason = body?.errors?.[0]?.message;
+      throw new Error(`GraphQL ${url} returned no readable balance${reason ? `: ${reason}` : ''}`);
+    }
+    return totalBalance;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function readBalanceViaJsonRpc(
+  network: WalletNetwork,
+  rpcUrl: string,
+  owner: string,
+  coinType: string,
+): Promise<string> {
+  const client = getPooledSuiClient({
+    network,
+    rpcUrl,
+  });
+  const balance = await client.getBalance({ owner, coinType });
+  const totalBalance = parseTotalBalance(balance?.totalBalance);
+  if (totalBalance === null) {
+    throw new Error(`JSON-RPC returned an unreadable balance: ${String(balance?.totalBalance)}`);
+  }
+  return totalBalance;
+}
+
+/**
+ * The balance of `coinType` held by `owner`, as a decimal string of base
+ * units. GraphQL first, JSON-RPC as the fallback. Throws when neither gives a
+ * readable value; a failed read never becomes a zero balance.
+ */
+async function readTotalBalance(input: {
+  network: WalletNetwork;
+  rpcUrl: string;
+  owner: string;
+  coinType: string;
+  symbol: 'SUI' | 'USDC';
+}): Promise<string> {
+  let graphqlError: unknown;
+  try {
+    return await readBalanceViaGraphql(input.network, input.owner, input.coinType);
+  } catch (error) {
+    graphqlError = error;
+    console.warn(
+      `[wallet] GraphQL ${input.symbol} balance read failed on ${input.network}, trying JSON-RPC: ${describeError(error)}`,
+    );
+  }
+
+  try {
+    return await readBalanceViaJsonRpc(input.network, input.rpcUrl, input.owner, input.coinType);
+  } catch (rpcError) {
+    console.error(
+      `[wallet] no source answered the ${input.symbol} balance on ${input.network}. GraphQL: ${describeError(graphqlError)}. JSON-RPC: ${describeError(rpcError)}`,
+    );
+    throw new Error(
+      `Could not read the ${input.symbol} balance (${input.coinType}) on the Sui ${input.network} network: neither GraphQL nor JSON-RPC returned a readable balance.`,
+    );
+  }
+}
+
 async function refreshCoinBalance(input: {
   walletAddress: string;
   symbol: 'SUI' | 'USDC';
@@ -131,13 +231,12 @@ async function refreshCoinBalance(input: {
   }
 
   const rpcUrl = resolveRpcUrl(network, input.options?.rpcUrl);
-  const client = getPooledSuiClient({
+  const totalBalance = await readTotalBalance({
     network,
     rpcUrl,
-  });
-  const balance = await client.getBalance({
     owner: walletAddress,
     coinType: input.coinType,
+    symbol: input.symbol,
   });
 
   const value: WalletBalanceResult = {
@@ -145,7 +244,7 @@ async function refreshCoinBalance(input: {
     network,
     coinType: input.coinType,
     symbol: input.symbol,
-    totalBalance: balance.totalBalance,
+    totalBalance,
     updatedAt: new Date().toISOString(),
     source: 'chain',
   };
