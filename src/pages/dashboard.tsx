@@ -42,6 +42,7 @@ import {
   walletCoinAmount,
   type WalletCoin,
 } from '@/lib/wallet-coins';
+import { readWalletBalancesViaGraphql, type WalletBalanceReading } from '@/lib/wallet-balances';
 import {
   formatBaseUnits,
   formatBaseUnitsForDisplay,
@@ -2063,6 +2064,29 @@ export default function Dashboard() {
 
     let lastErrorMessage = 'Unknown error';
 
+    // Sui GraphQL first: every JSON-RPC endpoint can refuse at once (NJA-2830)
+    // while GraphQL still answers. A failed, malformed or partial GraphQL read
+    // throws and falls to the JSON-RPC candidates below; it never reads as zero.
+    let graphqlBalances: WalletBalanceReading[] | null = null;
+    let graphqlErrorMessage = 'Unknown error';
+    try {
+      graphqlBalances = await readWalletBalancesViaGraphql(activeNetwork, userAddress);
+    } catch (error) {
+      graphqlErrorMessage = error instanceof Error ? error.message : String(error);
+      console.warn(`GraphQL balance read failed on ${activeNetwork}, trying JSON-RPC: ${graphqlErrorMessage}`);
+    }
+
+    if (graphqlBalances) {
+      // Same per-coin handling as the JSON-RPC read: keyed by exact coin type.
+      const processedCoins = buildWalletCoins(graphqlBalances, activeNetwork);
+
+      setBalance(findSupportedWalletCoin(processedCoins, 'SUI')?.balance || '0');
+      setAllCoins(processedCoins);
+      setWalletBalanceStatus((prev) => afterBalanceRead(prev, true));
+      console.log('Wallet balances by coin type (GraphQL):', processedCoins);
+      return true;
+    }
+
     for (const activeRpcUrl of rpcCandidates) {
       try {
         const client = getSuiClientFromPool(activeRpcUrl);
@@ -2102,7 +2126,7 @@ export default function Dashboard() {
       }
     }
 
-    console.warn(`Unable to fetch wallet balances on ${activeNetwork}: ${lastErrorMessage}`);
+    console.warn(`Unable to fetch wallet balances on ${activeNetwork}. GraphQL: ${graphqlErrorMessage}. JSON-RPC: ${lastErrorMessage}`);
     setWalletBalanceStatus((prev) => afterBalanceRead(prev, false));
     if (showFailureToast) {
       toast.error(`Failed to refresh balance on ${activeNetwork}`);
