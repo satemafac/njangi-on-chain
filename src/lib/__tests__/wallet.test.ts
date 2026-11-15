@@ -16,6 +16,7 @@ import {
 describe('wallet balance helpers', () => {
   const walletAddress =
     '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcd';
+  const realFetch = globalThis.fetch;
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -24,6 +25,17 @@ describe('wallet balance helpers', () => {
     process.env.NEXT_PUBLIC_TESTNET_USDC =
       '0x26b3bc67befc214058ca78ea9a2690298d731a2d4309485ec3d40198063c4abc::usdc::USDC';
     process.env.NEXT_PUBLIC_TESTNET_RPC_URL = 'https://fullnode.testnet.sui.io:443';
+    // The helpers read Sui GraphQL first. fetch is stubbed to fail, so nothing
+    // reaches the live service (PR #143 got its answers in CI run 43757125878)
+    // and these tests read through the mocked JSON-RPC client, the fallback.
+    (globalThis as { fetch: unknown }).fetch = jest.fn(async () => {
+      throw new TypeError('fetch failed: wallet.test.ts never reaches the network');
+    });
+    jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+  });
+
+  afterAll(() => {
+    (globalThis as { fetch: unknown }).fetch = realFetch;
   });
 
   it('refreshes SUI balance from chain', async () => {
