@@ -16,9 +16,16 @@
 // IMPORTANT: Move struct types stay anchored to the package's ORIGINAL id
 // across upgrades, so the StructType filter MUST use originalId, not
 // published-at.
+//
+// Transport: Sui's GraphQL service is asked first. It lists an address's
+// objects by type even when every JSON-RPC endpoint refuses JSON-RPC (NJA-2830).
+// `getOwnedObjects` over the JSON-RPC failover pool is the fallback. A failed
+// GraphQL read is never "no receipts": it goes to the fallback, and when
+// neither source answers the call throws so the caller marks its scan
+// incomplete.
 
 import type { SuiClient } from '@mysten/sui/client';
-import { getCurrentNetwork, type NetworkType } from '@/services/network-config';
+import { getCurrentNetwork, getGraphqlUrlForNetwork, type NetworkType } from '@/services/network-config';
 import { getPooledSuiClient } from '@/services/sui-rpc-failover';
 import { getPublishedPackageMetadata } from './circle-chain';
 import { cachedRead, isGoneObjectResponse } from './sui-read';
@@ -32,6 +39,186 @@ const MAX_MEMBERSHIP_PAGES = 20;
 
 interface MembershipReceiptFields {
   circle_id?: string;
+}
+
+/** How long one GraphQL page may take before it counts as a failed read. */
+const GRAPHQL_TIMEOUT_MS = 8_000;
+
+/** The owner's objects of the receipt type, 50 per page (the size of a
+ *  `getOwnedObjects` page, so MAX_MEMBERSHIP_PAGES bounds both sources alike). */
+const MEMBERSHIP_RECEIPTS_QUERY = `query ($owner: SuiAddress!, $type: String!, $after: String) {
+  address(address: $owner) {
+    objects(first: 50, after: $after, filter: { type: $type }) {
+      pageInfo { hasNextPage endCursor }
+      nodes { address contents { type { repr } json } }
+    }
+  }
+}`;
+
+interface GraphqlReceiptPageBody {
+  data?: {
+    address?: {
+      objects?: {
+        pageInfo?: { hasNextPage?: unknown; endCursor?: unknown } | null;
+        nodes?: unknown;
+      } | null;
+    } | null;
+  } | null;
+  errors?: unknown;
+}
+
+interface GraphqlReceiptNode {
+  address?: unknown;
+  contents?: { json?: { circle_id?: unknown } | null } | null;
+}
+
+interface ReceiptPage {
+  circleIds: string[];
+  nextCursor: string | null;
+}
+
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * One page of `owner`'s receipts from Sui GraphQL. Throws on any failed or
+ * partial read (error status, an `errors` body, no `nodes` list, no
+ * `pageInfo`, a next page without a cursor, a receipt without a readable
+ * `circle_id`): a bad answer is never read as "no receipts", and no receipt is
+ * silently skipped.
+ */
+async function fetchReceiptPageViaGraphql(
+  url: string,
+  owner: string,
+  structType: string,
+  after: string | null,
+): Promise<ReceiptPage> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), GRAPHQL_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({
+        query: MEMBERSHIP_RECEIPTS_QUERY,
+        variables: { owner, type: structType, after },
+      }),
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw new Error(`GraphQL ${url} answered ${response.status}`);
+    }
+    const body = (await response.json()) as GraphqlReceiptPageBody | null;
+    const errors = body?.errors;
+    if (errors !== undefined && errors !== null && !(Array.isArray(errors) && errors.length === 0)) {
+      const reason = Array.isArray(errors) ? (errors[0] as { message?: unknown } | null)?.message : undefined;
+      throw new Error(`GraphQL ${url} returned errors${typeof reason === 'string' ? `: ${reason}` : ''}`);
+    }
+    const objects = body?.data?.address?.objects;
+    const nodes = objects?.nodes;
+    if (!Array.isArray(nodes)) {
+      throw new Error(`GraphQL ${url} returned no object list for ${owner}`);
+    }
+    const pageInfo = objects?.pageInfo;
+    if (!pageInfo || typeof pageInfo.hasNextPage !== 'boolean') {
+      throw new Error(`GraphQL ${url} returned no pageInfo for ${owner}`);
+    }
+    let nextCursor: string | null = null;
+    if (pageInfo.hasNextPage) {
+      const endCursor = pageInfo.endCursor;
+      if (typeof endCursor !== 'string' || endCursor === '') {
+        throw new Error(`GraphQL ${url} reported another page for ${owner} without a cursor`);
+      }
+      nextCursor = endCursor;
+    }
+    const circleIds = nodes.map((node: GraphqlReceiptNode | null) => {
+      const circleId = node?.contents?.json?.circle_id;
+      if (typeof circleId !== 'string' || circleId === '') {
+        throw new Error(`GraphQL ${url} returned receipt ${String(node?.address)} without a readable circle_id`);
+      }
+      return circleId;
+    });
+    return { circleIds, nextCursor };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Every receipt of `userAddress` from Sui GraphQL, following `endCursor` while
+ *  `hasNextPage`. Throws if any page fails, so a partial list is never returned. */
+async function readReceiptsViaGraphql(
+  network: NetworkType,
+  userAddress: string,
+  structType: string,
+): Promise<string[]> {
+  const url = getGraphqlUrlForNetwork(network);
+  const circleIds = new Set<string>();
+  let cursor: string | null = null;
+  let pages = 0;
+
+  do {
+    const page: ReceiptPage = await fetchReceiptPageViaGraphql(url, userAddress, structType, cursor);
+    for (const circleId of page.circleIds) {
+      circleIds.add(circleId);
+    }
+
+    cursor = page.nextCursor;
+    pages += 1;
+
+    if (pages >= MAX_MEMBERSHIP_PAGES && cursor) {
+      console.warn(
+        `[membership-discovery] Stopped after ${MAX_MEMBERSHIP_PAGES} pages for ${userAddress}; some memberships may be omitted.`,
+      );
+      break;
+    }
+  } while (cursor);
+
+  return Array.from(circleIds);
+}
+
+/** Every receipt of `userAddress` from `getOwnedObjects` over the JSON-RPC
+ *  failover pool: the fallback when GraphQL fails. */
+async function readReceiptsViaJsonRpc(
+  network: NetworkType,
+  userAddress: string,
+  structType: string,
+): Promise<string[]> {
+  const client = getPooledSuiClient({ network });
+  const circleIds = new Set<string>();
+  let cursor: string | null | undefined;
+  let pages = 0;
+
+  do {
+    const res = await client.getOwnedObjects({
+      owner: userAddress,
+      filter: { StructType: structType },
+      options: { showContent: true },
+      cursor: cursor ?? undefined,
+    });
+
+    for (const item of res.data) {
+      const content = item.data?.content;
+      if (content && 'fields' in content) {
+        const fields = content.fields as MembershipReceiptFields;
+        if (fields.circle_id) {
+          circleIds.add(fields.circle_id);
+        }
+      }
+    }
+
+    cursor = res.hasNextPage ? res.nextCursor : null;
+    pages += 1;
+
+    if (pages >= MAX_MEMBERSHIP_PAGES && cursor) {
+      console.warn(
+        `[membership-discovery] Stopped after ${MAX_MEMBERSHIP_PAGES} pages for ${userAddress}; some memberships may be omitted.`,
+      );
+      break;
+    }
+  } while (cursor);
+
+  return Array.from(circleIds);
 }
 
 /**
@@ -54,41 +241,29 @@ export async function discoverMemberCircleIds(
   const cacheKey = `membership:${network}:${userAddress}`;
 
   return cachedRead(cacheKey, async () => {
-    const client = getPooledSuiClient({ network });
-    const circleIds = new Set<string>();
-    let cursor: string | null | undefined;
-    let pages = 0;
+    let graphqlError: unknown;
+    try {
+      return await readReceiptsViaGraphql(network, userAddress, structType);
+    } catch (error) {
+      graphqlError = error;
+      console.warn(
+        `[membership-discovery] GraphQL receipt read failed on ${network}, trying JSON-RPC: ${describeError(error)}`,
+      );
+    }
 
-    do {
-      const res = await client.getOwnedObjects({
-        owner: userAddress,
-        filter: { StructType: structType },
-        options: { showContent: true },
-        cursor: cursor ?? undefined,
-      });
-
-      for (const item of res.data) {
-        const content = item.data?.content;
-        if (content && 'fields' in content) {
-          const fields = content.fields as MembershipReceiptFields;
-          if (fields.circle_id) {
-            circleIds.add(fields.circle_id);
-          }
-        }
-      }
-
-      cursor = res.hasNextPage ? res.nextCursor : null;
-      pages += 1;
-
-      if (pages >= MAX_MEMBERSHIP_PAGES && cursor) {
-        console.warn(
-          `[membership-discovery] Stopped after ${MAX_MEMBERSHIP_PAGES} pages for ${userAddress}; some memberships may be omitted.`,
-        );
-        break;
-      }
-    } while (cursor);
-
-    return Array.from(circleIds);
+    // Partial GraphQL pages are discarded: the JSON-RPC answer stands alone.
+    try {
+      return await readReceiptsViaJsonRpc(network, userAddress, structType);
+    } catch (rpcError) {
+      // Neither source answered: throw (never `[]`) so the caller marks its
+      // scan incomplete; `cachedRead` does not cache the failure.
+      throw Object.assign(
+        new Error(
+          `[membership-discovery] no source listed the receipts of ${userAddress} on ${network}. GraphQL: ${describeError(graphqlError)}. JSON-RPC: ${describeError(rpcError)}`,
+        ),
+        { cause: rpcError },
+      );
+    }
   }, opts.ttlMs);
 }
 
