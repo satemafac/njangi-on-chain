@@ -23,6 +23,8 @@ import { isPostgresConfigured } from '@/lib/pg-pool';
 import { resolveEscrowSponsorship } from '@/lib/gas-sponsorship-eligibility';
 import { judgeSponsorableKind, type SponsorableKindVerdict } from '@/lib/sponsorable-kind';
 import { getCurrentNetwork, getNetworkConfig } from '@/services/network-config';
+import { embargoErrorBody, isEmbargoedLocation, isGeoBlockEnabled } from '@/lib/embargo';
+import { sanctionsErrorBody, screenAddress, type ScreenResult } from '@/lib/sanctions';
 
 interface PrepareBody {
   action?: string;
@@ -33,6 +35,42 @@ interface PrepareBody {
     coinType?: string;
     usesGasCoinForValue?: boolean;
   };
+}
+
+// The same body join-requests/create sends. It is not a match: the screen
+// could not run, so the member is told to retry, not that they were refused.
+const SCREENING_UNAVAILABLE_BODY = {
+  success: false,
+  code: 'SCREENING_UNAVAILABLE',
+  error: 'SCREENING_UNAVAILABLE',
+  message: 'We could not complete a required compliance check. Please try again shortly.',
+} as const;
+
+/**
+ * True when the request's region is embargoed OR cannot be read.
+ *
+ * isEmbargoedLocation() answers false for a missing country, and embargo.ts
+ * is shared with middleware, so the stricter reading lives here. A missing,
+ * repeated or malformed country header is an unknown region, and an unknown
+ * region is refused. Ukraine without a readable subdivision is refused too,
+ * because only the subdivision tells Crimea, Sevastopol, Donetsk and Luhansk
+ * apart from the rest of the country.
+ */
+function regionRefused(req: NextApiRequest): boolean {
+  if (!isGeoBlockEnabled()) return false;
+  const headers: NextApiRequest['headers'] = req.headers ?? {};
+  const rawCountry = headers['x-vercel-ip-country'];
+  if (typeof rawCountry !== 'string') return true;
+  const country = rawCountry.trim().toUpperCase();
+  if (!/^[A-Z]{2}$/.test(country)) return true;
+  let region: string | null = null;
+  if (country === 'UA') {
+    const rawRegion = headers['x-vercel-ip-country-region'];
+    if (typeof rawRegion !== 'string') return true;
+    region = rawRegion.trim().toUpperCase();
+    if (!/^[A-Z0-9]{1,3}$/.test(region)) return true;
+  }
+  return isEmbargoedLocation(country, region);
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -60,6 +98,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const decline = (reason: string) => {
     console.info('[sponsor/prepare] declined', { action, reason });
     return res.status(200).json({ sponsored: false, reason });
+  };
+
+  // A compliance refusal is not a decline. Like join-requests/create, it
+  // answers non-200 so the member is told why. It is logged like a decline:
+  // action and reason only, no sub, no address.
+  const refuse = (status: 403 | 503, reason: string, body: Record<string, unknown>) => {
+    console.warn('[sponsor/prepare] refused', { action, reason });
+    return res.status(status).json(body);
   };
 
   try {
@@ -124,6 +170,43 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       usesGasCoinForValue: context.usesGasCoinForValue ?? false,
     });
     if (!decision.sponsor) return decline(decision.reason);
+
+    // Compliance gate, the last check before the spend (NJA-2833). A
+    // sponsor-funded gas coin is a server-side spend made for one wallet, so
+    // the region and the session's wallet are screened here. That is after
+    // every decline above (those spend nothing and keep their 200) and
+    // before Enoki is asked for anything.
+    if (regionRefused(req)) {
+      const body = embargoErrorBody();
+      return refuse(403, 'embargoed_region', {
+        success: false,
+        error: body.error,
+        code: body.code,
+        message: body.message,
+      });
+    }
+
+    // Fail CLOSED, even though the sponsorable targets include claims,
+    // refunds and recovery, which sanctions.ts says fail open. What is
+    // withheld here is the sponsor's gas coin, not the member's transaction.
+    // A member who holds SUI can still pay their own gas. One who holds none
+    // waits for the screen to come back, so a claim is paused, not stranded.
+    let screen: ScreenResult | undefined;
+    try {
+      screen = await screenAddress(account.userAddr, 'gas_sponsorship', { failClosed: true });
+    } catch (err) {
+      console.error('[sponsor/prepare] wallet screen could not run:', err);
+      return refuse(503, 'screening_unavailable', SCREENING_UNAVAILABLE_BODY);
+    }
+    if (screen?.blocked !== false) {
+      // Only a clean pass goes on. A hit, or a block with a missing or
+      // unknown reason, is a 403. 'unavailable', or a verdict that cannot be
+      // read as one, is a retryable 503 and never a pass.
+      if (screen?.blocked === true && screen.reason !== 'unavailable') {
+        return refuse(403, 'sanctions_blocked', sanctionsErrorBody());
+      }
+      return refuse(503, 'screening_unavailable', SCREENING_UNAVAILABLE_BODY);
+    }
 
     const enoki = new EnokiClient({ apiKey });
     const sponsored = await enoki.createSponsoredTransaction({
