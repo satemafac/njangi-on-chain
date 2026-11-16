@@ -302,7 +302,6 @@ export default function WhatIsNjangiPage() {
                   'Security deposit (at least half of one contribution)',
                   'Monthly contribution amount',
                   'Small amount of SUI tokens for fees',
-                  'Emergency fund for penalties',
                 ],
               },
             ]}
