@@ -267,17 +267,167 @@ export async function discoverMemberCircleIds(
   }, opts.ttlMs);
 }
 
+/** The circle's admin and members table, as the verification step reads them. */
+const CIRCLE_QUERY = `query ($id: SuiAddress!) {
+  object(address: $id) { asMoveObject { contents { type { repr } json } } }
+}`;
+
+/** One entry of a circle's members table (a `Table<address, _>`), keyed by the
+ *  BCS of the member's address. */
+const MEMBER_ENTRY_QUERY = `query ($table: SuiAddress!, $name: Base64!) {
+  object(address: $table) { dynamicField(name: { type: "address", bcs: $name }) { name { json } } }
+}`;
+
+const BASE64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+
+interface GraphqlCircle {
+  admin: string;
+  membersTableId: string;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** The BCS of a Sui address (its 32 bytes, no length prefix) in base64, as a
+ *  GraphQL `DynamicFieldName` of type `address` carries it. Throws on a value
+ *  that is not a Sui address. */
+function addressBcsBase64(address: string): string {
+  if (!/^0x[0-9a-fA-F]{1,64}$/.test(address)) {
+    throw new Error(`${address} is not a Sui address`);
+  }
+  const hex = address.slice(2).padStart(64, '0');
+  const byteAt = (index: number) => parseInt(hex.slice(index * 2, index * 2 + 2), 16);
+  let encoded = '';
+  for (let i = 0; i < 32; i += 3) {
+    const rest = 32 - i;
+    const chunk = (byteAt(i) << 16) | (rest > 1 ? byteAt(i + 1) << 8 : 0) | (rest > 2 ? byteAt(i + 2) : 0);
+    encoded += BASE64_ALPHABET.charAt((chunk >> 18) & 63) + BASE64_ALPHABET.charAt((chunk >> 12) & 63);
+    encoded += rest > 1 ? BASE64_ALPHABET.charAt((chunk >> 6) & 63) : '=';
+    encoded += rest > 2 ? BASE64_ALPHABET.charAt(chunk & 63) : '=';
+  }
+  return encoded;
+}
+
+/** The `data` of one Sui GraphQL answer. Throws on a non-2xx status, an
+ *  `errors` body or a body without a `data` object, so a failed read is never
+ *  taken for an answer. */
+async function postGraphql(
+  url: string,
+  query: string,
+  variables: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), GRAPHQL_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ query, variables }),
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw new Error(`GraphQL ${url} answered ${response.status}`);
+    }
+    const body = (await response.json()) as { data?: unknown; errors?: unknown } | null;
+    const errors = body?.errors;
+    if (errors !== undefined && errors !== null && !(Array.isArray(errors) && errors.length === 0)) {
+      const reason = Array.isArray(errors) ? (errors[0] as { message?: unknown } | null)?.message : undefined;
+      throw new Error(`GraphQL ${url} returned errors${typeof reason === 'string' ? `: ${reason}` : ''}`);
+    }
+    const data = body?.data;
+    if (!isRecord(data)) {
+      throw new Error(`GraphQL ${url} answered without data`);
+    }
+    return data;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** `circleId`'s admin and members table id from Sui GraphQL, or 'gone' when
+ *  GraphQL confirms there is no such object (`object: null`). Throws on any
+ *  other answer it cannot read (no Move contents, no admin, no table id). */
+async function readCircleViaGraphql(url: string, circleId: string): Promise<GraphqlCircle | 'gone'> {
+  const data = await postGraphql(url, CIRCLE_QUERY, { id: circleId });
+  const object = data.object;
+  if (object === null) return 'gone';
+  const asMoveObject = isRecord(object) ? object.asMoveObject : undefined;
+  const contents = isRecord(asMoveObject) ? asMoveObject.contents : undefined;
+  const json = isRecord(contents) ? contents.json : undefined;
+  if (!isRecord(json)) {
+    throw new Error(`GraphQL ${url} returned circle ${circleId} without readable Move contents`);
+  }
+  const admin = json.admin;
+  const members = json.members;
+  const membersTableId = isRecord(members) ? members.id : undefined;
+  if (typeof admin !== 'string' || typeof membersTableId !== 'string' || membersTableId === '') {
+    throw new Error(`GraphQL ${url} returned circle ${circleId} without a readable admin and members table id`);
+  }
+  return { admin, membersTableId };
+}
+
+/** Whether the members table `membersTableId` holds `userAddress`, from Sui
+ *  GraphQL. False only when the table is read and the entry is confirmed absent
+ *  (`dynamicField: null`); throws on a missing table or any other shape. */
+async function readMemberViaGraphql(url: string, membersTableId: string, userAddress: string): Promise<boolean> {
+  const data = await postGraphql(url, MEMBER_ENTRY_QUERY, {
+    table: membersTableId,
+    name: addressBcsBase64(userAddress),
+  });
+  const table = data.object;
+  if (!isRecord(table)) {
+    throw new Error(`GraphQL ${url} returned no members table ${membersTableId}`);
+  }
+  const entry = table.dynamicField;
+  if (entry === null) return false;
+  if (isRecord(entry)) return true;
+  throw new Error(`GraphQL ${url} returned no readable entry for ${userAddress} in members table ${membersTableId}`);
+}
+
+/** isCurrentMemberOrAdmin over Sui GraphQL. Throws whenever it cannot reach a
+ *  confirmed answer, so the caller falls back to JSON-RPC. */
+async function isCurrentMemberOrAdminViaGraphql(
+  network: NetworkType,
+  circleId: string,
+  userAddress: string,
+): Promise<boolean> {
+  const url = getGraphqlUrlForNetwork(network);
+  if (!url) {
+    throw new Error(`no GraphQL URL for ${network}`);
+  }
+  const circle = await readCircleViaGraphql(url, circleId);
+  if (circle === 'gone') return false;
+  if (circle.admin === userAddress) return true;
+  return readMemberViaGraphql(url, circle.membersTableId, userAddress);
+}
+
 /**
  * Whether `userAddress` is CURRENTLY the admin or a member of `circleId`, read
  * live from the circle and its members table: the verification step a receipt
  * needs. Null when the chain could not be read. An RPC outage is not "not a
  * member", and treating it as one hid the user's circles on a bad RPC day.
+ *
+ * Sui GraphQL is asked first: it still answers when every JSON-RPC endpoint
+ * refuses JSON-RPC (NJA-2830). `client` over JSON-RPC is the fallback, so a
+ * failed or partial GraphQL read is never "not a member"; the answer is null
+ * only when neither source gives a confirmed one. `opts.network` is the
+ * network `client` reads (default: the current network).
  */
 export async function isCurrentMemberOrAdmin(
   client: SuiClient,
   circleId: string,
   userAddress: string,
+  opts: { network?: NetworkType } = {},
 ): Promise<boolean | null> {
+  try {
+    return await isCurrentMemberOrAdminViaGraphql(opts.network ?? getCurrentNetwork(), circleId, userAddress);
+  } catch (error) {
+    console.warn(
+      `[membership-discovery] GraphQL could not verify circle ${circleId}, trying JSON-RPC: ${describeError(error)}`,
+    );
+  }
+
   let circle;
   try {
     circle = await client.getObject({ id: circleId, options: { showContent: true } });
