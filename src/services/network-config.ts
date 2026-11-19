@@ -4,6 +4,7 @@ import {
   type NetworkType,
 } from '@/config/public-env';
 import { SUI_COIN_TYPE, usdcCoinTypeForNetwork } from '@/config/coin-types';
+import { isNetworkSwitchEnabled } from '@/config/feature-flags';
 
 export type { NetworkType } from '@/config/public-env';
 
@@ -148,10 +149,16 @@ function buildNetworkConfig(network: NetworkType): NetworkConfig {
 // Network state management - initialize from environment variable
 let currentNetwork: NetworkType = getConfiguredNetworkFromEnv();
 
-// Function to get current network
+// Function to get current network.
+//
+// NEXT_PUBLIC_SUI_NETWORK (above) is the network unless the Testnet/Mainnet
+// switch is enabled (isNetworkSwitchEnabled, default OFF). Only then may a
+// choice stored in localStorage override it, so a 'sui-network' key left by
+// an earlier switch cannot quietly move a mainnet deployment onto testnet.
+// With the switch off that key is ignored, not deleted.
 export function getCurrentNetwork(): NetworkType {
-  if (typeof window !== 'undefined') {
-    // Client-side: get from localStorage
+  if (typeof window !== 'undefined' && isNetworkSwitchEnabled()) {
+    // Client-side, switch enabled: get from localStorage
     const saved = localStorage.getItem('sui-network');
     if (saved === 'testnet' || saved === 'mainnet') {
       currentNetwork = saved;
@@ -160,8 +167,21 @@ export function getCurrentNetwork(): NetworkType {
   return currentNetwork;
 }
 
-// Function to set current network
+// Function to set current network. With the switch off it neither moves
+// off the configured network nor stores a choice, and it does not throw:
+// callers run it from mount effects.
 export function setCurrentNetwork(network: NetworkType): void {
+  if (!isNetworkSwitchEnabled()) {
+    if (network !== currentNetwork) {
+      console.warn(
+        '🌍 NetworkConfig: network switch is disabled (NEXT_PUBLIC_NETWORK_SWITCH_ENABLED); staying on',
+        currentNetwork,
+        'instead of',
+        network
+      );
+    }
+    return;
+  }
   console.log('🌍 NetworkConfig: Setting network to:', network);
   currentNetwork = network;
   if (typeof window !== 'undefined') {
@@ -282,6 +302,13 @@ export function validateNetworkConfig(network: NetworkType): { isValid: boolean;
 
 // Network switching utility
 export function switchNetwork(newNetwork: NetworkType): void {
+  // Switch off (the default): a no-op. Return before validating and,
+  // above all, before clearing the session below — a switch that cannot
+  // happen must not sign the member out.
+  if (!isNetworkSwitchEnabled()) {
+    console.warn('🌍 NetworkConfig: network switch is disabled; ignoring switch to', newNetwork);
+    return;
+  }
   // Validate configuration before switching
   const validation = validateNetworkConfig(newNetwork);
   if (!validation.isValid) {

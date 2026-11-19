@@ -28,7 +28,7 @@ import { isGoneObjectResponse } from '@/lib/sui-read';
 import { readObjects } from '@/lib/sui-read';
 import { cetusService } from '@/lib/cetus-service';
 import { ZkLoginClient } from '@/services/zkLoginClient';
-import { isSwapsEnabled } from '@/config/feature-flags';
+import { isNetworkSwitchEnabled, isSwapsEnabled } from '@/config/feature-flags';
 import { getCircleConfigFieldsByObjectId, getCircleConfigObjectId } from '@/lib/circle-config';
 import { clearWalletBalanceCache, refreshWalletBalances } from '@/lib/wallet';
 import {
@@ -1956,7 +1956,10 @@ export default function Dashboard() {
       const savedNetwork = localStorage.getItem('sui-network') as 'testnet' | 'mainnet' | null;
       console.log('🌍 Dashboard: Initializing network configuration...', { savedNetwork, currentNetwork: network });
       
-      if (savedNetwork && savedNetwork !== network) {
+      // A stored choice applies only while the Testnet/Mainnet switch is on;
+      // with it off (the default) the deployment's NEXT_PUBLIC_SUI_NETWORK is
+      // the only network, so the saved value is ignored.
+      if (isNetworkSwitchEnabled() && savedNetwork && savedNetwork !== network) {
         // Update centralized network configuration
         console.log('🌍 Dashboard: Setting network from localStorage:', savedNetwork);
         setCurrentNetwork(savedNetwork);
@@ -6639,6 +6642,7 @@ export default function Dashboard() {
                         />
                         {networkLabel}
                       </div>
+                      {isNetworkSwitchEnabled() && (
                       <div className="inline-flex rounded-full border border-stone-200 bg-stone-100 p-1">
                         <button
                           type="button"
@@ -6663,6 +6667,7 @@ export default function Dashboard() {
                           Mainnet
                         </button>
                       </div>
+                      )}
                     </div>
                   </div>
 

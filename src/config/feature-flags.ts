@@ -196,6 +196,21 @@ export function isGoalPoolsEnabled(): boolean {
   return flagEnabled(process.env.NEXT_PUBLIC_GOAL_POOLS_ENABLED);
 }
 
+/**
+ * The Testnet/Mainnet switch: the landing header and dashboard toggles,
+ * and `setCurrentNetwork` / `switchNetwork` in src/services/network-config.ts.
+ *
+ * Default OFF. Unset or malformed (e.g. "yes", "1", "on") means the
+ * deployment's NEXT_PUBLIC_SUI_NETWORK is the only network in use: the
+ * switch is not offered, and a 'sui-network' choice left in localStorage
+ * is ignored instead of picking the RPC URL, package id and Enoki network.
+ * Enforced in network-config, which every one of those reads goes through;
+ * hiding the toggles is ergonomics only.
+ */
+export function isNetworkSwitchEnabled(): boolean {
+  return flagEnabled(process.env.NEXT_PUBLIC_NETWORK_SWITCH_ENABLED);
+}
+
 export function isRampEnabled(provider: 'coinbase' | 'moonpay' | 'transak'): boolean {
   switch (provider) {
     case 'coinbase':

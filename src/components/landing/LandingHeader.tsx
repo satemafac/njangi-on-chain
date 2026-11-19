@@ -10,14 +10,21 @@ type Props = {
   onSwitchNetwork: (network: Network) => void;
   onLogin: () => void;
   t: (key: string, vars?: Record<string, string | number>) => string;
+  /**
+   * Offer the Testnet/Mainnet switch (pass isNetworkSwitchEnabled()).
+   * Hidden unless true, matching that default-off flag: with it off the
+   * deployment's NEXT_PUBLIC_SUI_NETWORK is the only network in use.
+   */
+  networkSwitchEnabled?: boolean;
 };
 
 /**
  * The landing's header: the shared Apple bar (SiteHeader) plus the two
  * controls only the home page carries — language and the Testnet/Mainnet
- * switch — inline on desktop and as rows in the mobile sheet.
+ * switch — inline on desktop and as rows in the mobile sheet. The switch
+ * appears only when `networkSwitchEnabled` is true.
  */
-export default function LandingHeader({ signedIn, network, onSwitchNetwork, onLogin, t }: Props) {
+export default function LandingHeader({ signedIn, network, onSwitchNetwork, onLogin, t, networkSwitchEnabled = false }: Props) {
   const networkName = network === 'testnet' ? t('nav.testnet') : t('nav.mainnet');
 
   const networkControl = (size: 'sm' | 'lg', beforeSwitch?: () => void) => (
@@ -68,7 +75,7 @@ export default function LandingHeader({ signedIn, network, onSwitchNetwork, onLo
       controls={
         <>
           <LocaleSwitcher compact variant="glass" />
-          {networkControl('sm')}
+          {networkSwitchEnabled && networkControl('sm')}
         </>
       }
       sheetExtras={(close) => (
@@ -77,12 +84,14 @@ export default function LandingHeader({ signedIn, network, onSwitchNetwork, onLo
             <span className="text-[13px] text-mist-3">Language</span>
             <LocaleSwitcher compact variant="glass" />
           </div>
+          {networkSwitchEnabled && (
           <div className="space-y-3">
             <span className="block text-[13px] text-mist-3">
               {t('nav.viewing', { network: networkName })}
             </span>
             {networkControl('lg', close)}
           </div>
+          )}
         </>
       )}
     />

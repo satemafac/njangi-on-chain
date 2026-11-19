@@ -20,6 +20,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { LoginButton } from '../components/LoginButton';
 import { useTranslation } from '../hooks/useTranslation';
 import { getNetworkConfig, setCurrentNetwork } from '../services/network-config';
+import { isNetworkSwitchEnabled } from '../config/feature-flags';
 import { SUPPORT_MAILTO } from '../lib/constants';
 import {
   clearPostLoginDestination,
@@ -262,12 +263,22 @@ export default function Home() {
   };
 
   const switchNetwork = useCallback((newNetwork: 'testnet' | 'mainnet') => {
+    // Testnet/Mainnet switch off (the default): the deployment's
+    // NEXT_PUBLIC_SUI_NETWORK is the only network, so never offer a switch.
+    if (!isNetworkSwitchEnabled()) return;
     setPendingNetwork(newNetwork);
     setIsNetworkSwitchModalOpen(true);
   }, []);
 
   const confirmNetworkSwitch = useCallback(() => {
     if (!pendingNetwork) return;
+    if (!isNetworkSwitchEnabled()) {
+      // Never store a choice the config ignores, and never sign the member
+      // out for a switch that cannot happen.
+      setIsNetworkSwitchModalOpen(false);
+      setPendingNetwork(null);
+      return;
+    }
 
     const config = NETWORK_CONFIG[pendingNetwork];
 
@@ -378,7 +389,10 @@ export default function Home() {
         | 'mainnet'
         | null;
 
-      if (savedNetwork && savedNetwork !== network && NETWORK_CONFIG[savedNetwork]) {
+      // A stored choice applies only while the Testnet/Mainnet switch is on;
+      // with it off (the default) the saved value is ignored and the
+      // deployment's NEXT_PUBLIC_SUI_NETWORK stays the network.
+      if (isNetworkSwitchEnabled() && savedNetwork && savedNetwork !== network && NETWORK_CONFIG[savedNetwork]) {
         const config = NETWORK_CONFIG[savedNetwork];
         setNetwork(savedNetwork);
         setCurrentNetwork(savedNetwork);
@@ -658,6 +672,7 @@ export default function Home() {
             signedIn={!!account}
             network={network}
             onSwitchNetwork={switchNetwork}
+            networkSwitchEnabled={isNetworkSwitchEnabled()}
             onLogin={() => openSignIn('login')}
             t={t}
           />
