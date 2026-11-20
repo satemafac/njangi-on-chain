@@ -68,7 +68,7 @@ import type { NetworkType } from '@/services/whatsapp-registry-service';
 import {
   findFreshestAttestation,
   isComplianceGateEnabled,
-  resolveComplianceConfigId,
+  requireComplianceConfigId,
 } from '@/lib/compliance-gate';
 import {
   isEscrowRoundGuardEnabled,
@@ -731,14 +731,12 @@ export function CycleEscrowPanel({
     // with an unfriendly "Incorrect number of arguments".
     let complianceConfigId: string | undefined;
     if (gated) {
-      complianceConfigId =
-        (await resolveComplianceConfigId(network).catch(() => null)) ?? undefined;
-      if (!complianceConfigId) {
-        toast.error(
-          'Verification is required in your region but is not configured yet. Please contact support.',
-        );
+      const config = await requireComplianceConfigId(network);
+      if ('error' in config) {
+        toast.error(config.error);
         return;
       }
+      complianceConfigId = config.id;
     }
     // The awaits above yielded; another control may have taken the lock.
     if (isOpenRoundLocked(openLockRef.current)) return;
@@ -925,14 +923,12 @@ export function CycleEscrowPanel({
       // the dormant bug that silently broke every gated contribution
       // until 2026-08-23. Resolve it up front and refuse with a readable
       // message rather than aborting on-chain.
-      const complianceConfigId =
-        (await resolveComplianceConfigId(network).catch(() => null)) ?? undefined;
-      if (!complianceConfigId) {
-        toast.error(
-          'Verification is required in your region but is not configured yet. Please contact support.',
-        );
+      const config = await requireComplianceConfigId(network);
+      if ('error' in config) {
+        toast.error(config.error);
         return;
       }
+      const complianceConfigId = config.id;
       const timedTarget = isTimedEscrowEntriesEnabled()
         ? 'contribute_timed_with_attestation'
         : 'contribute_with_attestation';
@@ -1042,14 +1038,12 @@ export function CycleEscrowPanel({
     // readably instead of aborting on-chain.
     let collectConfigId: string | undefined;
     if (attestationId) {
-      collectConfigId =
-        (await resolveComplianceConfigId(network).catch(() => null)) ?? undefined;
-      if (!collectConfigId) {
-        toast.error(
-          'Verification is required in your region but is not configured yet. Please contact support.',
-        );
+      const config = await requireComplianceConfigId(network);
+      if ('error' in config) {
+        toast.error(config.error);
         return;
       }
+      collectConfigId = config.id;
     }
 
     const build = attestationId

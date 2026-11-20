@@ -15,6 +15,7 @@
     "generate:secrets": "node scripts/generate-secrets.mjs",
     "bootstrap:package": "node scripts/bootstrap-package.mjs",
     "v11:convert": "node scripts/v11-convert-circles.mjs",
+    "registry:setup": "node scripts/registry-setup.mjs",
     "smoke:testnet": "node scripts/smoke-testnet.mjs",
     "notifier:cycle-finalized": "node scripts/cycle-finalized-notifier.mjs",
     "check:copy": "node scripts/check-marketing-copy.mjs",

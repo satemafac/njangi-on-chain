@@ -187,9 +187,10 @@ export function AddressDriftGate({ active }: AddressDriftGateProps) {
         });
       } catch {
         // Network hiccup: fail open for this read. The server-side gates on
-        // circle create/join, ramp sessions and WhatsApp linking still
-        // refuse the actual commitments, so a missed interstitial degrades
-        // the warning, not the protection.
+        // circle join requests, ramp sessions and WhatsApp linking still
+        // refuse those commitments. Circle creation and contributions have
+        // no server gate, so for them a missed interstitial is a missed
+        // warning.
       }
     })();
     return () => {

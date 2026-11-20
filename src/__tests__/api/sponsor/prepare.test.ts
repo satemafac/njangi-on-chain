@@ -20,6 +20,7 @@ import { getZkLoginSessionAccount } from '@/lib/zklogin-session-registry';
 import { resolveEscrowSponsorship } from '@/lib/gas-sponsorship-eligibility';
 import { reservePendingSponsorship } from '@/lib/gas-sponsorship';
 import { isPostgresConfigured } from '@/lib/pg-pool';
+import { screenAddress } from '@/lib/sanctions';
 
 const PKG = '0x' + '11'.repeat(32);
 const CIRCLE_ID = '0x' + 'ce'.repeat(32);
@@ -48,6 +49,18 @@ jest.mock('@/services/network-config', () => ({
     enoki: { apiKey: 'enoki_test_key' },
   })),
 }));
+// The wallet screen reads Postgres. These cases are about sponsorship policy,
+// so every wallet passes the screen. prepare-screening.test.ts covers the
+// refusals.
+jest.mock('@/lib/sanctions', () => ({
+  screenAddress: jest.fn(),
+  sanctionsErrorBody: jest.fn(() => ({
+    success: false,
+    error: 'SANCTIONS_BLOCKED',
+    code: 'SANCTIONS_BLOCKED',
+    message: 'blocked',
+  })),
+}));
 
 const createSponsoredTransaction = jest.fn();
 jest.mock('@mysten/enoki', () => ({
@@ -68,6 +81,7 @@ const mockedReserve = reservePendingSponsorship as jest.MockedFunction<
 const mockedPgConfigured = isPostgresConfigured as jest.MockedFunction<
   typeof isPostgresConfigured
 >;
+const mockedScreen = screenAddress as jest.MockedFunction<typeof screenAddress>;
 
 /** A deposit kind that genuinely touches the circle object, as the real one does. */
 async function depositKindBytes(circleId: string): Promise<string> {
@@ -105,8 +119,15 @@ function createRes(): MockRes {
   return res as unknown as MockRes;
 }
 
+// A request as Vercel delivers it, from an allowed country. Prepare refuses
+// to sponsor for a region it cannot read.
 const createReq = (body: unknown): NextApiRequest =>
-  ({ method: 'POST', body, cookies: { 'session-id': 'sess' } }) as unknown as NextApiRequest;
+  ({
+    method: 'POST',
+    headers: { 'x-vercel-ip-country': 'US' },
+    body,
+    cookies: { 'session-id': 'sess' },
+  }) as unknown as NextApiRequest;
 
 describe('/api/sponsor/prepare', () => {
   beforeEach(() => {
@@ -120,6 +141,7 @@ describe('/api/sponsor/prepare', () => {
       reason: 'eligible',
       circleId: CIRCLE_ID,
     } as never);
+    mockedScreen.mockResolvedValue({ blocked: false, listVersion: 'test-list' });
   });
 
   it('sponsors a security deposit, resolving by circle id rather than escrow id', async () => {

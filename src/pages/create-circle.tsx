@@ -39,7 +39,7 @@ import {
   preflightSanctionsCheck,
   SANCTIONS_BLOCKED_MESSAGE,
 } from '../lib/sanctions-preflight';
-import { resolveComplianceConfigId, isComplianceGateEnabled } from '../lib/compliance-gate';
+import { requireComplianceConfigId, isComplianceGateEnabled } from '../lib/compliance-gate';
 import GoalPotProgress from '../components/goals/GoalPotProgress';
 import { goalDisplayFont } from '../lib/fonts';
 import { useZkLoginSigner } from '../hooks/useZkLoginSigner';
@@ -68,6 +68,7 @@ import { trackFunnel } from '../lib/funnel-events';
 import { refreshSuiBalance } from '../lib/wallet';
 import {
   canPickSui,
+  createCircleCoinsForNetwork,
   DEFAULT_CREATE_CIRCLE_COIN,
   formatCreateCoinAmount,
   settlementAssetForCreate,
@@ -603,7 +604,10 @@ export default function CreateCircle() {
   };
 
   // The coin the organizer picked, pinned when the circle is created.
-  const circleCoin = settlementAssetForCreate(formData.settlementAsset);
+  // The coins on offer are a launch decision per network (USDC only on
+  // mainnet); a draft that names a coin this network lacks settles in USDC.
+  const coinChoices = createCircleCoinsForNetwork(getCurrentNetwork());
+  const circleCoin = settlementAssetForCreate(formData.settlementAsset, getCurrentNetwork());
 
   // How old a usable-but-not-live quote is, so a SUI circle's organizer sees
   // that "today's price" is the last one seen; null while the quote is live.
@@ -948,14 +952,12 @@ export default function CreateCircle() {
     const gated = isComplianceGateEnabled();
     let complianceConfigId: string | undefined;
     if (gated) {
-      complianceConfigId =
-        (await resolveComplianceConfigId(network).catch(() => null)) ?? undefined;
-      if (!complianceConfigId) {
-        setError(
-          'Verification is required in your region but is not configured yet. Please contact support.',
-        );
+      const config = await requireComplianceConfigId(network);
+      if ('error' in config) {
+        setError(config.error);
         return;
       }
+      complianceConfigId = config.id;
     }
 
     try {
@@ -1987,8 +1989,15 @@ The Njangi On-Chain Team`;
                     stays the default: the quick path needs no extra click. */}
                 <div className="space-y-2">
                   <span className="block text-sm font-medium text-gray-700">{t('create.coinLabel')}</span>
+                  {coinChoices.length === 1 ? (
+                    // One coin on this network: nothing to choose, so no radio
+                    // group; the coin is stated and the hints below still apply.
+                    <div className="inline-flex rounded-xl border border-[#1d2533] bg-[#1d2533] px-3 py-2.5 text-sm font-medium text-white" data-testid="create-coin-only">
+                      {coinChoices[0]}
+                    </div>
+                  ) : (
                   <div role="radiogroup" aria-label={t('create.coinLabel')} className="grid grid-cols-2 gap-2">
-                    {(['USDC', 'SUI'] as const).map((coin) => {
+                    {coinChoices.map((coin) => {
                       const selected = circleCoin === coin;
                       const unavailable = coin === 'SUI' && !canPickSui(isPriceAvailable);
                       return (
@@ -2011,6 +2020,7 @@ The Njangi On-Chain Team`;
                       );
                     })}
                   </div>
+                  )}
                   <p className="text-xs text-gray-500">
                     {circleCoin === 'SUI'
                       ? // Without a usable quote there is no "today's price" to

@@ -394,8 +394,12 @@ export async function countRecentDriftEvents(windowMs = 3_600_000): Promise<numb
 }
 
 /**
- * Thrown by commitment surfaces (circle create/join, contribute, ramp
- * session, WhatsApp link) when the signed-in identity has drifted.
+ * Meant for commitment surfaces when the signed-in identity has drifted.
+ * Only assertNoAddressDrift throws it, and nothing calls that today: the
+ * gated routes (circle join requests, ramp sessions, WhatsApp link) read
+ * getDriftStatusFor* and answer with addressDriftErrorBody directly. Circle
+ * creation and contributions are signed in the browser and have no server
+ * gate.
  *
  * NOT thrown on login, claim, refund, recovery or withdrawal. That split —
  * fail-closed on new commitments, fail-open on fund access — is copied
