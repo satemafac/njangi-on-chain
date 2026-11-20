@@ -83,7 +83,10 @@ describe('legal-acceptance-server (in-memory dev store)', () => {
   it('re-triggers for exactly the bumped doc on a version bump, preserving old rows', async () => {
     await recordLegalAcceptances(IDENTITY, [...LEGAL_DOC_IDS], 'en', null);
 
-    const bumped = { ...CURRENT_LEGAL_VERSIONS, terms: '1.1.0' };
+    // A hypothetical next version that can never be a real one, so this test
+    // keeps exercising a bump whatever CURRENT_LEGAL_VERSIONS.terms becomes.
+    const NEXT_TERMS = '99.0.0';
+    const bumped = { ...CURRENT_LEGAL_VERSIONS, terms: NEXT_TERMS };
     const status = await getLegalAcceptanceStatus(IDENTITY.sub, IDENTITY.aud, bumped);
 
     expect(status.allAccepted).toBe(false);
@@ -91,8 +94,8 @@ describe('legal-acceptance-server (in-memory dev store)', () => {
     // Old acceptance rows are preserved as evidence (append-only).
     expect(status.required.find((r) => r.doc === 'terms')).toEqual({
       doc: 'terms',
-      currentVersion: '1.1.0',
-      acceptedVersion: '1.0.0',
+      currentVersion: NEXT_TERMS,
+      acceptedVersion: CURRENT_LEGAL_VERSIONS.terms,
     });
     expect(status.required.find((r) => r.doc === 'privacy')?.acceptedVersion).toBe(
       CURRENT_LEGAL_VERSIONS.privacy,
@@ -103,7 +106,7 @@ describe('legal-acceptance-server (in-memory dev store)', () => {
     await recordLegalAcceptances(IDENTITY, ['terms'], 'fr', null, bumped);
     const after = await getLegalAcceptanceStatus(IDENTITY.sub, IDENTITY.aud, bumped);
     expect(after.allAccepted).toBe(true);
-    expect(after.required.find((r) => r.doc === 'terms')?.acceptedVersion).toBe('1.1.0');
+    expect(after.required.find((r) => r.doc === 'terms')?.acceptedVersion).toBe(NEXT_TERMS);
     // The original version map is still satisfied by the old rows.
     const original = await getLegalAcceptanceStatus(IDENTITY.sub, IDENTITY.aud);
     expect(original.allAccepted).toBe(true);
