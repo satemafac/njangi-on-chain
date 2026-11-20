@@ -60,6 +60,7 @@ import {
 } from '../services/circle-service';
 // Use alias path for the modal import
 import ConfirmationModal from '@/components/ConfirmationModal';
+import { isNetworkSwitchEnabled } from '@/config/feature-flags';
 import { useTranslation } from '@/hooks/useTranslation';
 import { 
   getCurrentNetwork, 
@@ -1953,7 +1954,13 @@ export default function Dashboard() {
   // Initialize network preference from localStorage
   useEffect(() => {
     if (typeof window !== 'undefined') {
-      const savedNetwork = localStorage.getItem('sui-network') as 'testnet' | 'mainnet' | null;
+      // The stored choice counts only while NEXT_PUBLIC_NETWORK_SWITCH_ENABLED
+      // is on. While it is off the deployment's NEXT_PUBLIC_SUI_NETWORK is the
+      // only network (product rule); the key is left in place, and the default
+      // branch below follows the configured network.
+      const savedNetwork = isNetworkSwitchEnabled()
+        ? (localStorage.getItem('sui-network') as 'testnet' | 'mainnet' | null)
+        : null;
       console.log('🌍 Dashboard: Initializing network configuration...', { savedNetwork, currentNetwork: network });
       
       if (savedNetwork && savedNetwork !== network) {
@@ -2001,6 +2008,7 @@ export default function Dashboard() {
         
         // Ensure local state matches centralized config
         const currentConfig = getCurrentNetworkConfig();
+        setNetwork(getCurrentNetwork());
         setRpcUrl(currentConfig.rpcUrl);
         setPackageId(currentConfig.packageId);
         setShowTestnetBanner(getCurrentNetwork() === 'testnet');
@@ -4210,6 +4218,12 @@ export default function Dashboard() {
 
   // Network switching function
   const switchNetwork = useCallback((newNetwork: 'testnet' | 'mainnet') => {
+    // Not offered while NEXT_PUBLIC_NETWORK_SWITCH_ENABLED is off. Refuse
+    // before the confirmation, so nothing is cleared and no reload happens.
+    if (!isNetworkSwitchEnabled()) {
+      console.warn(`Network switch to ${newNetwork} refused: NEXT_PUBLIC_NETWORK_SWITCH_ENABLED is off.`);
+      return;
+    }
     const networkName = newNetwork === 'testnet' ? 'Testnet' : 'Mainnet';
     
     // Show confirmation modal for network switch
@@ -6639,30 +6653,33 @@ export default function Dashboard() {
                         />
                         {networkLabel}
                       </div>
-                      <div className="inline-flex rounded-full border border-stone-200 bg-stone-100 p-1">
-                        <button
-                          type="button"
-                          onClick={() => switchNetwork('testnet')}
-                          className={`rounded-full px-4 py-2 text-sm font-medium transition ${
-                            network === 'testnet'
-                              ? 'bg-white text-slate-950 shadow-sm'
-                              : 'text-slate-500 hover:text-slate-900'
-                          }`}
-                        >
-                          Testnet
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => switchNetwork('mainnet')}
-                          className={`rounded-full px-4 py-2 text-sm font-medium transition ${
-                            network === 'mainnet'
-                              ? 'bg-white text-slate-950 shadow-sm'
-                              : 'text-slate-500 hover:text-slate-900'
-                          }`}
-                        >
-                          Mainnet
-                        </button>
-                      </div>
+                      {/* Offered only while NEXT_PUBLIC_NETWORK_SWITCH_ENABLED is on. */}
+                      {isNetworkSwitchEnabled() && (
+                        <div className="inline-flex rounded-full border border-stone-200 bg-stone-100 p-1">
+                          <button
+                            type="button"
+                            onClick={() => switchNetwork('testnet')}
+                            className={`rounded-full px-4 py-2 text-sm font-medium transition ${
+                              network === 'testnet'
+                                ? 'bg-white text-slate-950 shadow-sm'
+                                : 'text-slate-500 hover:text-slate-900'
+                            }`}
+                          >
+                            Testnet
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => switchNetwork('mainnet')}
+                            className={`rounded-full px-4 py-2 text-sm font-medium transition ${
+                              network === 'mainnet'
+                                ? 'bg-white text-slate-950 shadow-sm'
+                                : 'text-slate-500 hover:text-slate-900'
+                            }`}
+                          >
+                            Mainnet
+                          </button>
+                        </div>
+                      )}
                     </div>
                   </div>
 

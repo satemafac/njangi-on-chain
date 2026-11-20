@@ -1,3 +1,4 @@
+import { isNetworkSwitchEnabled } from '../../config/feature-flags';
 import { LocaleSwitcher } from '../ui/LocaleSwitcher';
 import SiteHeader from './SiteHeader';
 import { focusRing } from './ui';
@@ -16,9 +17,14 @@ type Props = {
  * The landing's header: the shared Apple bar (SiteHeader) plus the two
  * controls only the home page carries — language and the Testnet/Mainnet
  * switch — inline on desktop and as rows in the mobile sheet.
+ *
+ * The Testnet/Mainnet switch is offered only while
+ * NEXT_PUBLIC_NETWORK_SWITCH_ENABLED is on. While it is off the deployment's
+ * NEXT_PUBLIC_SUI_NETWORK is the only network, so neither row renders.
  */
 export default function LandingHeader({ signedIn, network, onSwitchNetwork, onLogin, t }: Props) {
   const networkName = network === 'testnet' ? t('nav.testnet') : t('nav.mainnet');
+  const showNetworkSwitch = isNetworkSwitchEnabled();
 
   const networkControl = (size: 'sm' | 'lg', beforeSwitch?: () => void) => (
     <div
@@ -68,7 +74,7 @@ export default function LandingHeader({ signedIn, network, onSwitchNetwork, onLo
       controls={
         <>
           <LocaleSwitcher compact variant="glass" />
-          {networkControl('sm')}
+          {showNetworkSwitch && networkControl('sm')}
         </>
       }
       sheetExtras={(close) => (
@@ -77,12 +83,14 @@ export default function LandingHeader({ signedIn, network, onSwitchNetwork, onLo
             <span className="text-[13px] text-mist-3">Language</span>
             <LocaleSwitcher compact variant="glass" />
           </div>
-          <div className="space-y-3">
-            <span className="block text-[13px] text-mist-3">
-              {t('nav.viewing', { network: networkName })}
-            </span>
-            {networkControl('lg', close)}
-          </div>
+          {showNetworkSwitch && (
+            <div className="space-y-3">
+              <span className="block text-[13px] text-mist-3">
+                {t('nav.viewing', { network: networkName })}
+              </span>
+              {networkControl('lg', close)}
+            </div>
+          )}
         </>
       )}
     />
