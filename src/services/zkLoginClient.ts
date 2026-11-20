@@ -30,7 +30,7 @@ import {
   type CreateCircleTransactionData,
 } from '@/lib/zklogin-tx-builders';
 import { getCircleTransactionPackageId } from './circle-service';
-import { getSigningSuiClient } from './sui-rpc-failover';
+import { getSigningSuiClient } from '@/lib/signing-sui-client';
 import { getCurrentNetwork, getCurrentPackageId, getNetworkConfig } from './network-config';
 import { isV11AssetTermsEnabled } from '@/config/feature-flags';
 import {

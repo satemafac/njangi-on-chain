@@ -5,7 +5,7 @@ import { LegalAcceptanceGate } from '@/components/LegalAcceptanceModal';
 import { AddressDriftGate } from '@/components/AddressDriftModal';
 import { useIdleTimer } from '@/hooks/useIdleTimer';
 import { getCurrentNetwork } from '@/services/network-config';
-import { getSigningSuiClient } from '@/services/sui-rpc-failover';
+import { getSigningSuiClient } from '@/lib/signing-sui-client';
 import { refreshAdminHeartbeatsAfterAuth } from '@/lib/admin-heartbeat-refresh';
 import { isDeleteCircleWalletFundsAbort } from '@/lib/custody-wallet-balance';
 import {

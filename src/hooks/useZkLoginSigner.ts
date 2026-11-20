@@ -10,7 +10,7 @@ import {
   type SponsoredFirstResult,
   type SponsorRequest,
 } from '@/lib/sponsored-first-signer';
-import { getSigningSuiClient } from '@/services/sui-rpc-failover';
+import { getSigningSuiClient } from '@/lib/signing-sui-client';
 
 /**
  * React hook wrapper over the framework-agnostic client-side zkLogin
