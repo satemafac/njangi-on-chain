@@ -3990,7 +3990,8 @@ export default function ContributeToCircle() {
                   {/* Add note about payment sequence */}
                   <p className="text-xs text-gray-600">
                     Note: You must pay the security deposit before you can make contributions.
-                    The deposit is refundable if you decide to leave the circle later.
+                    The deposit comes back only if the organizer removes you before the circle is running,
+                    or when the circle is stopped or recovered.
                   </p>
                 </div>
               </div>

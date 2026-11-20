@@ -1275,7 +1275,7 @@ You've been invited to join "${formData.name}", a secure savings circle powered 
 
 Circle Details:
 • Contribution: ${SUPPORTED_CURRENCIES[formData.selectedCurrency]?.symbol || formData.selectedCurrency} ${formData.contributionAmountLocal.toFixed(2)} per ${formData.cycleLength}
-• Security Deposit: ${SUPPORTED_CURRENCIES[formData.selectedCurrency]?.symbol || formData.selectedCurrency} ${formData.securityDepositLocal.toFixed(2)} (one-time, refundable)
+• Security Deposit: ${SUPPORTED_CURRENCIES[formData.selectedCurrency]?.symbol || formData.selectedCurrency} ${formData.securityDepositLocal.toFixed(2)} (one-time; it comes back only if the organizer removes you before the circle is running, or when the circle is stopped or recovered)
 • Members: ${formData.numberOfMembers} people
 • Schedule: ${formData.cycleLength} contributions
 
@@ -2271,7 +2271,10 @@ The Njangi On-Chain Team`;
                           ? 'Paid in SUI, at the amount set when the circle is created'
                           : `Fixed in ${formData.selectedCurrency} value, paid in USDC (1 USDC ≈ US$1)`}
                       </p>
-                      <p className="text-gray-300 text-xs mt-1">Refundable when leaving the circle in good standing</p>
+                      <p className="text-gray-300 text-xs mt-1">
+                        It comes back to the member who paid it only if the organizer removes them before the circle
+                        is running, or when the circle is stopped or recovered
+                      </p>
                     </InfoTooltip>
                   </div>
                   <div className="flex items-center space-x-2 flex-wrap">
