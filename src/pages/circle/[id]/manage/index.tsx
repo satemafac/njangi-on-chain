@@ -4931,27 +4931,6 @@ export default function ManageCircle() {
     }
   };
 
-  const openReturnAllDepositsModal = () => {
-    if (!circle) return;
-
-    const canReturnSecurityDeposit = !circle.isActive || circle.paused;
-    if (!canReturnSecurityDeposit) {
-      toast.error('Security deposits can only be returned when the circle is inactive or paused after a cycle.');
-      return;
-    }
-
-    const eligibleAddresses = paidDepositMembers.map(member => member.address);
-
-    if (eligibleAddresses.length === 0) {
-      toast.error('No paid security deposits are available to return.');
-      return;
-    }
-
-    setPaidOutInCurrentSessionMembers(new Set());
-    setSelectedMembersForPayout(new Set(eligibleAddresses));
-    setShowPayoutDepositModal(true);
-  };
-
   // Function to handle security deposit returns for multiple members
   const handleSecurityDepositPayout = async (memberAddresses: string[]) => {
     if (!circle || !circle.id || !account) {
@@ -5073,226 +5052,6 @@ export default function ManageCircle() {
       setIsProcessingPayout(false);
       setPayoutProgress({current: 0, total: 0});
     }
-  };
-
-  // Replace the SecurityDepositPayoutModal component with the updated version
-  const SecurityDepositPayoutModal = () => {
-    // Safely get security deposit amount
-    const securityDepositAmount = circle?.securityDeposit?.toFixed(4) || '0.0000';
-    
-    // Early return if modal should not be shown
-    if (!showPayoutDepositModal) return null;
-    
-    // Filter to only show members with paid deposits AND not paid out in current session
-    const eligibleMembers = members.filter(member => member.depositPaid && !paidOutInCurrentSessionMembers.has(member.address));
-    const alreadyPaidMembers = members.filter(member => !member.depositPaid || paidOutInCurrentSessionMembers.has(member.address));
-    
-    // Function to handle member selection
-    const handleMemberSelection = (memberAddress: string) => {
-      const newSelected = new Set(selectedMembersForPayout);
-      if (newSelected.has(memberAddress)) {
-        newSelected.delete(memberAddress);
-      } else {
-        newSelected.add(memberAddress);
-      }
-      setSelectedMembersForPayout(newSelected);
-    };
-    
-    // Function to check if button should be disabled
-    const isPayoutButtonDisabled = () => {
-      return (
-        selectedMembersForPayout.size === 0 || 
-        isProcessingPayout || 
-        (selectedMembersForPayout.size > 0 && Array.from(selectedMembersForPayout).every(addr => 
-          paidOutInCurrentSessionMembers.has(addr) || 
-          !members.find(m => m.address === addr)?.depositPaid
-        ))
-      );
-    };
-    
-    return (
-      <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 p-0 md:items-center md:p-4">
-        <div className="flex max-h-[92dvh] w-full flex-col overflow-hidden rounded-t-[28px] bg-white shadow-xl md:max-h-[90vh] md:max-w-2xl md:rounded-xl">
-          <div className="bg-blue-600 px-5 py-4 text-white md:px-6">
-            <h2 className="text-xl font-semibold">Manage Deposits</h2>
-            <p className="text-blue-100 text-sm mt-1">
-              Return paid deposits in one batch. Member removals stay in the Members table.
-            </p>
-          </div>
-          
-          <div className="flex-grow overflow-y-auto px-5 py-4 md:px-6">
-            {eligibleMembers.length === 0 ? (
-              <div className="text-center py-8">
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 mx-auto text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-                <p className="mt-4 text-gray-600">No members with paid security deposits found.</p>
-              </div>
-            ) : (
-              <div className="space-y-4">
-                <p className="text-gray-700 mb-4">
-                  Select the members whose deposits should be returned. This action cannot be undone.
-                </p>
-                
-                <div className="flex justify-between items-center mb-2">
-                  <span className="text-sm font-medium text-gray-500">
-                    {selectedMembersForPayout.size} member(s) selected
-                  </span>
-                  <div className="flex space-x-2">
-                    <button 
-                      onClick={() => setSelectedMembersForPayout(new Set())}
-                      className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 py-1 px-2 rounded transition-colors"
-                    >
-                      Clear All
-                    </button>
-                    <button 
-                      onClick={() => {
-                        const allEligibleMemberAddresses = new Set(eligibleMembers.map(member => member.address));
-                        setSelectedMembersForPayout(allEligibleMemberAddresses);
-                      }}
-                      className="text-xs bg-blue-50 hover:bg-blue-100 text-blue-600 py-1 px-2 rounded transition-colors"
-                    >
-                      Select All
-                    </button>
-                  </div>
-                </div>
-                
-                <div className="space-y-2 max-h-64 overflow-y-auto pr-2">
-                  {eligibleMembers.map(member => {
-                    const isSelected = selectedMembersForPayout.has(member.address);
-                    return (
-                      <div 
-                        key={member.address}
-                        className={`border rounded-lg p-3 cursor-pointer transition-colors ${
-                          isSelected 
-                            ? 'border-blue-500 bg-blue-50' 
-                            : 'border-gray-200 hover:border-blue-300 hover:bg-blue-50'
-                        }`}
-                        onClick={() => handleMemberSelection(member.address)}
-                      >
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center">
-                            <div className={`w-4 h-4 rounded-full flex-shrink-0 flex items-center justify-center ${
-                              isSelected 
-                                ? 'bg-blue-500 ring-2 ring-blue-300' 
-                                : 'border border-gray-300'
-                            }`}>
-                              {isSelected && (
-                                <Check className="w-3 h-3 text-white" />
-                              )}
-                            </div>
-                            <div className="ml-3">
-                              <p className="font-medium text-gray-900">{shortenAddress(member.address)}</p>
-                              <p className="text-xs text-gray-500">
-                                {circle && member.address === circle.admin ? 'Admin' : `Position: ${member.position !== undefined ? member.position + 1 : 'Not set'}`}
-                              </p>
-                            </div>
-                          </div>
-                          <div className="text-sm font-medium text-gray-900">
-                            {securityDepositAmount} SUI
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                  {/* Display members who have already been paid out or whose deposit is not marked as paid */}
-                  {alreadyPaidMembers.map(member => (
-                    <div 
-                      key={member.address}
-                      className="border rounded-lg p-3 cursor-not-allowed bg-gray-100 border-gray-200 opacity-70"
-                    >
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center">
-                          <div className={`w-4 h-4 rounded-full flex-shrink-0 flex items-center justify-center bg-green-500 ring-2 ring-green-300`}>
-                            <Check className="w-3 h-3 text-white" />
-                          </div>
-                          <div className="ml-3">
-                            <p className="font-medium text-gray-600">{shortenAddress(member.address)}</p>
-                            <p className="text-xs text-gray-400">
-                              {circle && member.address === circle.admin ? 'Admin' : `Position: ${member.position !== undefined ? member.position + 1 : 'Not set'}`}
-                            </p>
-                          </div>
-                        </div>
-                        <div className="text-sm font-medium text-green-600">
-                          {paidOutInCurrentSessionMembers.has(member.address) ? 'Returned' : 'No Deposit'}
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-                
-                {/* Progress indicator for multi-return */}
-                {isProcessingPayout && payoutProgress.total > 0 && (
-                  <div className="mt-4 border-t border-gray-200 pt-4">
-                    <div className="space-y-2">
-                      <div className="flex justify-between items-center">
-                        <span className="text-sm font-medium text-gray-700">
-                          Returning deposits: {payoutProgress.current}/{payoutProgress.total}
-                        </span>
-                        <span className="text-xs font-medium text-gray-500">
-                          {Math.round((payoutProgress.current / payoutProgress.total) * 100)}%
-                        </span>
-                      </div>
-                      <div className="w-full bg-gray-200 rounded-full h-2.5">
-                        <div 
-                          className="bg-blue-600 h-2.5 rounded-full" 
-                          style={{ 
-                            width: `${(payoutProgress.current / payoutProgress.total) * 100}%` 
-                          }}
-                        ></div>
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-          
-          <div className="flex justify-end space-x-3 border-t border-gray-200 bg-gray-50 px-5 py-4 pb-[max(1rem,env(safe-area-inset-bottom))] md:px-6">
-            <button
-              className="px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50"
-              onClick={() => {
-                setShowPayoutDepositModal(false);
-                setSelectedMembersForPayout(new Set());
-                setPaidOutInCurrentSessionMembers(new Set()); // Clear when modal is cancelled/closed
-              }}
-            >
-              Cancel
-            </button>
-            <button
-              className={`px-4 py-2 rounded-md text-white ${
-                isPayoutButtonDisabled()
-                  ? 'bg-gray-400 cursor-not-allowed' 
-                  : 'bg-blue-600 hover:bg-blue-700'
-              }`}
-              disabled={isPayoutButtonDisabled()}
-              onClick={() => {
-                const selectedAddresses = Array.from(selectedMembersForPayout).filter(
-                  addr => !(paidOutInCurrentSessionMembers.has(addr) || !members.find(m => m.address === addr)?.depositPaid)
-                );
-                if (selectedAddresses.length > 0) {
-                  handleSecurityDepositPayout(selectedAddresses);
-                }
-              }}
-            >
-              {isProcessingPayout ? (
-                <div className="flex items-center">
-                  <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                  </svg>
-                  Processing...
-                </div>
-              ) : selectedMembersForPayout.size > 1 ? (
-                `Return ${selectedMembersForPayout.size} Deposits`
-              ) : (
-                'Return Deposit'
-              )}
-            </button>
-          </div>
-        </div>
-      </div>
-    );
   };
 
   const pageSurfaceClass =
@@ -6002,15 +5761,6 @@ export default function ManageCircle() {
                           </button>
                         )}
                         <button
-                          onClick={openReturnAllDepositsModal}
-                          className={`${infoActionClass} w-full`}
-                        >
-                          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                          </svg>
-                          Manage Deposits
-                        </button>
-                        <button
                           onClick={() => void fetchCircleDetails()}
                           className={`${secondaryActionClass} w-full`}
                         >
@@ -6036,15 +5786,6 @@ export default function ManageCircle() {
                         </p>
                       </div>
                       <div className="flex flex-col gap-3 w-full sm:w-auto">
-                        <button
-                          onClick={openReturnAllDepositsModal}
-                          className={`${infoActionClass} w-full`}
-                        >
-                          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                          </svg>
-                          Manage Deposits
-                        </button>
                         <button
                           onClick={() => void fetchCircleDetails()}
                           className={`${secondaryActionClass} w-full`}
@@ -7918,7 +7659,6 @@ export default function ManageCircle() {
         cancelText="Cancel"
         confirmButtonVariant={confirmationModal.confirmButtonVariant}
       />
-      <SecurityDepositPayoutModal />
 
       {/* Premium upsell when a member-cap change exceeds the caller's plan */}
       <BillingUpsellModal
