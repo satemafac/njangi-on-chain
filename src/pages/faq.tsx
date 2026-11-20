@@ -104,7 +104,7 @@ export default function FAQPage() {
         {
           id: "identity-verification",
           question: "Why am I asked to complete identity verification before contributing?",
-          answer: "Some circles turn on an identity verification requirement — usually because the circle operates in a region where regulations require it, or because the admin wants an extra layer of trust between members. Verification is a one-time check arranged through your circle admin: once you're verified, an attestation is recorded on-chain against your account and your contributions and payouts go through normally until it expires. Njangi On-Chain never sees or stores your identity documents — checks are performed by licensed verification partners, and only the pass/fail attestation touches the blockchain. If you're seeing a verification prompt, ask your circle admin to start your verification."
+          answer: "Identity verification is off by default in Njangi On-Chain today. The app asks for it only when the operator switches on its verification gate, or when your circle's on-chain record requires it — the app gives circle admins no setting to turn it on for a circle. If you're seeing a verification prompt, your circle admin arranges your verification with the operator; there is no self-serve check yet. Once you're verified, an attestation is recorded on-chain against your account, and your contributions and payouts go through normally until it expires or is revoked. This app and the on-chain record never hold your identity documents — the attestation carries only an opaque reference."
         },
         {
           id: "network-or-app-down",
