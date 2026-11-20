@@ -440,10 +440,10 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
       'Your circles keep running and every member keeps full access to their funds. You simply return to the Free plan limits for new circles and features.',
     'pricing.faq.fees.q': 'Are there other fees?',
     'pricing.faq.fees.a':
-      'Only standard Sui network fees (typically a few cents), paid to the blockchain — not to us. Members pay their own small network fee, on every plan.',
+      'Only standard Sui network fees (typically a few cents), paid to the blockchain — not to us. Members usually pay this small fee themselves.',
     'pricing.faq.gas.q': 'Do members need SUI for gas?',
     'pricing.faq.gas.a':
-      'Yes. Every Sui transaction needs a tiny network fee (“gas”), paid in SUI, so each member keeps a little SUI in their wallet — even in a circle that settles in USDC.',
+      'Usually. Every Sui transaction needs a tiny network fee (“gas”), paid in SUI, so it is safest for each member to keep a little SUI in their wallet — even in a circle that settles in USDC. Some circles may have this fee covered, but a member still needs SUI whenever that cover isn’t available.',
     'pricing.footerDisclaimer':
       'Premium covers coordination features only. It is not financial advice, custody, or a guarantee of returns. Cryptocurrency use carries risk — check the rules that apply in your country.',
     'pricing.free.feature.circles': '{count} savings circle',
@@ -456,7 +456,6 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     // WhatsApp copy here and in billing.whatsappSuite.* names only updates
     // listed in src/content/whatsapp-updates.ts (guard: copy-guards.test.ts).
     'pricing.premium.feature.whatsapp': 'Circle updates on WhatsApp, sent to the number you link',
-    'pricing.premium.feature.goals': 'Smart savings goals for your circles',
     'pricing.premium.feature.everything': 'Everything in Free',
     'pricing.alwaysFreeNoteLabel': 'Always free, on every plan:',
     'pricing.alwaysFreeNoteBody':
@@ -985,10 +984,10 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
       "Vos cercles continuent de fonctionner et chaque membre conserve un accès complet à ses fonds. Vous revenez simplement aux limites du forfait Gratuit pour les nouveaux cercles et fonctionnalités.",
     'pricing.faq.fees.q': "Y a-t-il d'autres frais ?",
     'pricing.faq.fees.a':
-      "Uniquement les frais de réseau Sui standard (généralement quelques centimes), versés à la blockchain — pas à nous. Les membres paient eux-mêmes leur petit frais de réseau, sur tous les forfaits.",
+      "Uniquement les frais de réseau Sui standard (généralement quelques centimes), versés à la blockchain — pas à nous. En général, les membres paient eux-mêmes ce petit frais de réseau.",
     'pricing.faq.gas.q': 'Les membres ont-ils besoin de SUI pour le gaz ?',
     'pricing.faq.gas.a':
-      "Oui. Chaque transaction Sui nécessite un petit frais de réseau (« gaz »), payé en SUI : chaque membre garde donc un peu de SUI dans son portefeuille — même dans un cercle réglé en USDC.",
+      "En général. Chaque transaction Sui nécessite un petit frais de réseau (« gaz »), payé en SUI : le plus sûr est donc que chaque membre garde un peu de SUI dans son portefeuille — même dans un cercle réglé en USDC. Certains cercles peuvent prendre ce frais en charge, mais un membre a toujours besoin de SUI lorsque cette prise en charge n'est pas disponible.",
     'pricing.footerDisclaimer':
       "Premium couvre uniquement les fonctionnalités de coordination. Ce n'est pas un conseil financier, ni de la conservation, ni une garantie de rendement. L'usage de cryptomonnaies comporte des risques — vérifiez les règles applicables dans votre pays.",
     'pricing.free.feature.circles': "{count} cercle d'épargne",
@@ -999,7 +998,6 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'pricing.premium.feature.members': "Jusqu'à {count} membres par cercle",
     'pricing.premium.feature.circles': "Gérez jusqu'à {count} cercles à la fois",
     'pricing.premium.feature.whatsapp': 'Mises à jour du cercle sur WhatsApp, envoyées au numéro que vous reliez',
-    'pricing.premium.feature.goals': "Objectifs d'épargne intelligents pour vos cercles",
     'pricing.premium.feature.everything': 'Tout ce qui est inclus dans Gratuit',
     'pricing.alwaysFreeNoteLabel': 'Toujours gratuit, sur tous les forfaits :',
     'pricing.alwaysFreeNoteBody':

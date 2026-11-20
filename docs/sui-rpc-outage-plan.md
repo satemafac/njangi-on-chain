@@ -130,26 +130,52 @@ endpoint deep on a good day. GraphQL serves the same history back to
 
 ### Reads that turn an outage into a falsehood
 
-Found by the inventory, two spot-checked by hand (marked ✓). These are the
-places where "the network is down" renders as a confident wrong answer, so
-fix them before or alongside any fallback work:
+Inventoried 2026-10-15 and fixed on `fix/outage-read-falsehoods` (item 2
+below) unless marked open. Each was checked against the code, and the fixed
+behaviour against the live outage.
 
-- `dashboard.tsx` `userIsCurrentMemberOrAdmin` (~:247) returns `false` on a
-  read error: a receipt-only circle is hidden.
-- `dashboard.tsx` (~:3909) `getDynamicFields` failure becomes `{ data: [] }`.
-- ✓ `compliance-gate.ts` `resolveComplianceConfigId` (:95–141) swallows
-  every read error and returns `null`, the same value as "no config on this
-  lineage"; callers add `.catch(() => null)`. Check whether the chain
-  refuses an ungated open on a gated circle, so this fails as an abort and
-  not as a silent downgrade.
-- ✓ `circle-service.ts` `getCirclePackageId` (:270–341) returns the default
-  package id when every read fails. Low risk for CALLS, which must target
-  the latest version anyway; wrong for anything that keys on the defining
-  package.
-- `gas-sponsorship-eligibility.ts` (~:46) returns `null` on a read error, so
-  sponsorship is declined and the member pays their own gas. That is a cost
-  shift, not a safety issue.
-- `goal-pool-discovery.ts` (~:135, ~:217) returns `[]`.
+- **Fixed.** `dashboard.tsx` `userIsCurrentMemberOrAdmin` returned `false` on
+  a read error, hiding receipt-only circles. Now
+  `membership-discovery.ts` `isCurrentMemberOrAdmin` returns
+  `boolean | null`, and unknown marks the scan degraded. A failed receipt
+  discovery does too.
+- **Fixed.** `dashboard.tsx`: a failed `getDynamicFields` became
+  `{ data: [] }`, so the circle's config was never found and its card showed
+  (and cached) a 3-member cap and zero amounts. A failed config read did the
+  same, and a skipped batch, a non-"gone" object error or any processing
+  error dropped the circle silently. All of these now count the circle as
+  unreadable and mark the scan degraded. Only `notExists` / `deleted` mean
+  gone (`isGoneObjectResponse` in `sui-read.ts`).
+- **Fixed, and the biggest one.** `networkError`, which every degraded path
+  sets, was never rendered, so the whole "keep cached circles and say so"
+  design ended in silence. A failed load with no cache read "No circles yet".
+  The dashboard now shows the banner with Try again, and replaces the empty
+  state and zero counts with "Your circles couldn't be loaded".
+- **Fixed.** `compliance-gate.ts` `resolveComplianceConfigId` swallowed every
+  read error into `null` ("no config"), so gated flows told members
+  verification "is not configured, contact support". It now throws
+  `ComplianceConfigUnavailableError`, and `requireComplianceConfigId` gives
+  the five callers the right message. The chain itself can't be downgraded:
+  `open_cycle_internal` ORs the circle's `requires_attestation` into every
+  open, and ungated contribute aborts 216.
+- **Fixed.** `goal-pool-discovery.ts` returned `[]` on a failed event read;
+  it now throws, and `GoalPoolsSection` keeps its cached pools (seen live).
+- **Decided: keep failing closed.** `gas-sponsorship-eligibility.ts` declines
+  sponsorship when the escrow can't be read, so the member pays gas. Nothing
+  user-facing claims anything. Only the log was false: it is now
+  `escrow_lookup_failed`, not `no_circle_id`.
+- **Left as is.** `circle-service.ts` `getCirclePackageId` returns the
+  default package id when every read fails. That is right for CALLS, which
+  target the latest version anyway, and wrong for anything keyed on the
+  defining package.
+- **Open.** Dashboard **wallet snapshot / holdings** read `$0` and "0 funded
+  tokens" when the balance read fails (`fetchBalance` keeps the initial
+  zeros). Seen live for an address holding 4.33 SUI.
+- **Open, not outage-related.** Dashboard load-more (`loadMoreCircles`)
+  passes circles without their dynamic fields, so those cards always show
+  default config.
+- **Open, dev only.** `RateLimitedRequestQueue.processQueue`
+  `console.error`s RPC failures, which Next's dev overlay shows as a crash.
 
 ## Plan, ranked by user impact
 
@@ -168,11 +194,11 @@ price and a (garbage) submission all moved to the healthy node. **It does
 not help when every JSON-RPC endpoint is down, as on 2026-10-15.** It closes
 the more common case, where only the primary fails.
 
-**2. Stop the falsehoods above.** Small, independent PRs, one per site, each
-turning "error → absent" into "error → unknown", with the UI saying it
-couldn't check. No new endpoints are needed. This is the cheapest way to
-make an outage *honest*, and it pays off on every flaky day, not only
-outages.
+**2. Stop the falsehoods above. Done on `fix/outage-read-falsehoods`**
+(one commit per site), except the open items listed there. Each turns
+"error → absent" into "error → unknown", with the UI saying it couldn't
+check. No new endpoints were needed. The wallet-balance zeros are the next
+most visible one.
 
 **3. Stop-gap option (owner decision): a keyed JSON-RPC provider.** The
 fastest way to make *everything* survive is a third JSON-RPC endpoint that

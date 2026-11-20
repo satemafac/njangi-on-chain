@@ -23,7 +23,7 @@ import {
 } from '@/services/goal-pool-service';
 import {
   findFreshestAttestation,
-  resolveComplianceConfigId,
+  requireComplianceConfigId,
 } from '@/lib/compliance-gate';
 import VerificationRequiredModal from '@/components/VerificationRequiredModal';
 import {
@@ -209,15 +209,18 @@ export default function GoalPoolPanel({ poolId, network, userAddress }: Props) {
       // pinned on the pool and takes that object as an argument. Prefer
       // the pinned id read off the pool itself; fall back to the lineage
       // singleton (same resolver the open flow used to pin it).
-      complianceConfigId =
-        state.compliancyConfigId ??
-        (await resolveComplianceConfigId(network).catch(() => null)) ??
-        undefined;
-      if (!complianceConfigId) {
-        toast.error(
-          'Verification is required for this pool but is not configured yet. Please contact support.',
-        );
-        return;
+      if (state.compliancyConfigId) {
+        complianceConfigId = state.compliancyConfigId;
+      } else {
+        const config = await requireComplianceConfigId(network, {
+          missingMessage:
+            'Verification is required for this pool but is not configured yet. Please contact support.',
+        });
+        if ('error' in config) {
+          toast.error(config.error);
+          return;
+        }
+        complianceConfigId = config.id;
       }
     }
     void runWithSigner(

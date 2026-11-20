@@ -49,7 +49,11 @@ export type ScreenContext =
   // point left on the money paths, so refusing to mint zkProofs is the
   // enforcement of last resort: no proof, no signature, nothing on chain.
   | 'proof_issuance'
-  | 'ramp_session';
+  | 'ramp_session'
+  // Sponsored gas (/api/sponsor/prepare). The sponsor's gas coin is a
+  // server-side spend for one wallet, so it is refused, not handed out, when
+  // the screen cannot run. The member can still pay their own gas.
+  | 'gas_sponsorship';
 
 export interface ScreenResult {
   blocked: boolean;

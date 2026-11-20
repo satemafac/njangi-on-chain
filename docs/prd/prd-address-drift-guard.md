@@ -4,6 +4,7 @@
 **Owner:** unassigned
 **Status:** Spec ready to build. No open external dependencies.
 **Estimate:** ~2–3 days including backfill and tests.
+**Implementation status (2026-10-18):** shipped in `8d8a149`. Logins warn through a dismissible modal, and the server refuses circle join requests, ramp sessions and WhatsApp circle linking. Circle creation and contributions are signed in the browser and have no server gate, so acceptance criterion 6 holds only for joining.
 
 ---
 

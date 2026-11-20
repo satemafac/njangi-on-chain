@@ -9,18 +9,38 @@
 // USDC pins the US-dollar amount at the peg. SUI pins the SUI amount the
 // form priced at today's rate, which is why SUI can only be picked while a
 // SUI price is available.
+//
+// Which coins are offered is a launch decision per network (2026-10-18): the
+// testnet pilot keeps SUI beside USDC; mainnet launches with USDC only, where
+// SUI pays network fees and nothing else. Adding a coin to a network here is
+// that decision changing, not a tidy-up.
+
+import type { NetworkType } from '../config/public-env';
 
 export type CreateCircleCoin = 'USDC' | 'SUI';
 
 export const DEFAULT_CREATE_CIRCLE_COIN: CreateCircleCoin = 'USDC';
 
+export const CREATE_CIRCLE_COINS_BY_NETWORK: Readonly<Record<NetworkType, readonly CreateCircleCoin[]>> = {
+  testnet: ['USDC', 'SUI'],
+  mainnet: ['USDC'],
+};
+
+/** The coins the create form offers on a network; USDC is always first. */
+export function createCircleCoinsForNetwork(network: NetworkType): readonly CreateCircleCoin[] {
+  return CREATE_CIRCLE_COINS_BY_NETWORK[network] ?? [DEFAULT_CREATE_CIRCLE_COIN];
+}
+
 /**
  * The `settlement_asset` sent to `create_circle_with_asset`: SUI only when
- * the organizer picked it, USDC otherwise (including a saved form from
- * before this choice existed).
+ * the organizer picked it AND the network offers it, USDC otherwise
+ * (including a saved form from before this choice existed, or a testnet
+ * draft opened on mainnet).
  */
-export function settlementAssetForCreate(coin: unknown): CreateCircleCoin {
-  return coin === 'SUI' ? 'SUI' : DEFAULT_CREATE_CIRCLE_COIN;
+export function settlementAssetForCreate(coin: unknown, network?: NetworkType): CreateCircleCoin {
+  if (coin !== 'SUI') return DEFAULT_CREATE_CIRCLE_COIN;
+  if (network && !createCircleCoinsForNetwork(network).includes('SUI')) return DEFAULT_CREATE_CIRCLE_COIN;
+  return 'SUI';
 }
 
 /** SUI amounts come from today's price; without one there is nothing to pin. */

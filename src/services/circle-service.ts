@@ -11,6 +11,7 @@ import type { CircleFormData, CycleLength, WeekDay } from '../types/circle';
 import {
   getCurrentNetwork,
   getCurrentPackageId,
+  getGraphqlUrlForNetwork,
 } from './network-config';
 import { getPooledSuiClient } from './sui-rpc-failover';
 import { readObject, queryEventsCached, IMMUTABLE_READ_TTL_MS } from '@/lib/sui-read';
@@ -176,10 +177,8 @@ export class CircleService {
           tx.pure.u8(formData.cycleType === 'rotational' ? CIRCLE_TYPE_ROTATIONAL : CIRCLE_TYPE_SMART_GOAL), // circle_type: u8
           tx.pure.u64(formData.numberOfMembers), // max_members: u64
           tx.pure.u8(ROTATION_STYLE_FIXED),     // rotation_style: u8
-          tx.pure(bcs.vector(bcs.bool()).serialize([
-            formData.penaltyRules.latePayment,
-            formData.penaltyRules.missedMeeting
-          ])),                                  // penalty_rules: vector<bool>
+          // Always [false, false]: nothing on chain enforces penalties (NJA-2593).
+          tx.pure(bcs.vector(bcs.bool()).serialize([false, false])), // penalty_rules: vector<bool>
           tx.pure(bcs.vector(bcs.u8()).serialize(goalType)),     // goal_type: Option<u8>
           tx.pure(bcs.vector(bcs.u64()).serialize(targetAmount)), // target_amount: Option<u64>
           tx.pure(bcs.vector(bcs.u64()).serialize(targetAmountLocal)), // target_amount_local: Option<u64>
@@ -536,9 +535,217 @@ export function clearStaleCircleCache(): void {
   }
 }
 
+/** How long one Sui GraphQL multiGetObjects call may take before it counts as a failed read. */
+const CIRCLE_OBJECTS_GRAPHQL_TIMEOUT_MS = 8_000;
+
+/** Circle ids per Sui GraphQL multiGetObjects call. */
+const CIRCLE_OBJECTS_GRAPHQL_CHUNK_SIZE = 50;
+
+/** Each circle at its latest version as a Move object: its type and its fields. */
+const CIRCLE_OBJECTS_GRAPHQL_QUERY = `query ($keys: [ObjectKey!]!) {
+  multiGetObjects(keys: $keys) {
+    address
+    version
+    asMoveObject { contents { type { repr } json } }
+  }
+}`;
+
+interface GraphqlCircleObjectsBody {
+  data?: { multiGetObjects?: unknown } | null;
+  errors?: unknown;
+}
+
+interface GraphqlCircleObjectNode {
+  address?: unknown;
+  version?: unknown;
+  asMoveObject?: {
+    contents?: { type?: { repr?: unknown } | null; json?: unknown } | null;
+  } | null;
+}
+
+function describeCircleObjectReadError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** `0x` + 64 lowercase hex digits, or null when `value` is not an object id. */
+function normalizeCircleObjectAddress(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const hex = value.trim().toLowerCase().replace(/^0x/, '');
+  if (hex === '' || hex.length > 64 || !/^[0-9a-f]+$/.test(hex)) {
+    return null;
+  }
+  return `0x${hex.padStart(64, '0')}`;
+}
+
+/** The version as JSON-RPC renders it (a decimal string), or null when it is unreadable. */
+function readGraphqlObjectVersion(value: unknown): string | null {
+  if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) {
+    return String(value);
+  }
+  if (typeof value === 'string' && /^\d+$/.test(value)) {
+    return value;
+  }
+  return null;
+}
+
+/**
+ * The circles among `circleIds` that Sui GraphQL returns readably, keyed by
+ * the requested id and rebuilt in the JSON-RPC getObject shape
+ * processCircleObject reads: `{ data: { objectId, version, type, content: {
+ * dataType: 'moveObject', type, fields } } }`, with `fields` taken from
+ * `contents.json`. No owner, digest or other field is synthesized.
+ *
+ * Throws on a failed read (error status, an `errors` body, no object list).
+ * A circle the answer does not cover readably (null entry, no Move type, no
+ * `contents.json` object, no readable version) is left out of the map, and
+ * named in a warning when its entry is malformed, so the caller reads it
+ * elsewhere; it is never turned into an empty or "gone" entry here.
+ */
+async function readCircleObjectsViaGraphql(
+  url: string,
+  circleIds: string[],
+): Promise<Map<string, Record<string, unknown>>> {
+  const requested = new Map<string, string[]>();
+  for (const circleId of circleIds) {
+    const address = normalizeCircleObjectAddress(circleId);
+    if (!address) {
+      continue;
+    }
+    const ids = requested.get(address);
+    if (!ids) {
+      requested.set(address, [circleId]);
+    } else if (!ids.includes(circleId)) {
+      ids.push(circleId);
+    }
+  }
+
+  const read = new Map<string, Record<string, unknown>>();
+  if (requested.size === 0) {
+    return read;
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), CIRCLE_OBJECTS_GRAPHQL_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({
+        query: CIRCLE_OBJECTS_GRAPHQL_QUERY,
+        variables: { keys: Array.from(requested.keys(), (address) => ({ address })) },
+      }),
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw new Error(`GraphQL ${url} answered ${response.status}`);
+    }
+    const body = (await response.json()) as GraphqlCircleObjectsBody | null;
+    const errors = body?.errors;
+    if (errors !== undefined && errors !== null && !(Array.isArray(errors) && errors.length === 0)) {
+      const reason = Array.isArray(errors) ? (errors[0] as { message?: unknown } | null)?.message : undefined;
+      throw new Error(`GraphQL ${url} returned errors${typeof reason === 'string' ? `: ${reason}` : ''}`);
+    }
+    const nodes = body?.data?.multiGetObjects;
+    if (!Array.isArray(nodes)) {
+      throw new Error(`GraphQL ${url} returned no object list`);
+    }
+    for (const node of nodes as Array<GraphqlCircleObjectNode | null>) {
+      const address = normalizeCircleObjectAddress(node?.address);
+      const ids = address ? requested.get(address) : undefined;
+      if (!node || !ids) {
+        // A null entry reads nothing: its circle goes to the fallback.
+        continue;
+      }
+      const contents = node.asMoveObject?.contents;
+      const type = contents?.type?.repr;
+      const fields = contents?.json;
+      const version = readGraphqlObjectVersion(node.version);
+      if (typeof type !== 'string' || type === '') {
+        console.warn(`GraphQL ${url} returned circle ${address} without a Move type`);
+        continue;
+      }
+      if (typeof fields !== 'object' || fields === null || Array.isArray(fields)) {
+        console.warn(`GraphQL ${url} returned circle ${address} without a readable contents.json`);
+        continue;
+      }
+      if (version === null) {
+        console.warn(`GraphQL ${url} returned circle ${address} without a readable version`);
+        continue;
+      }
+      for (const circleId of ids) {
+        read.set(circleId, {
+          data: {
+            objectId: circleId,
+            version,
+            type,
+            content: { dataType: 'moveObject', type, fields: fields as Record<string, unknown> },
+          },
+        });
+      }
+    }
+    return read;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * The Sui GraphQL step of batchFetchCircleObjects. Every circle GraphQL
+ * returns readably goes into `results` (reported via `onProgress`); the ids
+ * still to read are returned, in order, for the getObject fallback. No
+ * GraphQL URL, no `fetch`, or a failed GraphQL read never throws and never
+ * marks a circle read or gone: those ids are returned for the fallback.
+ */
+async function readCircleObjectsGraphqlFirst(
+  circleIds: string[],
+  results: Map<string, Record<string, unknown>>,
+  onProgress?: (fetched: number, total: number) => void,
+): Promise<string[]> {
+  let url: string | null = null;
+  try {
+    if (typeof getGraphqlUrlForNetwork === 'function' && typeof fetch === 'function') {
+      const configured: unknown = getGraphqlUrlForNetwork(getCurrentNetwork());
+      url = typeof configured === 'string' && configured !== '' ? configured : null;
+    }
+  } catch (error) {
+    console.warn(`No Sui GraphQL URL for circle objects, reading them with getObject: ${describeCircleObjectReadError(error)}`);
+  }
+
+  if (url) {
+    for (let start = 0; start < circleIds.length; start += CIRCLE_OBJECTS_GRAPHQL_CHUNK_SIZE) {
+      const chunk = circleIds.slice(start, start + CIRCLE_OBJECTS_GRAPHQL_CHUNK_SIZE);
+      let read: Map<string, Record<string, unknown>>;
+      try {
+        read = await readCircleObjectsViaGraphql(url, chunk);
+      } catch (error) {
+        console.warn(
+          `Sui GraphQL could not read ${chunk.length} circle objects, reading them with getObject: ${describeCircleObjectReadError(error)}`,
+        );
+        continue;
+      }
+      read.forEach((object, circleId) => results.set(circleId, object));
+      if (read.size > 0) {
+        onProgress?.(results.size, circleIds.length);
+      }
+    }
+  }
+
+  return circleIds.filter((circleId) => !results.has(circleId));
+}
+
 /**
  * Batch fetch circle objects with controlled concurrency
  * Prevents overwhelming the RPC endpoint while maximizing throughput
+ *
+ * Each circle is read from Sui GraphQL first (it answers when every endpoint
+ * refuses JSON-RPC, NJA-2830) and returned in the getObject shape
+ * processCircleObject reads (data.objectId, data.version, data.type,
+ * data.content { dataType: 'moveObject', type, fields }); such an entry
+ * carries no owner or digest. A circle GraphQL did not return readably is
+ * read with getObject. A circle neither source could read gets the `{}`
+ * error entry, never a missing or "gone" entry.
  */
 export async function batchFetchCircleObjects(
   circleIds: string[],
@@ -560,7 +767,8 @@ export async function batchFetchCircleObjects(
   } = options;
   
   const results = new Map<string, Record<string, unknown>>();
-  const queue = [...circleIds];
+  // Sui GraphQL first (NJA-2830); only the circles it could not read go to getObject below.
+  const queue = await readCircleObjectsGraphqlFirst(circleIds, results, onProgress);
   const inProgress = new Set<Promise<void>>();
   
   console.log(`📦 Batch fetching ${circleIds.length} circle objects with max concurrency of ${maxConcurrent}`);

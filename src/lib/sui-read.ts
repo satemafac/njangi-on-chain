@@ -296,6 +296,18 @@ export function invalidateObject(id: string): void {
 }
 
 /** Full reset — primarily for tests. */
+/**
+ * True only when the chain itself says the object is not there (`notExists`,
+ * `deleted`). Any other error, or no response at all, means the read failed,
+ * which says nothing about whether the object exists.
+ */
+export function isGoneObjectResponse(
+  response: { error?: { code?: string } | null } | null | undefined,
+): boolean {
+  const code = response?.error?.code;
+  return code === 'notExists' || code === 'deleted';
+}
+
 export function clearSuiReadCache(): void {
   responseCache.clear();
   inFlight.clear();
