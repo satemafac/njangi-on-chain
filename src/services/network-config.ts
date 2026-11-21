@@ -4,6 +4,7 @@ import {
   type NetworkType,
 } from '@/config/public-env';
 import { SUI_COIN_TYPE, usdcCoinTypeForNetwork } from '@/config/coin-types';
+import { isNetworkSwitchEnabled } from '@/config/feature-flags';
 
 export type { NetworkType } from '@/config/public-env';
 
@@ -150,7 +151,11 @@ let currentNetwork: NetworkType = getConfiguredNetworkFromEnv();
 
 // Function to get current network
 export function getCurrentNetwork(): NetworkType {
-  if (typeof window !== 'undefined') {
+  // The stored choice is read only while the switch is offered. While
+  // NEXT_PUBLIC_NETWORK_SWITCH_ENABLED is off it is ignored by product rule,
+  // not as a default for a failed read, and the key is left in place so
+  // turning the flag back on restores the member's choice.
+  if (typeof window !== 'undefined' && isNetworkSwitchEnabled()) {
     // Client-side: get from localStorage
     const saved = localStorage.getItem('sui-network');
     if (saved === 'testnet' || saved === 'mainnet') {
@@ -162,6 +167,18 @@ export function getCurrentNetwork(): NetworkType {
 
 // Function to set current network
 export function setCurrentNetwork(network: NetworkType): void {
+  // While NEXT_PUBLIC_NETWORK_SWITCH_ENABLED is off the switch is refused: the
+  // module stays on NEXT_PUBLIC_SUI_NETWORK and nothing is stored. It does not
+  // throw, because both pages call it on mount, and a refused move is logged
+  // rather than dropped silently.
+  if (!isNetworkSwitchEnabled()) {
+    if (network !== currentNetwork) {
+      console.warn(
+        `🌍 NetworkConfig: refused switch to ${network}: NEXT_PUBLIC_NETWORK_SWITCH_ENABLED is off, staying on ${currentNetwork}.`,
+      );
+    }
+    return;
+  }
   console.log('🌍 NetworkConfig: Setting network to:', network);
   currentNetwork = network;
   if (typeof window !== 'undefined') {
@@ -282,6 +299,16 @@ export function validateNetworkConfig(network: NetworkType): { isValid: boolean;
 
 // Network switching utility
 export function switchNetwork(newNetwork: NetworkType): void {
+  // Refused while NEXT_PUBLIC_NETWORK_SWITCH_ENABLED is off, before
+  // setCurrentNetwork and before the session is cleared, so a refused switch
+  // neither moves the network nor logs the member out.
+  if (!isNetworkSwitchEnabled()) {
+    console.warn(
+      `🌍 NetworkConfig: refused switch to ${newNetwork}: NEXT_PUBLIC_NETWORK_SWITCH_ENABLED is off.`,
+    );
+    return;
+  }
+
   // Validate configuration before switching
   const validation = validateNetworkConfig(newNetwork);
   if (!validation.isValid) {

@@ -19,7 +19,8 @@ import {
 import { useAuth } from '../contexts/AuthContext';
 import { LoginButton } from '../components/LoginButton';
 import { useTranslation } from '../hooks/useTranslation';
-import { getNetworkConfig, setCurrentNetwork } from '../services/network-config';
+import { isNetworkSwitchEnabled } from '../config/feature-flags';
+import { getCurrentNetwork, getNetworkConfig, setCurrentNetwork } from '../services/network-config';
 import { SUPPORT_MAILTO } from '../lib/constants';
 import {
   clearPostLoginDestination,
@@ -262,6 +263,12 @@ export default function Home() {
   };
 
   const switchNetwork = useCallback((newNetwork: 'testnet' | 'mainnet') => {
+    // Not offered while NEXT_PUBLIC_NETWORK_SWITCH_ENABLED is off (LandingHeader
+    // hides the control); refuse before the confirmation opens.
+    if (!isNetworkSwitchEnabled()) {
+      console.warn(`Network switch to ${newNetwork} refused: NEXT_PUBLIC_NETWORK_SWITCH_ENABLED is off.`);
+      return;
+    }
     setPendingNetwork(newNetwork);
     setIsNetworkSwitchModalOpen(true);
   }, []);
@@ -373,6 +380,16 @@ export default function Home() {
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
+      // While NEXT_PUBLIC_NETWORK_SWITCH_ENABLED is off the deployment's
+      // NEXT_PUBLIC_SUI_NETWORK is the only network: a stored 'sui-network' is
+      // ignored (product rule) and left in place for when the flag is on.
+      if (!isNetworkSwitchEnabled()) {
+        const configured = getCurrentNetwork();
+        setNetwork(configured);
+        window.CURRENT_NETWORK_CONFIG = NETWORK_CONFIG[configured];
+        return;
+      }
+
       const savedNetwork = localStorage.getItem('sui-network') as
         | 'testnet'
         | 'mainnet'

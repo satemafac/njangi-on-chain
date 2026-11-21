@@ -196,6 +196,25 @@ export function isGoalPoolsEnabled(): boolean {
   return flagEnabled(process.env.NEXT_PUBLIC_GOAL_POOLS_ENABLED);
 }
 
+/**
+ * The Testnet/Mainnet switch: the landing header and dashboard controls and
+ * the stored 'sui-network' choice read by src/services/network-config.ts.
+ *
+ * Default OFF. While off, the deployment's NEXT_PUBLIC_SUI_NETWORK is the
+ * only network: no switch is offered, setCurrentNetwork/switchNetwork refuse
+ * to move, and a stored 'sui-network' is ignored. Ignoring it is a product
+ * rule, not a default standing in for a failed read; the key is left in
+ * place, so turning the flag on restores the member's choice.
+ *
+ * A client-config gate with no server route behind it. Which network the
+ * browser talks to is decided in the browser, so there is no request for a
+ * route to refuse; server code has no window and already follows
+ * NEXT_PUBLIC_SUI_NETWORK whatever this says.
+ */
+export function isNetworkSwitchEnabled(): boolean {
+  return flagEnabled(process.env.NEXT_PUBLIC_NETWORK_SWITCH_ENABLED);
+}
+
 export function isRampEnabled(provider: 'coinbase' | 'moonpay' | 'transak'): boolean {
   switch (provider) {
     case 'coinbase':
