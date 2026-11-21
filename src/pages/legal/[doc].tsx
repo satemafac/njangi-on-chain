@@ -10,7 +10,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { GetStaticPaths, GetStaticProps } from 'next';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
-import { Manrope } from 'next/font/google';
+import localFont from 'next/font/local';
 import {
   CURRENT_LEGAL_VERSIONS,
   LEGAL_DOC_IDS,
@@ -30,7 +30,13 @@ import { LegalFooter } from '../../components/LegalFooter';
 import { Seo } from '../../components/Seo';
 import { breadcrumbs } from '../../lib/structured-data';
 
-const bodyFont = Manrope({ subsets: ['latin'], display: 'swap' });
+// Manrope's variable Latin file, bundled (src/fonts, SIL OFL 1.1) so a build never downloads it; see src/lib/fonts.ts.
+const bodyFont = localFont({
+  src: '../../fonts/manrope/manrope-latin-wght-normal.woff2',
+  weight: '200 800',
+  style: 'normal',
+  display: 'swap',
+});
 
 interface LegalDocPageProps {
   doc: LegalDocId;
