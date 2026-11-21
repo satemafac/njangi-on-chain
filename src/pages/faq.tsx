@@ -49,7 +49,7 @@ export default function FAQPage() {
         {
           id: "cost-to-use",
           question: "How much does it cost to use Njangi On-Chain?",
-          answer: "Running a circle is free. You pay only the small Sui network transaction fee (usually a few cents) when contributing or receiving a payout, and that goes to the network, not to us. We never take a cut of contributions or payouts. A Premium subscription unlocks coordination features — larger circles, WhatsApp notifications and smart goals — and is paid by the circle admin; see the pricing page for what is included. Your circle's money is never behind a paywall."
+          answer: "Njangi On-Chain charges nothing to run a circle, and we take no cut of contributions or payouts. Each contribution or payout is a Sui network transaction with a small network fee (usually a few cents) that goes to the network, not to us. If your circle's admin has a Premium subscription, that fee can be covered for members on USDC contributions and payouts, within fair-use limits; SUI contributions, and any transaction that cannot be covered, fall back to the member paying the fee. Premium also unlocks coordination features — larger circles, WhatsApp notifications and smart goals — and is paid by the circle admin; see the pricing page for what is included. Your circle's money is never behind a paywall."
         },
         {
           id: "currencies-supported",
