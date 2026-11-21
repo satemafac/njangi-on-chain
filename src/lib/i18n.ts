@@ -323,9 +323,9 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'create.membersLabel': 'How many people',
     'create.membersHint': 'Counting you. Between {min} and {max}; you can change it before the circle starts.',
     'create.depositAuto':
-      'Each member also puts down a refundable security deposit of {amount}, half of one contribution. Adjust it under More settings.',
+      'Each member also puts down a security deposit of {amount}, half of one contribution. It comes back only if the organizer removes the member before the circle is running, or when the circle is stopped or recovered. Adjust it under More settings.',
     'create.depositAutoEmpty':
-      'Each member also puts down a refundable security deposit, half of one contribution. Adjust it under More settings.',
+      'Each member also puts down a security deposit, half of one contribution. It comes back only if the organizer removes the member before the circle is running, or when the circle is stopped or recovered. Adjust it under More settings.',
     'create.moreSettings': 'More settings',
     'create.lessSettings': 'Fewer settings',
     'create.submit': 'Create circle',
@@ -866,9 +866,9 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'create.membersLabel': 'Combien de personnes',
     'create.membersHint': 'Vous compris. Entre {min} et {max} ; modifiable avant le démarrage du cercle.',
     'create.depositAuto':
-      'Chaque membre verse aussi un dépôt de garantie remboursable de {amount}, soit la moitié d’un versement. Ajustez-le sous Plus de réglages.',
+      'Chaque membre verse aussi un dépôt de garantie de {amount}, soit la moitié d’un versement. Il n’est rendu que si l’organisateur retire le membre avant que le cercle démarre, ou lorsque le cercle est arrêté ou récupéré. Ajustez-le sous Plus de réglages.',
     'create.depositAutoEmpty':
-      'Chaque membre verse aussi un dépôt de garantie remboursable, soit la moitié d’un versement. Ajustez-le sous Plus de réglages.',
+      'Chaque membre verse aussi un dépôt de garantie, soit la moitié d’un versement. Il n’est rendu que si l’organisateur retire le membre avant que le cercle démarre, ou lorsque le cercle est arrêté ou récupéré. Ajustez-le sous Plus de réglages.',
     'create.moreSettings': 'Plus de réglages',
     'create.lessSettings': 'Moins de réglages',
     'create.submit': 'Créer le cercle',
