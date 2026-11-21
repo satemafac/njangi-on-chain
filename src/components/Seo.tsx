@@ -33,7 +33,7 @@ const OG_LOCALE = 'en_US';
 
 export const DEFAULT_TITLE = 'Njangi On-Chain — Rotating Savings Circles for the Diaspora';
 export const DEFAULT_DESCRIPTION =
-  'Njangi, tontine, susu, esusu — the rotating savings circle your community already runs, now self-custodied and verifiable. No treasurer, no seed phrase.';
+  "Njangi, tontine, susu, esusu — the rotating savings circle your community already runs, now with each contribution held by the circle's escrow contract until the member whose turn it is collects it. No treasurer, no seed phrase.";
 
 export const DEFAULT_OG_IMAGE: SeoImage = {
   url: '/og.png?v=2',
