@@ -59,7 +59,7 @@ export async function readCircleRecoveryStopped(
       rpcUrl: getNetworkConfig(network).rpcUrl,
     });
   try {
-    const fields = await getCircleConfigFields(rpcClient, circleId);
+    const fields = await getCircleConfigFields(rpcClient, circleId, { network });
     return isRecoveryStopped(parseRecoveryStateValue(fields));
   } catch (err) {
     console.warn('[circle-recovery-state] could not read recovery_state for', circleId, err);

@@ -6,6 +6,14 @@
  * 227 otherwise. A read that failed is unknown, never "not stopped": the
  * panel then stays on the time rule rather than widen the window on a guess.
  */
+
+// No Sui GraphQL URL for these cases, so the CircleConfig is listed and read
+// only through the stubbed JSON-RPC client below and nothing reaches the network.
+jest.mock('@/services/network-config', () => ({
+  ...jest.requireActual('@/services/network-config'),
+  getGraphqlUrlForNetwork: () => '',
+}));
+
 import type { SuiClient } from '@mysten/sui/client';
 import {
   isRecoveryStopped,

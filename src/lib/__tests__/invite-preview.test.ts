@@ -89,6 +89,9 @@ describe('readInvitePreview', () => {
         data: config
           ? [{ objectId: '0x' + 'cc'.repeat(32), objectType: '0x1::dynamic_field::Field<vector<u8>, 0x2::njangi_circle_config::CircleConfig>', name: { type: 'vector<u8>', value: [99, 105, 114, 99, 108, 101, 95, 99, 111, 110, 102, 105, 103] } }]
           : [],
+        // a complete page, as JSON-RPC returns it (the circle's field list is now read through every page)
+        hasNextPage: false,
+        nextCursor: null,
       })),
     }) as never;
 
