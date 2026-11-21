@@ -172,9 +172,9 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'landing.globe.hintHover': 'Hover the globe to see what each place calls its circle',
     'landing.globe.hintTouch': 'Tap the globe to see what each place calls its circle',
     'landing.heroTitle':
-      'The savings circle your family already trusts — now with rules nobody can quietly break.',
+      'The savings circle your family already trusts — now with a rotation order and a record every member can check.',
     'landing.heroSubtitle':
-      "Members contribute on schedule, each takes the pot in turn. Njangi On-Chain keeps that exact rhythm and makes every contribution and payout self-custodied, scheduled, and verifiable — no treasurer holding the cash, no seed phrase to start.",
+      "Members contribute on schedule, each takes the pot in turn. Njangi On-Chain keeps that exact rhythm: each contribution is held by the circle's escrow contract until the member whose turn it is collects it, and each member signs their own transactions — no treasurer holding the cash, no seed phrase to start. Our FAQ explains how the escrow contract works and who holds its upgrade key.",
     'landing.heroCardTitle': 'Start with a familiar identity',
     'landing.heroCardBody':
       'Sign in with a social account. Wallet creation happens in the background so members can start with less operational friction.',
@@ -187,7 +187,7 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'landing.proof.currentEnvironment': 'Current environment',
     'landing.proof.syncing': 'Syncing',
     'landing.proof.custodyLabel': 'Custody',
-    'landing.proof.custodyValue': 'Self-held',
+    'landing.proof.custodyValue': 'Escrow contract',
     'landing.heritageAlso':
       'Also known as njangi, esusu, stokvel, tontine and many other names.',
     'landing.signInTitle': 'Sign in with a familiar account',
@@ -713,9 +713,9 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'landing.globe.hintHover': 'Survolez le globe pour découvrir le nom local de chaque cercle',
     'landing.globe.hintTouch': 'Touchez le globe pour découvrir le nom local de chaque cercle',
     'landing.heroTitle':
-      "Le cercle d'épargne auquel votre famille fait déjà confiance — désormais avec des règles que personne ne peut contourner en silence.",
+      "Le cercle d'épargne auquel votre famille fait déjà confiance — désormais avec un ordre de passage et un registre que chaque membre peut vérifier.",
     'landing.heroSubtitle':
-      "Les membres cotisent selon un calendrier, chacun reçoit la cagnotte à son tour. Njangi On-Chain conserve ce rythme exact et rend chaque cotisation et chaque versement autodétenu, planifié et vérifiable — aucun trésorier ne détient l'argent, aucune phrase secrète pour démarrer.",
+      "Les membres cotisent selon un calendrier, chacun reçoit la cagnotte à son tour. Njangi On-Chain conserve ce rythme exact : chaque cotisation est gardée par le contrat de séquestre du cercle jusqu'à ce que le membre dont c'est le tour la récupère, et chaque membre signe ses propres transactions — aucun trésorier ne détient l'argent, aucune phrase secrète pour démarrer. Notre FAQ explique le fonctionnement du contrat de séquestre et qui détient sa clé de mise à jour.",
     'landing.heroCardTitle': 'Commencez avec une identité familière',
     'landing.heroCardBody':
       "Connectez-vous avec un compte social. La création du portefeuille se fait en arrière-plan, pour démarrer avec moins de friction.",
@@ -728,7 +728,7 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'landing.proof.currentEnvironment': 'Environnement actuel',
     'landing.proof.syncing': 'Synchronisation',
     'landing.proof.custodyLabel': 'Garde',
-    'landing.proof.custodyValue': 'Auto-détenue',
+    'landing.proof.custodyValue': 'Contrat de séquestre',
     'landing.heritageAlso':
       "Aussi appelé njangi, esusu, stokvel, tontine et bien d'autres noms.",
     'landing.signInTitle': 'Connectez-vous avec un compte familier',
