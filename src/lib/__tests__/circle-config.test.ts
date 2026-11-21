@@ -1,3 +1,11 @@
+// No Sui GraphQL URL in these cases: they read with the mocked getObject
+// only and never reach the network. The GraphQL step is covered in
+// src/__tests__/lib/circle-config-graphql*.test.ts.
+jest.mock('@/services/network-config', () => ({
+  getCurrentNetwork: () => 'testnet',
+  getGraphqlUrlForNetwork: () => '',
+}));
+
 import {
   extractCircleConfigFieldsFromObjectContent,
   getCircleConfigFields,

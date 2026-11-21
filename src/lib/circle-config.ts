@@ -1,4 +1,6 @@
 import type { SuiClient } from '@mysten/sui/client';
+import type { NetworkType } from '@/config/public-env';
+import { getCurrentNetwork, getGraphqlUrlForNetwork } from '@/services/network-config';
 
 export type CircleConfigFields = Record<string, unknown>;
 
@@ -76,10 +78,129 @@ export function extractCircleConfigFieldsFromObjectContent(
   return nestedFields ? { ...rootFields, ...nestedFields } : rootFields;
 }
 
+/** Which network's Sui GraphQL service a CircleConfig read asks first. */
+export interface CircleConfigReadOptions {
+  /** The network whose GraphQL URL is used; the current network when absent. */
+  network?: NetworkType;
+}
+
+/** How long one Sui GraphQL read of a CircleConfig field object may take before it counts as a failed read. */
+const CIRCLE_CONFIG_GRAPHQL_TIMEOUT_MS = 8_000;
+
+/** The CircleConfig dynamic-field object at its latest version, as its JSON fields. */
+const CIRCLE_CONFIG_GRAPHQL_QUERY = `query ($address: SuiAddress!) {
+  object(address: $address) {
+    asMoveObject { contents { json } }
+  }
+}`;
+
+interface GraphqlCircleConfigBody {
+  data?: { object?: unknown } | null;
+  errors?: unknown;
+}
+
+function describeCircleConfigReadError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * The Sui GraphQL URL of `network` (the current network when absent), or
+ * null when there is none (or no `fetch`): the caller then reads with
+ * getObject only.
+ */
+function resolveCircleConfigGraphqlUrl(network?: NetworkType): string | null {
+  try {
+    if (typeof getGraphqlUrlForNetwork === 'function' && typeof fetch === 'function') {
+      const configured: unknown = getGraphqlUrlForNetwork(network ?? getCurrentNetwork());
+      return typeof configured === 'string' && configured !== '' ? configured : null;
+    }
+  } catch (error) {
+    console.warn(
+      `No Sui GraphQL URL for CircleConfig reads, reading them with getObject: ${describeCircleConfigReadError(error)}`,
+    );
+  }
+  return null;
+}
+
+/**
+ * The CircleConfig field object `objectId` read from Sui GraphQL, merged as
+ * extractCircleConfigFieldsFromObjectContent merges the JSON-RPC shape: the
+ * Field's root keys plus the keys of its `value`. Values are kept exactly as
+ * GraphQL renders them (u64 strings, numeric enums, null or plain Options).
+ *
+ * Throws on a failed or unreadable read (error status, an `errors` body, no
+ * object, no `contents.json` object, no `value` object, the timeout); it
+ * never returns an empty, partial or default record.
+ */
+async function readCircleConfigFieldsViaGraphql(
+  url: string,
+  objectId: string,
+): Promise<CircleConfigFields> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), CIRCLE_CONFIG_GRAPHQL_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({
+        query: CIRCLE_CONFIG_GRAPHQL_QUERY,
+        variables: { address: objectId },
+      }),
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw new Error(`GraphQL ${url} answered ${response.status}`);
+    }
+    const body = (await response.json()) as GraphqlCircleConfigBody | null;
+    const errors = body?.errors;
+    if (errors !== undefined && errors !== null && !(Array.isArray(errors) && errors.length === 0)) {
+      const reason = Array.isArray(errors) ? (errors[0] as { message?: unknown } | null)?.message : undefined;
+      throw new Error(`GraphQL ${url} returned errors${typeof reason === 'string' ? `: ${reason}` : ''}`);
+    }
+    const object = asRecord(body?.data?.object);
+    if (!object) {
+      throw new Error(`GraphQL ${url} returned no object`);
+    }
+    const contents = asRecord(asRecord(object.asMoveObject)?.contents);
+    const json = asRecord(contents?.json);
+    if (!json) {
+      throw new Error(`GraphQL ${url} returned no readable contents.json`);
+    }
+    const value = asRecord(json.value);
+    if (!value) {
+      throw new Error(`GraphQL ${url} returned no readable CircleConfig value`);
+    }
+    return { ...json, ...value };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * The CircleConfig of the dynamic-field object `objectId` as one flat record
+ * (the Field's root keys plus its value's keys). It is read from the Sui
+ * GraphQL service of `options.network` (the current network when absent)
+ * first, since it answers when every endpoint refuses JSON-RPC (NJA-2830);
+ * when GraphQL is unavailable or its answer is unreadable it is read with
+ * getObject. Throws when the read fails; returns null only when getObject
+ * reports an object without content.
+ */
 export async function getCircleConfigFieldsByObjectId(
   client: CircleConfigObjectClient,
   objectId: string,
+  options?: CircleConfigReadOptions,
 ): Promise<CircleConfigFields | null> {
+  const graphqlUrl = resolveCircleConfigGraphqlUrl(options?.network);
+  if (graphqlUrl) {
+    try {
+      return await readCircleConfigFieldsViaGraphql(graphqlUrl, objectId);
+    } catch (error) {
+      console.warn(
+        `Sui GraphQL could not read CircleConfig ${objectId}, reading it with getObject: ${describeCircleConfigReadError(error)}`,
+      );
+    }
+  }
+
   const configObject = await client.getObject({
     id: objectId,
     options: { showContent: true },
@@ -91,6 +212,7 @@ export async function getCircleConfigFieldsByObjectId(
 export async function getCircleConfigFieldsFromDynamicFields(
   client: CircleConfigObjectClient,
   dynamicFields: Iterable<CircleConfigDynamicFieldLike | null | undefined>,
+  options?: CircleConfigReadOptions,
 ): Promise<CircleConfigFields | null> {
   const objectId = getCircleConfigObjectId(dynamicFields);
 
@@ -98,13 +220,14 @@ export async function getCircleConfigFieldsFromDynamicFields(
     return null;
   }
 
-  return getCircleConfigFieldsByObjectId(client, objectId);
+  return getCircleConfigFieldsByObjectId(client, objectId, options);
 }
 
 export async function getCircleConfigFields(
   client: CircleConfigClient,
   circleId: string,
+  options?: CircleConfigReadOptions,
 ): Promise<CircleConfigFields | null> {
   const dynamicFields = await client.getDynamicFields({ parentId: circleId });
-  return getCircleConfigFieldsFromDynamicFields(client, dynamicFields.data);
+  return getCircleConfigFieldsFromDynamicFields(client, dynamicFields.data, options);
 }
