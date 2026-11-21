@@ -1,7 +1,7 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
-import { Instrument_Serif } from 'next/font/google';
+import localFont from 'next/font/local';
 import { useAuth } from '@/contexts/AuthContext';
 import { Bell, Crown, User, Menu, X } from 'lucide-react';
 import * as Tooltip from '@radix-ui/react-tooltip';
@@ -10,9 +10,11 @@ import type { JoinRequest } from '@/services/database-service';
 import { classifyJoinRequestQueueFailure, joinRequestBellNotice } from '@/lib/join-request-access-copy';
 import LocaleSwitcher from '@/components/ui/LocaleSwitcher';
 
-const wordmarkFont = Instrument_Serif({
-  subsets: ['latin'],
+// Bundled (src/fonts, SIL OFL 1.1) so a build never downloads it; see src/lib/fonts.ts.
+const wordmarkFont = localFont({
+  src: '../../fonts/instrument-serif/instrument-serif-latin-400-normal.woff2',
   weight: '400',
+  style: 'normal',
   display: 'swap',
 });
 
