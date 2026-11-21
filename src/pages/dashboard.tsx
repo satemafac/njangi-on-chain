@@ -44,6 +44,11 @@ import {
 } from '@/lib/wallet-coins';
 import { readWalletBalancesViaGraphql, type WalletBalanceReading } from '@/lib/wallet-balances';
 import {
+  readDynamicFieldsViaGraphql,
+  readDynamicFieldsViaJsonRpc,
+  type DynamicFieldReading,
+} from '@/lib/dynamic-fields-graphql';
+import {
   formatBaseUnits,
   formatBaseUnitsForDisplay,
   parseCoinAmount,
@@ -3939,10 +3944,21 @@ export default function Dashboard() {
                   // A failed read must throw, not become `[]`: with no fields the
                   // circle's config is never found, and the card showed (and
                   // cached) default amounts and a 3-member cap as if real.
-                  const dynamicFieldsResult = await client.getDynamicFields({
-                    parentId: circleId
-                  });
-                  console.log(`📋 Dynamic fields for circle ${circleId}:`, dynamicFieldsResult.data.length, 'fields');
+                  // Sui GraphQL first: every JSON-RPC endpoint can refuse at once
+                  // (NJA-2830) while GraphQL still answers. A failed, malformed or
+                  // partial GraphQL list throws and falls to JSON-RPC, which reads
+                  // every page too; when both fail this still throws, so the circle
+                  // is counted unreadable rather than read from a partial list.
+                  const fieldsNetwork = getCurrentNetwork();
+                  let dynamicFields: Array<DynamicFieldReading>;
+                  try {
+                    dynamicFields = await readDynamicFieldsViaGraphql(fieldsNetwork, circleId);
+                  } catch (graphqlError) {
+                    const graphqlErrorMessage = graphqlError instanceof Error ? graphqlError.message : String(graphqlError);
+                    console.warn(`GraphQL could not list the dynamic fields of circle ${circleId} on ${fieldsNetwork}, trying JSON-RPC: ${graphqlErrorMessage}`);
+                    dynamicFields = await readDynamicFieldsViaJsonRpc(client, circleId);
+                  }
+                  console.log(`📋 Dynamic fields for circle ${circleId}:`, dynamicFields.length, 'fields');
                   
                   // Add transaction input data if we have it
                   const transactionInput = transactionInputMap.get(circleId);
@@ -3952,7 +3968,7 @@ export default function Dashboard() {
                     ...objectData,
                     data: {
                       ...objectData.data,
-                      dynamicFields: dynamicFieldsResult.data,
+                      dynamicFields,
                     },
                     transactionInput
                   };
