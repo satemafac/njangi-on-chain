@@ -495,9 +495,9 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
       'Anything you saved before — your circles and your money — is still at the previous account. It has not been lost or moved. But this sign-in cannot reach it, and we cannot move funds between accounts for you.',
     'drift.reassure': 'We have been alerted automatically and are looking into it.',
     'drift.canStill':
-      'You can still collect a payout that is owed to you, ask for a refund, and take part in your circle’s recovery vote.',
+      'You can still collect a payout that is owed to you and take part in your circle’s recovery vote.',
     'drift.cannotYet':
-      'Joining a circle, creating one, and paying a contribution are paused until this is sorted out.',
+      'While we look into this, a request to join a circle will not be accepted from this account. Creating a circle or paying a contribution would go from the account you are in now, not your previous one, so we recommend waiting and contacting support before doing either.',
     'drift.support': 'Please contact support and mention both accounts shown above.',
     'drift.languageLabel': 'Language',
     'drift.dismiss': 'I understand',
@@ -1035,9 +1035,9 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
       'Tout ce que vous aviez — vos tontines et votre argent — se trouve toujours sur le compte précédent. Rien n’a été perdu ni déplacé. Mais cette connexion ne peut pas y accéder, et nous ne pouvons pas transférer des fonds d’un compte à l’autre à votre place.',
     'drift.reassure': 'Nous avons été alertés automatiquement et nous examinons la situation.',
     'drift.canStill':
-      'Vous pouvez toujours percevoir un versement qui vous est dû, demander un remboursement, et participer au vote de récupération de votre tontine.',
+      'Vous pouvez toujours percevoir un versement qui vous est dû et participer au vote de récupération de votre tontine.',
     'drift.cannotYet':
-      'Rejoindre une tontine, en créer une, et payer une cotisation sont suspendus le temps de régler cela.',
+      'Pendant que nous examinons la situation, une demande pour rejoindre une tontine n’est pas acceptée depuis ce compte. Créer une tontine ou payer une cotisation se ferait depuis le compte actuel et non depuis votre compte précédent, nous vous recommandons donc d’attendre et de contacter le support avant de le faire.',
     'drift.support': 'Veuillez contacter le support en mentionnant les deux comptes indiqués ci-dessus.',
     'drift.languageLabel': 'Langue',
     'drift.dismiss': 'J’ai compris',
