@@ -42,7 +42,10 @@ import { readCircleGoalContext, type CircleGoalContext } from '@/lib/milestone-d
 import type { NetworkType } from '@/services/whatsapp-registry-service';
 import { priceService } from '../../../services/price-service';
 import { getCirclePackageId, getSuiClientFromPool } from '../../../services/circle-service';
-import { readObject, queryEventsCached, invalidateObject, invalidateSuiRead } from '@/lib/sui-read';
+import { readObject, queryEventsCached, invalidateObject, invalidateSuiRead, isGoneObjectResponse } from '@/lib/sui-read';
+import { moveJsonToRpcFields, readObjectViaGraphql, type GraphqlMoveObject } from '@/lib/object-graphql';
+import { isCurrentMemberOrAdmin } from '@/lib/membership-discovery';
+import { memberEventTimes, membershipFromEventTimes, readEveryEvent } from '@/lib/circle-membership-events';
 import { resolveCustodyWalletId } from '@/lib/custody-wallet-discovery';
 import { recoveryCoinTypeErrorMessage, resolveRecoveryCoinType } from '@/lib/recovery-coin-type';
 import { getPooledSuiClient } from '@/services/sui-rpc-failover';
@@ -145,6 +148,26 @@ const canMemberTriggerAutoReleaseFromFieldObject = (value: unknown): boolean => 
   return status === 0 && suspensionEndTime === null;
 };
 
+/** The circle object as readObject (the JSON-RPC read) returns it. */
+type CircleObjectResponse = Awaited<ReturnType<typeof readObject>>;
+
+/**
+ * A circle read over Sui GraphQL, in the shape of the JSON-RPC read
+ * (`data.type` and `data.content.fields`, with `members.fields.id.id`), so
+ * fetchCircleDetails reads one shape whichever source answered. Only what
+ * GraphQL returned is carried: no digest or transfer flag is made up.
+ */
+const circleObjectResponseFromGraphql = (objectId: string, read: GraphqlMoveObject): CircleObjectResponse =>
+  ({
+    data: {
+      objectId,
+      version: read.version,
+      type: read.type,
+      content: { dataType: 'moveObject', type: read.type, fields: moveJsonToRpcFields(read.json) },
+    },
+  }) as unknown as CircleObjectResponse;
+
+
 /** What the confirmation dialog asks before a recovery transaction. */
 interface RecoveryConfirmation {
   title: string;
@@ -161,6 +184,9 @@ export default function CircleDetails() {
   const { isAuthenticated, isLoading: authLoading, userAddress, account } = useAuth();
   const [loading, setLoading] = useState(true);
   const [circle, setCircle] = useState<Circle | null>(null);
+  // A failed read is not a gone circle: true while the last load could not
+  // read the circle, so the page offers a retry instead of "Circle not found".
+  const [loadError, setLoadError] = useState(false);
   const [membersTableId, setMembersTableId] = useState<string | null>(null);
   // Smart-goal pot: detect whether this circle has a shared goal, then track its
   // collective progress so members can watch the pot grow on the overview page.
@@ -270,102 +296,54 @@ export default function CircleDetails() {
     
     try {
       const client = getSuiClientFromPool(getCurrentRpcUrl());
+      // Admin always has access, and so does an entry in the members table.
+      // isCurrentMemberOrAdmin reads both over Sui GraphQL first (it still
+      // answers when every JSON-RPC endpoint refuses JSON-RPC, NJA-2830) and
+      // over JSON-RPC second; null means neither source could be read.
+      const currentMember = await isCurrentMemberOrAdmin(client, id as string, userAddress);
+      if (currentMember === true) {
+        console.log('[Membership] User is the admin or in the members table, access granted');
+        return true;
+      }
+      // Only a verified absence may fall through to the event scan.
+      // Any other error is UNKNOWN — and the caller turns a false
+      // answer into "You are no longer a member of this circle" plus
+      // a forced redirect off the page.
+      if (currentMember !== false) {
+        console.warn('[Membership] Circle or members table unreadable, membership unknown');
+        return null;
+      }
+
       const determinedPackageId = await getCirclePackageId(id as string, userAddress);
       
-      // First check if user is the admin
-      const objectData = await readObject(id as string, { showContent: true });
-      
-      if (objectData.data?.content && 'fields' in objectData.data.content) {
-        const fields = objectData.data.content.fields as Record<string, SuiFieldValue>;
-        // Admin always has access
-        if (fields.admin === userAddress) {
-          console.log('[Membership] User is admin, access granted');
-          return true;
-        }
-        
-        // Check if user is in the members table
-        const circleFields = fields as { members?: { fields?: { id?: { id: string } } } };
-        if (circleFields.members?.fields?.id?.id) {
-          const membersTableId = circleFields.members.fields.id.id;
-          try {
-            const memberField = await client.getDynamicFieldObject({
-              parentId: membersTableId,
-              name: { type: 'address', value: userAddress }
-            });
-            
-            if (memberField.data?.content) {
-              console.log('[Membership] User found in members table, access granted');
-              return true;
-            }
-            // Only a verified absence may fall through to the event scan.
-            // Any other error is UNKNOWN — and the caller turns a false
-            // answer into "You are no longer a member of this circle" plus
-            // a forced redirect off the page.
-            if (memberField.error) {
-              const code = (memberField.error as { code?: string }).code ?? '';
-              if (code !== 'dynamicFieldNotFound') {
-                throw new Error(`members-table read failed: ${code || 'unknown'}`);
-              }
-            }
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            if (msg.includes('members-table read failed')) throw err;
-            console.log('[Membership] User not present in members table (verified absent)');
-          }
-        }
-      }
-      
       // Check if user ever joined this circle and get their join events
-      const joinEvents = await queryEventsCached({
-        query: { MoveEventType: `${determinedPackageId}::njangi_circles::MemberJoined` },
-        limit: 100
-      });
+      // (every page of them: an unread page is not "never joined")
+      const joinEvents = await readEveryEvent(`${determinedPackageId}::njangi_circles::MemberJoined`);
+      if (joinEvents === null) return null;
       
       // Find the user's join events for this circle and get the latest timestamp
-      const userJoinEvents = joinEvents.data.filter(event => {
-        const parsed = event.parsedJson as { circle_id?: string; member?: string };
-        return parsed?.circle_id === id && parsed?.member === userAddress;
-      });
+      const userJoinTimes = memberEventTimes(joinEvents, id as string, userAddress);
+      if (userJoinTimes === null) return null;
       
-      if (userJoinEvents.length === 0) {
+      if (userJoinTimes.length === 0) {
         console.log('[Membership] User never joined this circle');
         return false;
       }
-      
-      // Get the latest join timestamp
-      const latestJoinTimestamp = Math.max(...userJoinEvents.map(e => Number(e.timestampMs || 0)));
-      console.log(`[Membership] User's latest join timestamp: ${new Date(latestJoinTimestamp).toISOString()}`);
-      
+
       // Check for MemberRemoved events to see if user was removed
-      const removedEvents = await queryEventsCached({
-        query: { MoveEventType: `${determinedPackageId}::njangi_circles::MemberRemoved` },
-        limit: 100
-      });
-      
-      // Find the user's removal events for this circle and get the latest timestamp
-      const userRemovalEvents = removedEvents.data.filter(event => {
-        const parsed = event.parsedJson as { circle_id?: string; member?: string };
-        return parsed?.circle_id === id && parsed?.member === userAddress;
-      });
-      
-      if (userRemovalEvents.length > 0) {
-        const latestRemovalTimestamp = Math.max(...userRemovalEvents.map(e => Number(e.timestampMs || 0)));
-        console.log(`[Membership] User's latest removal timestamp: ${new Date(latestRemovalTimestamp).toISOString()}`);
-        
-        // If the user joined AFTER they were last removed, they have rejoined - allow access
-        if (latestJoinTimestamp > latestRemovalTimestamp) {
-          console.log('[Membership] User rejoined after removal, access granted');
-          return true;
-        }
-        
-        // User was removed after their last join - deny access
-        console.log('[Membership] User was removed after their last join, access denied');
-        return false;
-      }
-      
-      // User joined and was never removed - they should have access
-      console.log('[Membership] User joined and was never removed, access granted');
-      return true;
+      // (every page of them: an unread page is not "never removed")
+      const removedEvents = await readEveryEvent(`${determinedPackageId}::njangi_circles::MemberRemoved`);
+      if (removedEvents === null) return null;
+
+      // Find the user's removal events for this circle
+      const userRemovalTimes = memberEventTimes(removedEvents, id as string, userAddress);
+      if (userRemovalTimes === null) return null;
+
+      // Joined and never removed, or rejoined after the last removal: access.
+      // Removed after the last join: no access.
+      const member = membershipFromEventTimes(userJoinTimes, userRemovalTimes);
+      console.log(`[Membership] From join and removal events: ${member ? 'access granted' : 'removed after the last join, access denied'}`);
+      return member;
       
     } catch (error) {
       logSuiReadError('[Membership] Error verifying membership:', error);
@@ -423,13 +401,35 @@ export default function CircleDetails() {
 
     try {
       setLoading(true);
+      setLoadError(false);
       
       // Determine package ID for this circle
       const determinedPackageId = await getCirclePackageId(id as string, userAddress);
       console.log('Details - Using package ID:', determinedPackageId);
       setCirclePackageId(determinedPackageId);
-      // Get object data
-      const objectData = await readObject(id as string, { showContent: true, showType: true });
+      // Get object data: Sui GraphQL first, as the access check reads it (it
+      // still answers when every JSON-RPC endpoint refuses JSON-RPC,
+      // NJA-2830); the JSON-RPC read only when the GraphQL read fails.
+      let objectData: CircleObjectResponse;
+      try {
+        const viaGraphql = await readObjectViaGraphql(id as string);
+        if (viaGraphql === null) {
+          // `object: null` with no errors: the circle is gone, which is
+          // "Circle not found", not a load error.
+          console.log('Details - Circle object is gone:', id);
+          setCircle(null);
+          return;
+        }
+        objectData = circleObjectResponseFromGraphql(id as string, viaGraphql);
+      } catch (graphqlError) {
+        console.warn('Details - GraphQL circle read failed, trying JSON-RPC:', graphqlError);
+        objectData = await readObject(id as string, { showContent: true, showType: true });
+        if (isGoneObjectResponse(objectData)) {
+          console.log('Details - Circle object is gone:', id);
+          setCircle(null);
+          return;
+        }
+      }
       
       console.log('Details - Circle object data:', objectData);
       if (!objectData.data?.content || !('fields' in objectData.data.content)) {
@@ -669,6 +669,9 @@ export default function CircleDetails() {
         });
 
     } catch (error) {
+      // A failed read is not a gone circle: the page says so and offers a
+      // retry instead of "Circle not found" (a circle already shown stays).
+      setLoadError(true);
       // Transient cooldowns log quietly and skip the toast (self-heals on
       // refresh); only genuine failures surface to the user.
       if (!logSuiReadError('Details - Error fetching circle details:', error)) {
@@ -2381,6 +2384,35 @@ export default function CircleDetails() {
                 </p>
               </div>
             </aside>
+          </div>
+        ) : loadError ? (
+          <div className={`${pageSurfaceClass} p-12 text-center`}>
+            <AlertTriangle className="mx-auto h-8 w-8 text-[#b45309]" />
+            <h2 className="mt-4 text-2xl font-semibold tracking-[-0.04em] text-[#171923]">
+              Couldn&apos;t load this circle just now
+            </h2>
+            <p className="mt-3 text-sm leading-6 text-[#667085] sm:text-base">
+              The network did not answer when we read this circle. That is not
+              the same as the circle being gone, so try again in a moment.
+            </p>
+            <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
+              <button
+                onClick={() => {
+                  void fetchCircleDetails();
+                }}
+                className="inline-flex items-center gap-2 rounded-full bg-[#171923] px-4 py-2.5 text-sm font-semibold text-white transition-all duration-200 hover:-translate-y-0.5"
+              >
+                <RefreshCw className="h-4 w-4" />
+                Try again
+              </button>
+              <button
+                onClick={() => router.push('/dashboard')}
+                className="inline-flex items-center gap-2 rounded-full border border-[#d7cec1] bg-white px-4 py-2.5 text-sm font-semibold text-[#334155] transition-all duration-200 hover:-translate-y-0.5 hover:bg-[#fbfaf7]"
+              >
+                <ArrowLeft className="h-4 w-4" />
+                Back to dashboard
+              </button>
+            </div>
           </div>
         ) : (
           <div className={`${pageSurfaceClass} p-12 text-center`}>
