@@ -217,8 +217,10 @@ describe('readDynamicFieldsViaJsonRpc', () => {
       info(FIELD_A, 'circle_config'),
       info(FIELD_B, 'members'),
     ]);
+    // The first page is asked for by parentId alone (no cursor key), as src/lib/__tests__/circle-recovery-state.test.ts
+    // expects of the same read; changed with the founder's OK (2026-11-21).
     expect(getDynamicFields.mock.calls).toEqual([
-      [{ parentId: PARENT, cursor: null }],
+      [{ parentId: PARENT }],
       [{ parentId: PARENT, cursor: 'cursor-1' }],
     ]);
   });

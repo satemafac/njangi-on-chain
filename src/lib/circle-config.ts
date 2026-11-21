@@ -1,6 +1,12 @@
 import type { SuiClient } from '@mysten/sui/client';
 import type { NetworkType } from '@/config/public-env';
 import { getCurrentNetwork, getGraphqlUrlForNetwork } from '@/services/network-config';
+import {
+  readDynamicFieldsViaGraphql,
+  readDynamicFieldsViaJsonRpc,
+  type DynamicFieldReading,
+  type DynamicFieldsJsonRpcClient,
+} from '@/lib/dynamic-fields-graphql';
 
 export type CircleConfigFields = Record<string, unknown>;
 
@@ -223,11 +229,45 @@ export async function getCircleConfigFieldsFromDynamicFields(
   return getCircleConfigFieldsByObjectId(client, objectId, options);
 }
 
+/**
+ * Every dynamic field of `circleId`, listed completely. The Sui GraphQL
+ * service of `options.network` (the current network when absent) is asked
+ * first, since it answers when every endpoint refuses JSON-RPC (NJA-2830);
+ * when there is no GraphQL URL (or no `fetch`), or its list is failed,
+ * malformed or partial, the fields are listed with JSON-RPC getDynamicFields
+ * across every page. Throws when both fail: the first page, or any partial
+ * list, is never returned as the whole list.
+ */
+export async function readCircleDynamicFields(
+  client: DynamicFieldsJsonRpcClient,
+  circleId: string,
+  options?: CircleConfigReadOptions,
+): Promise<DynamicFieldReading[]> {
+  if (resolveCircleConfigGraphqlUrl(options?.network)) {
+    try {
+      return await readDynamicFieldsViaGraphql(options?.network ?? getCurrentNetwork(), circleId);
+    } catch (error) {
+      console.warn(
+        `Sui GraphQL could not list the dynamic fields of circle ${circleId}, listing them with JSON-RPC: ${describeCircleConfigReadError(error)}`,
+      );
+    }
+  }
+  return readDynamicFieldsViaJsonRpc(client, circleId);
+}
+
+/**
+ * The CircleConfig of `circleId`: the CircleConfig field of its complete
+ * dynamic-field list (readCircleDynamicFields), read as
+ * getCircleConfigFieldsByObjectId reads it, both from `options.network` (the
+ * current network when absent). Throws when the list or the config cannot be
+ * read; null means only that the complete list has no CircleConfig field (or
+ * that getObject reported it without content).
+ */
 export async function getCircleConfigFields(
   client: CircleConfigClient,
   circleId: string,
   options?: CircleConfigReadOptions,
 ): Promise<CircleConfigFields | null> {
-  const dynamicFields = await client.getDynamicFields({ parentId: circleId });
-  return getCircleConfigFieldsFromDynamicFields(client, dynamicFields.data, options);
+  const dynamicFields = await readCircleDynamicFields(client, circleId, options);
+  return getCircleConfigFieldsFromDynamicFields(client, dynamicFields, options);
 }

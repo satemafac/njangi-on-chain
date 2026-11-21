@@ -70,8 +70,12 @@ const originalFetch = globalWithFetch.fetch;
 const makeClient = (getObject: jest.Mock) =>
   ({
     getObject,
+    // A complete JSON-RPC page, as the endpoint returns it: getCircleConfigFields now reads every page and refuses
+    // a page that does not say whether more follow (it could be partial).
     getDynamicFields: jest.fn().mockResolvedValue({
       data: [{ objectId: CONFIG_FIELD_ID, objectType: '0x1::njangi_circle_config::CircleConfig' }],
+      hasNextPage: false,
+      nextCursor: null,
     }),
   }) as unknown as Parameters<typeof getCircleConfigFields>[0];
 
@@ -176,8 +180,11 @@ describe('which Sui GraphQL service a CircleConfig read asks', () => {
     ).resolves.toMatchObject(GRAPHQL_VALUE);
     expect(mockGraphqlUrlForNetwork).toHaveBeenCalledWith('mainnet');
     expect(fetchMock).toHaveBeenCalledWith(GRAPHQL_URLS.mainnet, expect.objectContaining({ method: 'POST' }));
-    const firstCall = fetchMock.mock.calls[0] as [string, { body?: unknown }];
-    expect(String(firstCall[1]?.body)).toContain(CONFIG_FIELD_ID);
+    // getCircleConfigFields now lists the circle's dynamic fields over GraphQL first (circles step 4b part 2), so
+    // the config read is not the first request any more; one of the requests reads the config object. Changed
+    // with the founder's OK (2026-11-21).
+    const bodies = fetchMock.mock.calls.map((call) => String((call as [string, { body?: unknown }])[1]?.body));
+    expect(bodies.some((body) => body.includes(CONFIG_FIELD_ID))).toBe(true);
   });
 
   it('reads with getObject only, and never fetches, when the network has no GraphQL URL', async () => {

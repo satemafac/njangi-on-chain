@@ -253,7 +253,11 @@ export async function readDynamicFieldsViaJsonRpc(
   const fields: DynamicFieldReading[] = [];
   let cursor: string | null = null;
   for (let page = 0; page < DYNAMIC_FIELDS_MAX_PAGES; page += 1) {
-    const result: DynamicFieldsJsonRpcPage = await client.getDynamicFields({ parentId, cursor });
+    // The first page is asked for by parentId alone; a cursor is sent only
+    // when following the nextCursor of the page before.
+    const result: DynamicFieldsJsonRpcPage = await client.getDynamicFields(
+      cursor === null ? { parentId } : { parentId, cursor },
+    );
     if (!result || !Array.isArray(result.data) || typeof result.hasNextPage !== 'boolean') {
       throw new Error(`JSON-RPC getDynamicFields returned an unreadable page of dynamic fields for ${parentId}`);
     }

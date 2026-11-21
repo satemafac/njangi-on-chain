@@ -112,8 +112,12 @@ describe('circle-config helpers', () => {
 
   it('loads config fields from a circle id', async () => {
     const client = {
+      // A complete JSON-RPC page, as the endpoint returns it: getCircleConfigFields reads every page and refuses a
+      // page that does not say whether more follow (it could be partial).
       getDynamicFields: jest.fn().mockResolvedValue({
         data: [{ objectId: '0xconfig', objectType: '0x1::njangi_circle_config::CircleConfig' }],
+        hasNextPage: false,
+        nextCursor: null,
       }),
       getObject: jest.fn().mockResolvedValue({
         data: {

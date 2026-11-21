@@ -809,6 +809,9 @@ describe('readCircleGoalContext', () => {
           name: { type: 'vector<u8>', value: 'circle_config' },
         },
       ],
+      // a complete page, as JSON-RPC returns it (the circle's field list is now read through every page)
+      hasNextPage: false,
+      nextCursor: null,
     });
   });
 

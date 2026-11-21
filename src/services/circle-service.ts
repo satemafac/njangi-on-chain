@@ -966,6 +966,9 @@ export async function batchFetchDynamicFields(
   const results = new Map<string, Array<Record<string, unknown>>>();
   const queue = [...circleIds];
   const inProgress = new Set<Promise<void>>();
+  // Each circle's complete field list: Sui GraphQL first, then JSON-RPC across
+  // every page (NJA-2830). A failed or partial list throws.
+  const { readCircleDynamicFields } = await import('@/lib/circle-config');
   
   console.log(`🔗 Batch fetching dynamic fields for ${circleIds.length} circles`);
   
@@ -980,18 +983,18 @@ export async function batchFetchDynamicFields(
         
         while (retryCount < maxRetries) {
           try {
-            const fields = await client.getDynamicFields({
-              parentId: circleId
-            });
-            results.set(circleId, fields?.data?.map(f => f as Record<string, unknown>) || []);
+            const fields = await readCircleDynamicFields(client, circleId);
+            results.set(circleId, fields.map((field): Record<string, unknown> => ({ ...field })));
             break; // Success, exit retry loop
           } catch (error) {
             retryCount++;
             const errorMsg = error instanceof Error ? error.message : String(error);
             
             if (retryCount >= maxRetries) {
-              console.warn(`Failed to fetch dynamic fields for circle ${circleId} after ${maxRetries} retries:`, errorMsg);
-              results.set(circleId, []); // Set empty array on failure
+              // A failed read is not "no fields": the circle is left out of the
+              // results (and named here) rather than stored as [], which reads
+              // as a circle without a CircleConfig and shows default amounts.
+              console.warn(`Failed to fetch dynamic fields for circle ${circleId} after ${maxRetries} retries, leaving it out of the results:`, errorMsg);
             } else {
               const delayMs = Math.pow(2, retryCount - 1) * 500; // 500ms, 1s, 2s backoff
               console.log(`⏳ Retrying dynamic fields for ${circleId} in ${delayMs}ms...`);
