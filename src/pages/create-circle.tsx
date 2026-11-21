@@ -189,10 +189,6 @@ interface CircleFormData {
   settlementAsset?: CreateCircleCoin;
   autoReleaseEnabled: boolean;
   autoReleaseDelayMs: number;
-  penaltyRules: {
-    latePayment: boolean;
-    missedMeeting: boolean;
-  };
   smartGoal?: {
     goalType: 'amount' | 'date';
     targetAmount?: number;
@@ -405,13 +401,9 @@ const prepareCircleCreationData = (formData: CircleFormData) => {
     ? (sgDepositMist > BigInt(0) ? sgDepositMist : BigInt(1))
     : BigInt(Math.round(formData.securityDeposit * 1e9));
 
-  // Convert penalty rules to array of booleans (none for smart-goal pools)
-  const penalty_rules = isSmartGoal
-    ? [false, false]
-    : [
-        formData.penaltyRules.latePayment,
-        formData.penaltyRules.missedMeeting
-      ];
+  // Penalties are never enforced: both builders send NO_PENALTY_RULES and never
+  // read this value (zklogin-tx-builders.ts). CircleData still requires the field.
+  const penalty_rules: boolean[] = [false, false]; // NJA-3334: same for every circle
 
   // Prepend the chosen emoji so it travels with the goal name everywhere. Falls
   // back to the same 🎯 default the picker shows, so the persisted name always
@@ -502,10 +494,6 @@ export default function CreateCircle() {
     settlementAsset: DEFAULT_CREATE_CIRCLE_COIN,
     autoReleaseEnabled: false,
     autoReleaseDelayMs: 0,
-    penaltyRules: {
-      latePayment: false,
-      missedMeeting: false,
-    },
   });
   const [suiPrice, setSuiPrice] = useState<number | null>(null); // Changed to allow null
   // Where suiPrice came from (sui-price-reading.ts). isPriceAvailable is
@@ -814,16 +802,6 @@ export default function CreateCircle() {
         }));
       })
       .finally(() => setCheckingSmartGoalAccess(false));
-  };
-
-  const handlePenaltyChange = (name: string, checked: boolean) => {
-    setFormData(prev => ({
-      ...prev,
-      penaltyRules: {
-        ...prev.penaltyRules,
-        [name]: checked,
-      },
-    }));
   };
 
   const minimumAutoReleaseDelayMs = getMinimumAutoReleaseDelayMs(formData.cycleLength);
@@ -2388,53 +2366,6 @@ The Njangi On-Chain Team`;
                 )}
               </div>
 
-
-              {/* Penalty Rules */}
-              <div className="space-y-4">
-                <div className="flex items-center flex-wrap">
-                  <h3 className="text-sm font-medium text-gray-700">Penalty Rules</h3>
-                  <InfoTooltip>
-                    <p>Optional rules to maintain group discipline</p>
-                    <p className="text-gray-300 text-xs mt-1">Late Payment: Charge fee for delayed contributions</p>
-                    <p className="text-gray-300 text-xs mt-1">Missed Meeting: Penalty for skipping group meetings</p>
-                    <p className="text-gray-300 text-xs mt-1">Penalties are deducted from security deposit</p>
-                  </InfoTooltip>
-                </div>
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between">
-                    <label
-                      htmlFor="latePayment"
-                      className="text-sm text-gray-700"
-                    >
-                      Enable Late Payment Penalties
-                    </label>
-                    <Switch.Root
-                      id="latePayment"
-                      checked={formData.penaltyRules.latePayment}
-                      onCheckedChange={(checked) => handlePenaltyChange('latePayment', checked)}
-                      className="w-11 h-6 bg-gray-200 rounded-full relative data-[state=checked]:bg-blue-500 transition-colors duration-200"
-                    >
-                      <Switch.Thumb className="block w-5 h-5 bg-white rounded-full shadow-lg transition-transform duration-200 transform translate-x-0.5 data-[state=checked]:translate-x-[22px]" />
-                    </Switch.Root>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <label
-                      htmlFor="missedMeeting"
-                      className="text-sm text-gray-700"
-                    >
-                      Enable Missed Meeting Penalties
-                    </label>
-                    <Switch.Root
-                      id="missedMeeting"
-                      checked={formData.penaltyRules.missedMeeting}
-                      onCheckedChange={(checked) => handlePenaltyChange('missedMeeting', checked)}
-                      className="w-11 h-6 bg-gray-200 rounded-full relative data-[state=checked]:bg-blue-500 transition-colors duration-200"
-                    >
-                      <Switch.Thumb className="block w-5 h-5 bg-white rounded-full shadow-lg transition-transform duration-200 transform translate-x-0.5 data-[state=checked]:translate-x-[22px]" />
-                    </Switch.Root>
-                  </div>
-                </div>
-              </div>
 
               <div className="space-y-4 rounded-[24px] border border-[#e6dccd] bg-[#fcfaf6] p-4 sm:p-5">
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
