@@ -174,8 +174,8 @@ export default function LearnIndexPage() {
             <SourcedStat fact={REMITTANCE_COST_AFRICA} />
             <SourcedStat fact={SAVINGS_CLUB_PARTICIPATION} />
             <PlainStat
-              value="Self-custodied"
-              label="No operator function can move member funds — the contract has no admin path to a circle's balance"
+              value="Escrow contract"
+              label="Contributions sit in each circle's escrow contract until the member whose turn it is collects them. Our FAQ explains who holds the contract's upgrade key."
             />
           </div>
         </section>

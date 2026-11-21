@@ -176,7 +176,7 @@ const COMPARISON_CARDS = [
     highlight: true,
     items: [
       'Shared visibility for turns, contributions, and approvals',
-      'Direct wallet settlement with self-custody',
+      "Contributions held by the circle's escrow contract until the member whose turn it is collects them",
       'Social sign-in through zkLogin',
       'A calmer operating layer for distributed communities',
     ],
@@ -538,10 +538,10 @@ export default function Home() {
       <Seo
         title="Njangi On-Chain — Rotating Savings Circles for the Diaspora"
         titleAbsolute
-        description="Njangi, tontine, susu, esusu — the rotating savings circle your community already runs, now self-custodied and verifiable. No treasurer, no seed phrase."
+        description="Njangi, tontine, susu, esusu — the rotating savings circle your community already runs, now with each contribution held by the circle's escrow contract until the member whose turn it is collects it. No treasurer, no seed phrase."
         path="/"
         ogTitle="Njangi On-Chain — savings circles for the global diaspora"
-        ogDescription="The rotating savings circle your community already trusts — njangi, esusu, tontine — now self-custodied, scheduled, and verifiable on-chain. No treasurer. No seed phrase."
+        ogDescription="The rotating savings circle your community already trusts — njangi, esusu, tontine — now on a schedule, with each contribution held by the circle's escrow contract until the member whose turn it is collects it. No treasurer. No seed phrase."
         themeColor="#000000"
         jsonLd={[website(), webApplication()]}
       />

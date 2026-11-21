@@ -206,9 +206,9 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'landing.feature.sharedVisibility.title': 'Everyone sees the same ledger',
     'landing.feature.sharedVisibility.body':
       "Contributions, payout order, and who's next are visible to the whole circle — not living in one person's chat history or notebook.",
-    'landing.feature.selfCustody.title': 'No one holds the pot but the chain',
+    'landing.feature.selfCustody.title': 'The pot sits in an escrow contract, not with a treasurer',
     'landing.feature.selfCustody.body':
-      "Members contribute from and get paid to their own wallets. Njangi never holds a balance, so there's no treasurer to chase and nothing for us to lose.",
+      "Members contribute from their own wallets and sign their own transactions. Each contribution is held by the circle's escrow contract until the member whose turn it is collects it, so no treasurer holds the cash. Our FAQ explains how the escrow contract works and who holds its upgrade key.",
     'landing.feature.borderless.title': 'One circle across many countries',
     'landing.feature.borderless.body':
       'Diaspora groups stay in sync without depending on a single bank, currency, or time zone. Save together from anywhere.',
@@ -747,9 +747,9 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'landing.feature.sharedVisibility.title': 'Tout le monde voit le même registre',
     'landing.feature.sharedVisibility.body':
       "Les cotisations, l'ordre des versements et le prochain bénéficiaire sont visibles par tout le cercle — pas enfouis dans la messagerie ou le carnet d'une seule personne.",
-    'landing.feature.selfCustody.title': 'Personne ne détient la cagnotte, sauf la blockchain',
+    'landing.feature.selfCustody.title': 'La cagnotte est dans un contrat de séquestre, pas chez un trésorier',
     'landing.feature.selfCustody.body':
-      "Les membres cotisent depuis leur propre portefeuille et y reçoivent leurs paiements. Njangi ne détient jamais de solde : aucun trésorier à relancer, et rien que nous puissions perdre.",
+      "Les membres cotisent depuis leur propre portefeuille et signent leurs propres transactions. Chaque cotisation est gardée par le contrat de séquestre du cercle jusqu'à ce que le membre dont c'est le tour la récupère : aucun trésorier ne détient l'argent. Notre FAQ explique le fonctionnement du contrat de séquestre et qui détient sa clé de mise à jour.",
     'landing.feature.borderless.title': 'Un seul cercle, plusieurs pays',
     'landing.feature.borderless.body':
       "Les groupes de la diaspora restent synchronisés sans dépendre d'une seule banque, devise ou fuseau horaire. Épargnez ensemble, où que vous soyez.",
