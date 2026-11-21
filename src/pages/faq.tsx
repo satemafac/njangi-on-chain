@@ -44,7 +44,7 @@ export default function FAQPage() {
         {
           id: "how-to-start",
           question: "How do I get started with Njangi On-Chain?",
-          answer: "Getting started is simple: 1) Click 'Login' and sign in with your Google, Facebook or Apple account using zkLogin, 2) Create a new savings circle, or join one from the invite link its organiser sends you, 3) Agree the contribution amount and rotation order with your group, 4) Post your security deposit and start contributing. There is no seed phrase to write down; contributions are paid in USDC or SUI."
+          answer: "Getting started is simple: 1) Click 'Login' and sign in with your Google, Facebook or Apple account using zkLogin, 2) Create a new savings circle, or join one from the invite link its organiser sends you, 3) Agree the contribution amount and rotation order with your group, 4) Post your security deposit and start contributing. There is no seed phrase to write down; contributions are paid in USDC."
         },
         {
           id: "cost-to-use",
@@ -54,7 +54,7 @@ export default function FAQPage() {
         {
           id: "currencies-supported",
           question: "What currencies can I use?",
-          answer: "Two: USDC and SUI. USDC is a digital dollar, so a circle spread across countries can agree an amount that holds its value. Do not send any other asset, and do not send over any network other than Sui — funds sent another way cannot be recovered."
+          answer: "Circles settle in USDC. USDC is a digital dollar, so a circle spread across countries can agree an amount that holds its value. You keep a little SUI only to pay the small Sui network fees; it is not a contribution currency. Do not send any other asset, and do not send over any network other than Sui — funds sent another way cannot be recovered."
         }
       ]
     },
