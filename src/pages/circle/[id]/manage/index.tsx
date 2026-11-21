@@ -720,7 +720,6 @@ export default function ManageCircle() {
       usdcContributions,
     });
   };
-  const [paidOutInCurrentSessionMembers, setPaidOutInCurrentSessionMembers] = useState<Set<string>>(new Set());
 
   // State for local currency display of custody USDC balances in manage page
   const [manageCustodyUsdcTotalLocalDisplay, setManageCustodyUsdcTotalLocalDisplay] = useState<string | null>(null);
@@ -786,11 +785,6 @@ export default function ManageCircle() {
     large: { min: 11, max: 20, label: 'Large circle (11-20 members)', description: 'Larger pool, longer wait for payouts' }
   };
 
-  // Add state for security deposit payout modal
-  const [showPayoutDepositModal, setShowPayoutDepositModal] = useState(false);
-  const [selectedMembersForPayout, setSelectedMembersForPayout] = useState<Set<string>>(new Set());
-  const [isProcessingPayout, setIsProcessingPayout] = useState(false);
-  const [payoutProgress, setPayoutProgress] = useState<{current: number, total: number}>({current: 0, total: 0});
   const [isMobileOverviewSheetOpen, setIsMobileOverviewSheetOpen] = useState(false);
   const [selectedMobileMember, setSelectedMobileMember] = useState<Member | null>(null);
   const manageSectionRefs = useRef<Record<ManageSectionKey, HTMLElement | null>>({
@@ -1698,105 +1692,15 @@ export default function ManageCircle() {
     });
   };
 
-  // Handler for returning security deposit to a member
-  const handleReturnSecurityDeposit = async (memberAddress: string) => {
-    if (!circle || !id) return;
-    const canReturnSecurityDeposit = !circle.isActive || circle.paused;
-
-    if (!canReturnSecurityDeposit) {
-      toast.error('Security deposits can only be returned when the circle is inactive or paused after a cycle.');
-      return;
-    }
-
-    // Show confirmation modal
-    setConfirmationModal({
-      isOpen: true,
-      title: 'Return Security Deposit',
-      message: (
-        <div className="space-y-3">
-          <p>
-            Are you sure you want to return the security deposit to <strong>{shortenAddress(memberAddress)}</strong>?
-          </p>
-          <p className="text-sm text-gray-600">
-            This will withdraw their security deposit from the circle&apos;s wallet and send it back to their address. Deposits can be returned when the circle is inactive or paused after a cycle.
-          </p>
-          <p className="text-sm text-amber-600 font-medium">
-            Make sure the member has completed their obligations in the circle before returning their deposit.
-          </p>
-        </div>
-      ),
-      onConfirm: async () => {
-        if (!circle.custody?.walletId) {
-          toast.error('Circle wallet not found');
-          return;
-        }
-
-        const toastId = 'return-deposit';
-        toast.loading(`Returning security deposit to ${shortenAddress(memberAddress)}...`, { id: toastId });
-        
-        try {
-          // Use a direct API call to return security deposit to the specific member
-          const response = await fetch('/api/zkLogin', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              action: 'returnSecurityDeposit',
-              account,
-              circleId: id,
-              walletId: circle.custody.walletId,
-              memberAddress: memberAddress,
-              network: getCurrentNetwork()
-            })
-          });
-          
-          const responseData = await response.json();
-          
-          // Check HTTP response status
-          if (!response.ok) {
-            throw new Error(responseData.error || 'Failed to return security deposit');
-          }
-          
-          // Also check transaction status in response body
-          if (responseData.status === 'failure') {
-            console.error('Transaction failed:', responseData);
-            throw new Error(responseData.error || responseData.details || 'Transaction failed on blockchain');
-          }
-          
-          toast.success(`Security deposit returned to ${shortenAddress(memberAddress)}`, { id: toastId });
-          
-          // Refresh circle data to reflect the updated wallet balance
-          await fetchCircleDetails();
-          
-        } catch (error) {
-          console.error('Error returning security deposit:', error);
-          toast.error(`Failed to return security deposit: ${error instanceof Error ? error.message : String(error)}`, { id: toastId });
-        }
-      },
-      confirmText: 'Return Deposit',
-      cancelText: 'Cancel',
-      confirmButtonVariant: 'warning',
-    });
-  };
-
   const getMemberManagementAction = (member: Member) => {
     if (!circle || userAddress !== circle.admin) {
       return null;
     }
 
     const isAdminMember = member.address === circle.admin;
-    const canReturnDeposit = !circle.isActive || circle.paused;
 
     if (isAdminMember) {
-      if (!member.depositPaid) {
-        return null;
-      }
-
-      return {
-        buttonText: 'Manage',
-        helperText: canReturnDeposit ? 'Return deposit' : 'Available when inactive or paused',
-        isDisabled: !canReturnDeposit,
-        onClick: () => handleReturnSecurityDeposit(member.address),
-      };
+      return null;
     }
 
     const canRemoveMember = !circle.isActive;
@@ -4931,129 +4835,6 @@ export default function ManageCircle() {
     }
   };
 
-  // Function to handle security deposit returns for multiple members
-  const handleSecurityDepositPayout = async (memberAddresses: string[]) => {
-    if (!circle || !circle.id || !account) {
-      toast.error('Missing circle information or account.');
-      return;
-    }
-
-    if (!circle.custody?.walletId) {
-      toast.error('Custody wallet information is not available.');
-      return;
-    }
-
-    if (circle.isActive && !circle.paused) {
-      toast.error('Security deposits can only be returned when the circle is inactive or paused after a cycle.');
-      return;
-    }
-
-    if (memberAddresses.length === 0) {
-      toast.error('No members selected for deposit return.');
-      return;
-    }
-
-    setIsProcessingPayout(true);
-    const toastId = 'security-deposit-payout';
-    
-    try {
-      toast.loading(`Returning security deposits for ${memberAddresses.length} member(s)...`, { id: toastId });
-      setPayoutProgress({current: 0, total: memberAddresses.length});
-      
-      // Track actual successful payouts
-      let successCount = 0;
-      
-      // Process each member sequentially
-      for (let i = 0; i < memberAddresses.length; i++) {
-        const memberAddress = memberAddresses[i];
-        setPayoutProgress({current: i + 1, total: memberAddresses.length});
-        
-        try {
-          // Check if wallet ID is available
-          if (!circle.custody?.walletId) {
-            throw new Error('Wallet ID is required but not available');
-          }
-          
-          // Ensure address has proper format
-          const normalizedAddress = memberAddress.startsWith('0x') ? memberAddress : `0x${memberAddress}`;
-          
-          const response = await fetch('/api/zkLogin', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              action: 'returnSecurityDeposit',
-              account,
-              circleId: circle.id,
-              walletId: circle.custody.walletId,
-              memberAddress: normalizedAddress,
-              network: getCurrentNetwork()
-            })
-          });
-
-          const responseData = await response.json();
-
-          if (!response.ok) {
-            if (response.status === 401 || responseData.requireRelogin) {
-              throw new ZkLoginError(
-                responseData.error || 'Authentication failed. Please login again.',
-                true
-              );
-            }
-            throw new Error(responseData.error || 'Failed to return security deposit');
-          }
-
-          if (responseData.status === 'failure') {
-            throw new Error(responseData.error || responseData.details || 'Transaction failed on blockchain');
-          }
-          
-          console.log(`Security deposit return executed for ${shortenAddress(memberAddress)}. Digest: ${responseData.digest}`);
-          
-          // Add to paid out set for immediate UI update in modal
-          setPaidOutInCurrentSessionMembers(prev => new Set(prev).add(memberAddress));
-          
-          // Increment success counter
-          successCount++;
-          
-        } catch (memberError) {
-          console.error(`Error returning security deposit for ${shortenAddress(memberAddress)}:`, memberError);
-          toast.error(`Failed to return deposit for ${shortenAddress(memberAddress)}: ${memberError instanceof Error ? memberError.message : 'Unknown error'}`, 
-            { id: `${toastId}-error-${i}`, duration: 5000 });
-          
-          // Continue with next member even if one fails
-          if (memberError instanceof ZkLoginError && memberError.requireRelogin) {
-            router.push('/');
-            break;
-          }
-        }
-      }
-      
-      // Update the UI - refresh circle data and member status
-      await fetchCircleDetails();
-      
-      // Show success message with actual success count
-      toast.success(`Completed security deposit returns: ${successCount}/${memberAddresses.length} successful`, { id: toastId });
-      
-      // Close the modal and reset selections
-      setShowPayoutDepositModal(false);
-      setSelectedMembersForPayout(new Set());
-      // setPaidOutInCurrentSessionMembers(new Set()); // Clear for next modal opening if desired, or let fetchCircleDetails handle it
-      
-    } catch (error) {
-      console.error('Error processing multiple security deposit returns:', error);
-      
-      // Parse the error for a more specific message
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
-      toast.error(errorMessage, { id: toastId });
-      
-      if (error instanceof ZkLoginError && error.requireRelogin) {
-        router.push('/');
-      }
-    } finally {
-      setIsProcessingPayout(false);
-      setPayoutProgress({current: 0, total: 0});
-    }
-  };
-
   const pageSurfaceClass =
     'rounded-[28px] border border-stone-200 bg-white shadow-[0_24px_70px_-42px_rgba(15,23,42,0.32)] sm:rounded-[32px]';
   const sectionCardClass =
@@ -5782,7 +5563,7 @@ export default function ManageCircle() {
                           Deposit Management
                         </h3>
                         <p className="mt-3 text-sm leading-6 text-sky-900/80">
-                          This circle is inactive. Manage individual member actions from the Members table, or use the deposit manager to return all {paidDepositMembers.length} paid deposit{paidDepositMembers.length === 1 ? '' : 's'} in one batch.
+                          This circle is inactive. Manage individual member actions from the Members table.
                         </p>
                       </div>
                       <div className="flex flex-col gap-3 w-full sm:w-auto">
@@ -6417,7 +6198,7 @@ export default function ManageCircle() {
                       <h3 className={`${sectionTitleClass} mt-2`}>Members</h3>
                       {!circle.isActive && paidDepositMembers.length > 0 && (
                         <p className="mt-2 text-sm leading-6 text-slate-500">
-                          Use member-level actions for individual cases, or manage deposits above for a batch return.
+                          Use member-level actions for individual cases.
                         </p>
                       )}
                     </div>
