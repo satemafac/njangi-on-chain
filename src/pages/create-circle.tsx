@@ -566,24 +566,19 @@ export default function CreateCircle() {
     return incrementMap[currency] || 20;
   };
 
-  const getCurrencyMaximum = (currency: string): number => {
-    // Set appropriate maximums based on currency value
-    const maxMap: Record<string, number> = {
-      // Western currencies
-      USD: 1000,
-      EUR: 1000,
-      GBP: 800,
-      CAD: 1300,
-      // African currencies - higher maximums
-      NGN: 500000,    // ₦500,000 (~$312)
-      ZAR: 15000,     // R15,000 (~$800)
-      GHS: 12500,     // ₵12,500 (~$1,050)
-      KES: 125000,    // KSh125,000 (~$950)
-      EGP: 25000,     // ج.م25,000 (~$800)
-      MAD: 10000,     // DH10,000 (~$1,000)
-      XAF: 600000,    // 600,000 FCFA (~$1,000)
-    };
-    return maxMap[currency] || 1000;
+  // Upper end of the security-deposit slider, derived from the circle's own
+  // contribution rather than a per-currency table: DEPOSIT_SLIDER_CONTRIBUTIONS
+  // contributions, so the half-contribution default (deriveSecurityDeposit)
+  // always sits inside the range and can be raised, widened to the current
+  // deposit so an amount set through "Custom Amount" stays on the track.
+  // Without a positive, finite contribution (or with a deposit that is not a
+  // finite number) there is no range to derive: returns null and the slider
+  // renders disabled instead of falling back to a fixed figure.
+  const depositSliderMax = (contributionLocal: number, depositLocal: number): number | null => {
+    const DEPOSIT_SLIDER_CONTRIBUTIONS = 2;
+    if (!Number.isFinite(contributionLocal) || contributionLocal <= 0) return null;
+    if (!Number.isFinite(depositLocal)) return null;
+    return Math.max(DEPOSIT_SLIDER_CONTRIBUTIONS * contributionLocal, depositLocal);
   };
 
   const snapToCurrencyIncrement = (localAmount: number, currency: string, forceSnap: boolean = false) => {
@@ -2327,24 +2322,45 @@ The Njangi On-Chain Team`;
                     <Tooltip.Root>
                       <Tooltip.Trigger asChild>
                         <div className="px-2">
-                          <Slider.Root
-                            className="relative flex items-center select-none touch-none w-full h-5"
-                            value={[formData.securityDepositLocal]}
-                            max={getCurrencyMaximum(formData.selectedCurrency)}
-                            step={getCurrencyIncrement(formData.selectedCurrency)}
-                            onValueChange={async ([value]) => {
-                              setDepositOverridden(true);
-                              await handleLocalInputChange('securityDepositLocal', value);
-                            }}
-                          >
-                            <Slider.Track className="bg-gray-200 relative grow rounded-full h-2">
-                              <Slider.Range className="absolute bg-blue-500 rounded-full h-full" />
-                            </Slider.Track>
-                            <Slider.Thumb
-                              className="block w-5 h-5 bg-white shadow-lg rounded-full border-2 border-blue-500 hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                              aria-label="Security deposit"
-                            />
-                          </Slider.Root>
+                          {(() => {
+                            // The range follows the contribution; without a
+                            // usable one there is none to offer, so the track
+                            // renders disabled rather than with invented bounds.
+                            const depositRangeMax = depositSliderMax(
+                              formData.contributionAmountLocal,
+                              formData.securityDepositLocal,
+                            );
+                            if (depositRangeMax === null) {
+                              return (
+                                <div
+                                  className="relative flex items-center select-none w-full h-5 opacity-50 cursor-not-allowed"
+                                  aria-disabled="true"
+                                >
+                                  <div className="bg-gray-200 relative grow rounded-full h-2" />
+                                </div>
+                              );
+                            }
+                            return (
+                              <Slider.Root
+                                className="relative flex items-center select-none touch-none w-full h-5"
+                                value={[formData.securityDepositLocal]}
+                                max={depositRangeMax}
+                                step={getCurrencyIncrement(formData.selectedCurrency)}
+                                onValueChange={async ([value]) => {
+                                  setDepositOverridden(true);
+                                  await handleLocalInputChange('securityDepositLocal', value);
+                                }}
+                              >
+                                <Slider.Track className="bg-gray-200 relative grow rounded-full h-2">
+                                  <Slider.Range className="absolute bg-blue-500 rounded-full h-full" />
+                                </Slider.Track>
+                                <Slider.Thumb
+                                  className="block w-5 h-5 bg-white shadow-lg rounded-full border-2 border-blue-500 hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                  aria-label="Security deposit"
+                                />
+                              </Slider.Root>
+                            );
+                          })()}
                         </div>
                       </Tooltip.Trigger>
                       <Tooltip.Portal>
