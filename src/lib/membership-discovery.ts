@@ -472,3 +472,178 @@ export async function isCurrentMemberOrAdmin(
   }
   return member.data?.content ? true : null;
 }
+
+/** One entry of a circle's members table with its value, the Member's own
+ *  fields as JSON. The entry is named as MEMBERS_ENTRY_QUERY names it (the
+ *  member's BCS bytes, through address(...) on the table id); a Table's
+ *  entries are dynamic fields, so the value is a MoveValue. */
+const MEMBERS_ENTRY_VALUE_QUERY = `query ($table: SuiAddress!, $bcs: Base64!) {
+  address(address: $table) {
+    dynamicField(name: { type: "address", bcs: $bcs }) { value { ... on MoveValue { json } } }
+  }
+}`;
+
+/** `value` when it is a plain object, otherwise null. */
+function memberRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+/** The Member at `memberHex` in members table `membersTableId`, from Sui
+ *  GraphQL: its fields (`value.json`), or null when the table answered and
+ *  holds no entry for the address (`dynamicField: null`). Throws on anything
+ *  else (a failed request, `errors`, no `data`, `address: null`, a value
+ *  without a `json` object), so an unreadable answer is never "not a
+ *  member". */
+async function readMembersTableEntryViaGraphql(
+  url: string,
+  membersTableId: string,
+  memberHex: string,
+): Promise<Record<string, unknown> | null> {
+  const table = readField(
+    await queryGraphqlData(url, MEMBERS_ENTRY_VALUE_QUERY, { table: membersTableId, bcs: hexToBase64(memberHex) }),
+    'address',
+  );
+  const entry = readField(table, 'dynamicField');
+  // `address: null`, no `address`, or no `dynamicField` in it: not an answer.
+  if (entry === undefined) {
+    throw new Error(`GraphQL ${url} returned no answer for members table ${membersTableId}`);
+  }
+  if (entry === null) {
+    return null; // The table answered and holds no entry for this address.
+  }
+  const member = memberRecord(readField(readField(entry, 'value'), 'json'));
+  if (member === null) {
+    throw new Error(`GraphQL ${url} returned an unreadable members entry in ${membersTableId}`);
+  }
+  return member;
+}
+
+/** The same entry read with JSON-RPC getDynamicFieldObject: the Member's
+ *  fields (`content.fields.value.fields`), or null only for
+ *  `dynamicFieldNotFound`. Throws on any other error, a rejected request, a
+ *  response without the entry, or a value without its fields. */
+async function readMembersTableEntryViaJsonRpc(
+  client: Pick<SuiClient, 'getDynamicFieldObject'>,
+  membersTableId: string,
+  address: string,
+): Promise<Record<string, unknown> | null> {
+  const response = await client.getDynamicFieldObject({
+    parentId: membersTableId,
+    name: { type: 'address', value: address },
+  });
+  if (response.error) {
+    if (response.error.code === 'dynamicFieldNotFound') {
+      return null; // Verified absence.
+    }
+    throw new Error(`JSON-RPC answered ${response.error.code} for ${address} in members table ${membersTableId}`);
+  }
+  const content: unknown = response.data?.content;
+  const member = memberRecord(readField(readField(readField(content, 'fields'), 'value'), 'fields'));
+  if (readField(content, 'dataType') !== 'moveObject' || member === null) {
+    throw new Error(`JSON-RPC returned an unreadable members entry for ${address} in ${membersTableId}`);
+  }
+  return member;
+}
+
+/**
+ * The Member at `address` in the members table `membersTableId`: the
+ * member's own fields as one record (`status`, `suspension_end_time`, ...),
+ * as the transport that answered renders them, or null only for a confirmed
+ * absence (`dynamicField: null`, or JSON-RPC `dynamicFieldNotFound`).
+ *
+ * Sui GraphQL is asked first: it still answers when every JSON-RPC endpoint
+ * refuses JSON-RPC (NJA-2830). When there is no GraphQL URL (or no `fetch`),
+ * or its read is not a confirmed answer, `client.getDynamicFieldObject` is
+ * asked. Throws when neither transport reads the entry, or when `address` is
+ * not a Sui address: a failed read is never "not a member".
+ */
+export async function readMembersTableEntry(
+  client: Pick<SuiClient, 'getDynamicFieldObject'>,
+  membersTableId: string,
+  address: string,
+): Promise<Record<string, unknown> | null> {
+  const memberHex = addressHex(address);
+  if (memberHex === null) {
+    throw new Error(`[membership-discovery] ${address} is not a Sui address`);
+  }
+
+  let graphqlFailure = 'no Sui GraphQL URL to ask';
+  try {
+    const url = membershipGraphqlUrl();
+    if (url !== null) {
+      return await readMembersTableEntryViaGraphql(url, membersTableId, memberHex);
+    }
+  } catch (error) {
+    graphqlFailure = describeError(error);
+    console.warn(
+      `[membership-discovery] GraphQL read of ${address} in members table ${membersTableId} failed, trying JSON-RPC: ${graphqlFailure}`,
+    );
+  }
+
+  try {
+    return await readMembersTableEntryViaJsonRpc(client, membersTableId, address);
+  } catch (rpcError) {
+    throw Object.assign(
+      new Error(
+        `[membership-discovery] no source read ${address} in members table ${membersTableId}. GraphQL: ${graphqlFailure}. JSON-RPC: ${describeError(rpcError)}`,
+      ),
+      { cause: rpcError },
+    );
+  }
+}
+
+/** Whether a Move unsigned integer, as either transport renders it (a
+ *  non-negative integer, or a decimal string for a u64), is zero; null when
+ *  the value is not one. */
+function memberUnsignedIsZero(value: unknown): boolean | null {
+  if (typeof value === 'number') {
+    return Number.isSafeInteger(value) && value >= 0 ? value === 0 : null;
+  }
+  if (typeof value === 'string') {
+    return /^\d+$/.test(value) ? /^0+$/.test(value) : null;
+  }
+  return null;
+}
+
+/** Whether an `Option<u64>` holds a value, as either transport renders it:
+ *  `null` for none and the u64 itself for some (Sui GraphQL, current
+ *  JSON-RPC), or `{ vec: [] }` / `{ vec: [u64] }`, bare or under `fields`
+ *  (older JSON-RPC). Null when it is none of these, a missing key included. */
+function memberOptionIsSome(value: unknown): boolean | null {
+  if (value === null) {
+    return false;
+  }
+  if (memberUnsignedIsZero(value) !== null) {
+    return true;
+  }
+  const record = memberRecord(value);
+  const option = record !== null && 'fields' in record ? memberRecord(record.fields) : record;
+  const vec = option !== null ? option.vec : undefined;
+  if (!Array.isArray(vec) || vec.length > 1) {
+    return null;
+  }
+  if (vec.length === 0) {
+    return false;
+  }
+  return memberUnsignedIsZero(vec[0]) !== null ? true : null;
+}
+
+/**
+ * Whether a member, as readMembersTableEntry returns it, may trigger a
+ * recovery auto-release: status 0 (active) and no suspension_end_time.
+ * Throws when either field is missing or unreadable: an unreadable member is
+ * a failed read, never permission and never a refusal.
+ */
+export function memberEntryCanTriggerAutoRelease(member: Record<string, unknown>): boolean {
+  const active = memberUnsignedIsZero(member.status);
+  if (active === null) {
+    throw new Error('[membership-discovery] members entry without a readable status');
+  }
+  const suspended = memberOptionIsSome(member.suspension_end_time);
+  if (suspended === null) {
+    throw new Error('[membership-discovery] members entry without a readable suspension_end_time');
+  }
+  return active && !suspended;
+}
