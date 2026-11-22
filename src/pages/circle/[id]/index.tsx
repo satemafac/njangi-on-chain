@@ -22,7 +22,7 @@ import * as Tooltip from '@radix-ui/react-tooltip';
 import { RecoveryProposalCard } from '@/components/recovery/RecoveryProposalCard';
 import { RecoveryRefundTable } from '@/components/recovery/RecoveryRefundTable';
 import { RecoveryStateBadge } from '@/components/recovery/RecoveryStateBadge';
-import { getCircleConfigFieldsFromDynamicFields } from '@/lib/circle-config';
+import { getCircleConfigFields } from '@/lib/circle-config';
 import {
   getRecoveryAutoReleaseUiState,
   parseRecoveryStatus,
@@ -44,7 +44,7 @@ import { priceService } from '../../../services/price-service';
 import { getCirclePackageId, getSuiClientFromPool } from '../../../services/circle-service';
 import { readObject, queryEventsCached, invalidateObject, invalidateSuiRead, isGoneObjectResponse } from '@/lib/sui-read';
 import { moveJsonToRpcFields, readObjectViaGraphql, type GraphqlMoveObject } from '@/lib/object-graphql';
-import { isCurrentMemberOrAdmin } from '@/lib/membership-discovery';
+import { isCurrentMemberOrAdmin, memberEntryCanTriggerAutoRelease, readMembersTableEntry } from '@/lib/membership-discovery';
 import { memberEventTimes, membershipFromEventTimes, readEveryEvent } from '@/lib/circle-membership-events';
 import { resolveCustodyWalletId } from '@/lib/custody-wallet-discovery';
 import { recoveryCoinTypeErrorMessage, resolveRecoveryCoinType } from '@/lib/recovery-coin-type';
@@ -445,12 +445,6 @@ export default function CircleDetails() {
         : null;
       setMembersTableId(resolvedMembersTableId);
 
-      // Get dynamic fields
-      const dynamicFieldsResult = await client.getDynamicFields({
-        parentId: id as string
-      });
-      console.log('Details - Dynamic fields:', dynamicFieldsResult.data);
-
       // Fetch creation event and transaction inputs
       let transactionInput: Record<string, unknown> | undefined;
       let circleCreationEventData: CircleCreatedEvent | undefined;
@@ -519,47 +513,46 @@ export default function CircleDetails() {
       }
       console.log('Details - Config after Tx/Event:', configValues);
 
-      try {
-        const configFields = await getCircleConfigFieldsFromDynamicFields(
-          client,
-          dynamicFieldsResult.data,
-        );
+      // 2. The CircleConfig field of the circle's complete dynamic-field
+      // list: Sui GraphQL first (it answers when every JSON-RPC endpoint
+      // refuses JSON-RPC, NJA-2830), JSON-RPC across every page only when
+      // GraphQL cannot (circle-config.ts). A list or config neither source
+      // can read throws to the load-error catch below, never to a null
+      // recovery status and the default settings; null means only that the
+      // complete list has no CircleConfig field.
+      const configFields = await getCircleConfigFields(client, id as string);
 
-        if (configFields) {
-          console.log('Details - CircleConfig fields:', configFields);
-          setRecoveryStatus(parseRecoveryStatus(configFields));
+      if (configFields) {
+        console.log('Details - CircleConfig fields:', configFields);
+        setRecoveryStatus(parseRecoveryStatus(configFields));
 
-          if (configFields.contribution_amount) {
-            configValues.contributionAmount = Number(configFields.contribution_amount) / 1e9;
-          }
-          if (configFields.contribution_amount_local) {
-            configValues.contributionAmountUsd = Number(configFields.contribution_amount_local) / 100;
-          } else if (configFields.contribution_amount_usd) {
-            configValues.contributionAmountUsd = Number(configFields.contribution_amount_usd) / 100;
-          }
-          if (configFields.security_deposit) {
-            configValues.securityDeposit = Number(configFields.security_deposit) / 1e9;
-          }
-          if (configFields.security_deposit_local) {
-            configValues.securityDepositUsd = Number(configFields.security_deposit_local) / 100;
-          } else if (configFields.security_deposit_usd) {
-            configValues.securityDepositUsd = Number(configFields.security_deposit_usd) / 100;
-          }
-          if (configFields.cycle_length) {
-            configValues.cycleLength = Number(configFields.cycle_length);
-          }
-          if (configFields.cycle_day) {
-            configValues.cycleDay = Number(configFields.cycle_day);
-          }
-          if (configFields.max_members) {
-            configValues.maxMembers = Number(configFields.max_members);
-            console.log('Details - Extracted max_members from CircleConfig:', configValues.maxMembers);
-          }
-        } else {
-          setRecoveryStatus(null);
+        if (configFields.contribution_amount) {
+          configValues.contributionAmount = Number(configFields.contribution_amount) / 1e9;
         }
-      } catch (error) {
-        logSuiReadError('Details - Error fetching CircleConfig fields:', error);
+        if (configFields.contribution_amount_local) {
+          configValues.contributionAmountUsd = Number(configFields.contribution_amount_local) / 100;
+        } else if (configFields.contribution_amount_usd) {
+          configValues.contributionAmountUsd = Number(configFields.contribution_amount_usd) / 100;
+        }
+        if (configFields.security_deposit) {
+          configValues.securityDeposit = Number(configFields.security_deposit) / 1e9;
+        }
+        if (configFields.security_deposit_local) {
+          configValues.securityDepositUsd = Number(configFields.security_deposit_local) / 100;
+        } else if (configFields.security_deposit_usd) {
+          configValues.securityDepositUsd = Number(configFields.security_deposit_usd) / 100;
+        }
+        if (configFields.cycle_length) {
+          configValues.cycleLength = Number(configFields.cycle_length);
+        }
+        if (configFields.cycle_day) {
+          configValues.cycleDay = Number(configFields.cycle_day);
+        }
+        if (configFields.max_members) {
+          configValues.maxMembers = Number(configFields.max_members);
+          console.log('Details - Extracted max_members from CircleConfig:', configValues.maxMembers);
+        }
+      } else {
         setRecoveryStatus(null);
       }
       console.log('Details - Config after Dynamic Fields:', configValues);
@@ -688,9 +681,11 @@ export default function CircleDetails() {
     setLoadingRecoveryStatus(true);
     try {
       const client = getSuiClientFromPool(getCurrentRpcUrl());
-      const dynamicFieldsResult = await client.getDynamicFields({ parentId: id as string });
-      const configFields = await getCircleConfigFieldsFromDynamicFields(client, dynamicFieldsResult.data);
-      setRecoveryStatus(parseRecoveryStatus(configFields));
+      // The CircleConfig field of the circle's complete dynamic-field list,
+      // Sui GraphQL first with JSON-RPC across every page as the fallback
+      // (circle-config.ts). A failed read keeps the last known status (the
+      // catch below); null means only that the list has no CircleConfig.
+      setRecoveryStatus(parseRecoveryStatus(await getCircleConfigFields(client, id as string)));
     } catch (error) {
       logSuiReadError('Details - Error refreshing recovery status:', error);
     } finally {
@@ -792,19 +787,22 @@ export default function CircleDetails() {
         }
 
         try {
-          const memberField = await client.getDynamicFieldObject({
-            parentId: membersTableId,
-            name: { type: 'address', value: address },
-          });
-          if (memberField.error) {
-            const code = (memberField.error as { code?: string }).code ?? '';
+          // The member's own fields from the members table: Sui GraphQL
+          // first (it still answers when every JSON-RPC endpoint refuses
+          // JSON-RPC, NJA-2830), JSON-RPC getDynamicFieldObject only when
+          // GraphQL gives no confirmed answer; it throws when neither does.
+          const member = await readMembersTableEntry(client, membersTableId, address);
+          if (member === null) {
             // Verified absence => not eligible. Anything else is a failed
             // read, and returning false there hides the recovery
             // auto-release control with no explanation — on the one screen
             // a stuck circle needs.
-            if (code !== 'dynamicFieldNotFound') throw new Error(code || 'read failed');
+            return false;
           }
-          return canMemberTriggerAutoReleaseFromFieldObject(memberField.data?.content);
+          // Status 0 and no suspension_end_time, read at the member's own
+          // level; a status or suspension that cannot be read throws, so it
+          // is a failed read here, never permission.
+          return memberEntryCanTriggerAutoRelease(member);
         } catch (err) {
           console.warn('[recovery] eligibility read failed for', address, err);
           throw err;
