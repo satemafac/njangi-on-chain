@@ -1,9 +1,8 @@
 import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { useRouter } from 'next/router';
 import { useAuth } from '../../../../contexts/AuthContext';
-import { SuiClient } from '@mysten/sui/client';
 import { toast } from 'react-hot-toast';
-import { ArrowLeft } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, RefreshCw } from 'lucide-react';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { priceService } from '../../../../services/price-service';
 import { PACKAGE_ID, getCirclePackageId, getSuiClientFromPool } from '../../../../services/circle-service';
@@ -24,7 +23,17 @@ import RampPicker from '@/components/RampPicker';
 import CycleEscrowPanel from '@/components/CycleEscrowPanel';
 import { resolveCircleSettlementCoin } from '@/lib/circle-settlement';
 import { getSuiRpcErrorMessage, isTransientSuiRpcError, logSuiReadError } from '@/services/sui-rpc-failover';
-import { readObject, invalidateObject } from '@/lib/sui-read';
+import {
+  readObject,
+  readAllEvents,
+  readDynamicFieldObject,
+  listDynamicFields,
+  invalidateObject,
+  isGoneObjectResponse,
+  isDynamicFieldMissingResponse,
+} from '@/lib/sui-read';
+import { getReadingSuiClient, readBalance } from '@/lib/reading-sui-client';
+import { memberEventTimes, membershipFromEventTimes, readEveryEvent } from '@/lib/circle-membership-events';
 import type { NetworkType } from '@/services/whatsapp-registry-service';
 import { lookupMemberNames } from '@/lib/member-name-lookup';
 import { roundMemberStatusCopy, type RoundMemberStatus } from '@/lib/round-member-status';
@@ -45,11 +54,6 @@ import {
 import { resolveCircleLifecycleState } from '@/lib/circle-chain';
 import { isResolvedSuiObjectId, keepKnownWalletId } from '@/lib/sui-object-id';
 import type { CoinbaseAssetIntent } from '@/types/coinbase-onramp';
-
-// Add this helper function at the top level
-function getJsonRpcUrl(): string {
-  return getCurrentRpcUrl();
-}
 
 // Constants for transaction calculations
 const ESTIMATED_GAS_FEE = 0.00021; // Gas fee in SUI
@@ -222,17 +226,20 @@ const toDisplayAmount = (value: bigint, decimals: number): number => {
   return Number(value) / 10 ** decimals;
 };
 
-const readOutstandingSecurityDepositRaw = async (
-  client: SuiClient,
-  circleId: string
-): Promise<bigint> => {
-  const circleObject = await client.getObject({
-    id: circleId,
-    options: { showContent: true }
-  });
+/** A circle object read must be a Circle: any other type is a failed read (sui-read.ts). */
+const CIRCLE_MOVE_TYPE = '::njangi_circles::Circle';
+
+const isU64Like = (value: unknown): boolean =>
+  (typeof value === 'string' && /^\d+$/.test(value)) ||
+  (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0);
+
+// The security deposits the circle still holds, summed from its members
+// table. Every read failure throws: an unread deposit is unknown, never zero.
+const readOutstandingSecurityDepositRaw = async (circleId: string): Promise<bigint> => {
+  const circleObject = await readObject(circleId, { showContent: true }, { expectType: CIRCLE_MOVE_TYPE });
 
   if (!circleObject.data?.content || !('fields' in circleObject.data.content)) {
-    return 0n;
+    throw new Error(`Circle ${circleId} did not read; its outstanding deposits are unknown`);
   }
 
   const circleFields = circleObject.data.content.fields as {
@@ -240,44 +247,49 @@ const readOutstandingSecurityDepositRaw = async (
   };
   const membersTableId = circleFields.members?.fields?.id?.id;
   if (!membersTableId) {
-    return 0n;
+    throw new Error(`Circle ${circleId} has no readable members table`);
   }
 
-  const members = await client.getDynamicFields({ parentId: membersTableId });
-  let outstandingTotal = 0n;
-
-  for (const memberEntry of members.data) {
-    const memberAddress = memberEntry.name?.value;
-    if (memberEntry.name?.type !== 'address' || typeof memberAddress !== 'string') {
-      continue;
-    }
-
-    try {
-      const memberField = await client.getDynamicFieldObject({
-        parentId: membersTableId,
-        name: { type: 'address', value: memberAddress }
-      });
-
-      if (memberField.data?.content && 'fields' in memberField.data.content) {
-        const memberFields = memberField.data.content.fields as {
-          value?: {
-            fields?: {
-              deposit_paid?: boolean;
-              deposit_balance?: string | number;
-            };
-          };
-        };
-
-        if (memberFields.value?.fields?.deposit_paid) {
-          outstandingTotal += parseU64Like(memberFields.value.fields.deposit_balance);
-        }
+  const members = await listDynamicFields(membersTableId);
+  const deposits = await Promise.all(
+    members.map(async (memberEntry): Promise<bigint> => {
+      const memberAddress = memberEntry.name?.value;
+      if (memberEntry.name?.type !== 'address' || typeof memberAddress !== 'string') {
+        return 0n;
       }
-    } catch (error) {
-      console.warn('[Contribute] Failed to read member deposit balance:', { memberAddress, error });
-    }
-  }
 
-  return outstandingTotal;
+      const memberField = await readDynamicFieldObject(membersTableId, { type: 'address', value: memberAddress });
+      // Left the table after it was listed: the circle holds nothing of theirs.
+      if (isDynamicFieldMissingResponse(memberField)) {
+        return 0n;
+      }
+
+      const memberFields =
+        memberField.data?.content && 'fields' in memberField.data.content
+          ? (memberField.data.content.fields as {
+              value?: {
+                fields?: {
+                  deposit_paid?: boolean;
+                  deposit_balance?: string | number;
+                };
+              };
+            })
+          : undefined;
+      const member = memberFields?.value?.fields;
+      if (!member) {
+        throw new Error(`Member ${memberAddress} of circle ${circleId} did not read`);
+      }
+      if (!member.deposit_paid) {
+        return 0n;
+      }
+      if (!isU64Like(member.deposit_balance)) {
+        throw new Error(`Member ${memberAddress} of circle ${circleId} has an unreadable deposit balance`);
+      }
+      return parseU64Like(member.deposit_balance);
+    }),
+  );
+
+  return deposits.reduce((sum, deposit) => sum + deposit, 0n);
 };
 
 
@@ -292,11 +304,14 @@ export default function ContributeToCircle() {
   const { terms: coinTerms } = useCircleCoinTerms(
     typeof id === 'string' ? id : null,
     getCurrentNetwork() as NetworkType,
-    () => getSuiClientFromPool(getCurrentRpcUrl()),
+    () => getReadingSuiClient(),
   );
   const { t } = useTranslation();
   const [loading, setLoading] = useState(true);
   const [circle, setCircle] = useState<Circle | null>(null);
+  // The circle (or the viewer's membership) could not be read: shown as
+  // "Couldn't load", never as "Circle not found".
+  const [loadError, setLoadError] = useState(false);
   // Phase 6: display-name map keyed by lowercase address so the
   // CycleEscrowPanel can show "Aminata" instead of a hex address.
   const [memberNameMap, setMemberNameMap] = useState<Record<string, string>>({});
@@ -331,6 +346,9 @@ export default function ContributeToCircle() {
   // New state variables
   const [userBalance, setUserBalance] = useState<number | null>(null);
   const [userDepositPaid, setUserDepositPaid] = useState(false);
+  // The last deposit-status check could not be read: the status is unknown,
+  // so the page says so instead of "Not Paid" (and offers no deposit payment).
+  const [depositStatusUnreadable, setDepositStatusUnreadable] = useState(false);
   const [fetchingBalance, setFetchingBalance] = useState(false);
   const [isPayingDeposit, setIsPayingDeposit] = useState(false);
 
@@ -470,117 +488,81 @@ export default function ContributeToCircle() {
     if (!id || !userAddress) return false;
     
     try {
-      const client = getSuiClientFromPool(getCurrentRpcUrl());
-      const determinedPackageId = await getCirclePackageId(id as string, userAddress);
-      
-      // First check if user is the admin. Deduped/cached read: the circle
-      // object is fetched by several mount-time checks; they share one RPC.
-      const objectData = await readObject(id as string, { showContent: true });
-      
-      if (objectData.data?.content && 'fields' in objectData.data.content) {
-        const fields = objectData.data.content.fields as Record<string, unknown>;
-        // Admin always has access
-        if (fields.admin === userAddress) {
-          console.log('[Membership] User is admin, access granted');
-          return true;
-        }
-        
-        // Check if user is in the members table
-        const circleFields = fields as { members?: { fields?: { id?: { id: string } } } };
-        if (circleFields.members?.fields?.id?.id) {
-          const membersTableId = circleFields.members.fields.id.id;
-          try {
-            const memberField = await client.getDynamicFieldObject({
-              parentId: membersTableId,
-              name: { type: 'address', value: userAddress }
-            });
-            
-            if (memberField.data?.content) {
-              console.log('[Membership] User found in members table, access granted');
-              return true;
-            }
-            // A non-notFound error is an UNKNOWN, not an absence. Falling
-            // through on one told a paid-up member "you are not a member of
-            // this circle" and blocked the contribute page.
-            if (memberField.error) {
-              const code = (memberField.error as { code?: string }).code ?? '';
-              if (code !== 'dynamicFieldNotFound') {
-                throw new Error(`members-table read failed: ${code || 'unknown'}`);
-              }
-            }
-          } catch (err) {
-            // Only a verified absence may fall through to the event scan;
-            // a read failure must not masquerade as "not a member".
-            const msg = err instanceof Error ? err.message : String(err);
-            if (msg.includes('members-table read failed')) throw err;
-            console.log('[Membership] User not present in members table (verified absent)');
-          }
-        }
+      // First check if user is the admin. Deduped/cached read (Sui gRPC
+      // first, GraphQL second): the circle object is fetched by several
+      // mount-time checks; they share one read. A failed read throws.
+      const objectData = await readObject(id as string, { showContent: true }, { expectType: CIRCLE_MOVE_TYPE });
+
+      if (isGoneObjectResponse(objectData)) {
+        // No circle to be a member of: the details read says "Circle not
+        // found" rather than this check saying "not a member".
+        console.log('[Membership] Circle is gone; the details read reports it');
+        return true;
       }
-      
+      if (!objectData.data?.content || !('fields' in objectData.data.content)) {
+        console.warn('[Membership] Circle read without content, membership unknown');
+        return null;
+      }
+
+      const fields = objectData.data.content.fields as Record<string, unknown>;
+      // Admin always has access
+      if (fields.admin === userAddress) {
+        console.log('[Membership] User is admin, access granted');
+        return true;
+      }
+
+      // Check if user is in the members table
+      const circleFields = fields as { members?: { fields?: { id?: { id: string } } } };
+      const membersTableId = circleFields.members?.fields?.id?.id;
+      if (!membersTableId) {
+        console.warn('[Membership] Circle has no readable members table, membership unknown');
+        return null;
+      }
+      const memberField = await readDynamicFieldObject(membersTableId, { type: 'address', value: userAddress });
+      if (memberField.data?.content) {
+        console.log('[Membership] User found in members table, access granted');
+        return true;
+      }
+      // Only a verified absence may fall through to the event scan; any
+      // other answer is UNKNOWN. Falling through on one told a paid-up
+      // member "you are not a member of this circle" and blocked this page.
+      if (!isDynamicFieldMissingResponse(memberField)) {
+        console.warn('[Membership] Members table did not answer, membership unknown');
+        return null;
+      }
+      console.log('[Membership] User not present in members table (verified absent)');
+
+      const determinedPackageId = await getCirclePackageId(id as string, userAddress);
+
       // Check if user ever joined this circle and get their join events
-      const joinEvents = await client.queryEvents({
-        query: { MoveEventType: `${determinedPackageId}::njangi_circles::MemberJoined` },
-        limit: 100
-      });
-      
-      // Find the user's join events for this circle and get the latest timestamp
-      const userJoinEvents = joinEvents.data.filter(event => {
-        const parsed = event.parsedJson as { circle_id?: string; member?: string };
-        return parsed?.circle_id === id && parsed?.member === userAddress;
-      });
-      
-      if (userJoinEvents.length === 0) {
+      // (every page of them: an unread page is not "never joined")
+      const joinEvents = await readEveryEvent(`${determinedPackageId}::njangi_circles::MemberJoined`);
+      if (joinEvents === null) return null;
+
+      const userJoinTimes = memberEventTimes(joinEvents, id as string, userAddress);
+      if (userJoinTimes === null) return null;
+
+      if (userJoinTimes.length === 0) {
         console.log('[Membership] User never joined this circle');
         return false;
       }
-      
-      // Get the latest join timestamp
-      const latestJoinTimestamp = Math.max(...userJoinEvents.map(e => Number(e.timestampMs || 0)));
-      console.log(`[Membership] User's latest join timestamp: ${new Date(latestJoinTimestamp).toISOString()}`);
-      
+
       // Check for MemberRemoved events to see if user was removed
-      const removedEvents = await client.queryEvents({
-        query: { MoveEventType: `${determinedPackageId}::njangi_circles::MemberRemoved` },
-        limit: 100
-      });
-      
-      // Find the user's removal events for this circle and get the latest timestamp
-      const userRemovalEvents = removedEvents.data.filter(event => {
-        const parsed = event.parsedJson as { circle_id?: string; member?: string };
-        return parsed?.circle_id === id && parsed?.member === userAddress;
-      });
-      
-      if (userRemovalEvents.length > 0) {
-        const latestRemovalTimestamp = Math.max(...userRemovalEvents.map(e => Number(e.timestampMs || 0)));
-        console.log(`[Membership] User's latest removal timestamp: ${new Date(latestRemovalTimestamp).toISOString()}`);
-        
-        // If the user joined AFTER they were last removed, they have rejoined - allow access
-        if (latestJoinTimestamp > latestRemovalTimestamp) {
-          console.log('[Membership] User rejoined after removal, access granted');
-          return true;
-        }
-        
-        // User was removed after their last join - deny access
-        console.log('[Membership] User was removed after their last join, access denied');
-        return false;
-      }
-      
-      // User joined and was never removed - they should have access
-      console.log('[Membership] User joined and was never removed, access granted');
-      return true;
-      
+      // (every page of them: an unread page is not "never removed")
+      const removedEvents = await readEveryEvent(`${determinedPackageId}::njangi_circles::MemberRemoved`);
+      if (removedEvents === null) return null;
+
+      const userRemovalTimes = memberEventTimes(removedEvents, id as string, userAddress);
+      if (userRemovalTimes === null) return null;
+
+      // Joined and never removed, or rejoined after the last removal: access.
+      // Removed after the last join: no access.
+      const member = membershipFromEventTimes(userJoinTimes, userRemovalTimes);
+      console.log(`[Membership] From join and removal events: ${member ? 'access granted' : 'removed after the last join, access denied'}`);
+      return member;
     } catch (error) {
-      if (isTransientSuiRpcError(error)) {
-        // RPC momentarily unavailable (rate-limit / failover cooldown).
-        // Returning null signals "couldn't verify yet"; the caller retries.
-        console.warn(
-          '[Membership] Verification deferred (transient RPC):',
-          getSuiRpcErrorMessage(error),
-        );
-        return null;
-      }
-      console.error('[Membership] Error verifying membership:', error);
+      // A read that failed: membership unknown, never "not a member".
+      logSuiReadError('[Membership] Error verifying membership:', error);
       return null;
     }
   };
@@ -603,6 +585,30 @@ export default function ContributeToCircle() {
     fetchSuiPrice();
   }, []);
 
+  // Verify membership, then fetch circle details. Also the "Try again" of the
+  // load-error state.
+  const loadCircle = () => {
+    setLoadError(false);
+    setLoading(true);
+    void verifyMembership().then(isMember => {
+      if (isMember === false) {
+        setLoading(false);
+        toast.error('You are no longer a member of this circle');
+        router.replace('/dashboard');
+        return;
+      }
+      if (isMember === null) {
+        // Membership could not be read: that is not "not a member", and not
+        // a gone circle either. Say so and offer a retry.
+        setLoadError(true);
+        setLoading(false);
+        return;
+      }
+
+      fetchCircleDetails();
+    });
+  };
+
   useEffect(() => {
     // Verify membership and fetch circle details when ID is available
     if (authLoading || !router.isReady || !id || !userAddress) {
@@ -610,18 +616,9 @@ export default function ContributeToCircle() {
     }
 
     if (id && userAddress) {
-      verifyMembership().then(isMember => {
-        if (isMember === false) {
-          setLoading(false);
-          toast.error('You are no longer a member of this circle');
-          router.replace('/dashboard');
-          return;
-        }
-
-        fetchCircleDetails();
-      });
+      loadCircle();
     }
-    // `verifyMembership` and `fetchCircleDetails` are component-scoped
+    // `loadCircle` and `fetchCircleDetails` are component-scoped
     // closures that would change on every render; including them would
     // refetch the circle on every re-render of the component.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -805,18 +802,17 @@ export default function ContributeToCircle() {
     
     setFetchingSuiBalance(true);
     try {
-      const rpcUrl = getJsonRpcUrl();
-      console.log('[Balance Fetch] Using RPC URL:', rpcUrl);
-      const client = getSuiClientFromPool(rpcUrl); // Use helper function for URL
-      
+      // Reads go through the shared read layer (Sui gRPC first, GraphQL
+      // second); a failed read throws and the balances read as unknown.
       let mainSuiBalance = 0;
       let dynamicFieldSuiBalance = 0;
 
       // 1. Fetch the CustodyWallet object itself
-      const walletData = await client.getObject({ 
-        id: circle.walletId, 
-        options: { showContent: true } 
-      });
+      const walletData = await readObject(
+        circle.walletId,
+        { showContent: true },
+        { expectType: '::njangi_custody::CustodyWallet' },
+      );
 
       if (walletData.data?.content && 'fields' in walletData.data.content) {
         const wf = walletData.data.content.fields as Record<string, unknown>; // Use unknown instead of any
@@ -829,20 +825,18 @@ export default function ContributeToCircle() {
         }
         console.log(`[SUI Balance Fetch] Main Balance (Contributions): ${mainSuiBalance}`);
       } else {
-         console.warn('[SUI Balance] Could not fetch main CustodyWallet object content.');
+        // A wallet that did not read (or is gone) is not an empty one.
+        throw new Error(`Custody wallet ${circle.walletId} did not read`);
       }
 
       // 2. Fetch dynamic fields to find the SUI Coin object (security deposits)
-      const dynamicFieldsResult = await client.getDynamicFields({ parentId: circle.walletId });
-      console.log('[SUI Balance] Dynamic Fields:', dynamicFieldsResult.data);
+      const dynamicFields = await listDynamicFields(circle.walletId);
+      console.log('[SUI Balance] Dynamic Fields:', dynamicFields);
 
-      for (const field of dynamicFieldsResult.data) {
+      for (const field of dynamicFields) {
         if (field.objectType && field.objectType.includes('::coin::Coin<0x2::sui::SUI>')) {
           console.log(`[SUI Balance] Found SUI Coin dynamic field: ${field.objectId}`);
-          const coinData = await client.getObject({
-            id: field.objectId,
-            options: { showContent: true }
-          });
+          const coinData = await readObject(field.objectId, { showContent: true });
           if (coinData.data?.content && 'fields' in coinData.data.content) {
             const coinFields = coinData.data.content.fields as Record<string, unknown>;
             if (coinFields.balance) {
@@ -855,47 +849,11 @@ export default function ContributeToCircle() {
         }
       }
 
-      // 3. Fetch CustodyDeposited events (Optional: For logging/verification ONLY, not balance calculation)
-      const custodyEvents = await client.queryEvents({
-        query: { MoveEventType: `${circlePackageId}::njangi_custody::CustodyDeposited` },
-        limit: 100 
-      });
-      
-      let totalSecurityDepositsFromEvents = 0;
-      for (const event of custodyEvents.data) {
-          if (event.parsedJson && 
-              typeof event.parsedJson === 'object' && 
-              'circle_id' in event.parsedJson &&
-              'operation_type' in event.parsedJson &&
-              'amount' in event.parsedJson &&
-              event.parsedJson.circle_id === circle.id) {
-              
-              const parsedEvent = event.parsedJson as {
-                operation_type: number | string;
-                amount: string;
-                coin_type?: string; 
-              };
-              
-              // Skip non-SUI events for this *SUI specific* cross-check
-              if (parsedEvent.coin_type === 'stablecoin' || 
-                 (parsedEvent.coin_type && parsedEvent.coin_type !== 'sui')) {
-                 continue; 
-              }
-              
-              const opType = typeof parsedEvent.operation_type === 'string' ? 
-                parseInt(parsedEvent.operation_type) : parsedEvent.operation_type;
-                
-              if (opType === 3) { // Security Deposit
-                  totalSecurityDepositsFromEvents += Number(parsedEvent.amount) / 1e9; // Use SUI decimals
-              }
-          }
-      }
-      console.log(`[SUI Balance Fetch] Total SUI Security Deposits from Events (for verification): ${totalSecurityDepositsFromEvents}`);
-      
-      // --- REMOVED FAULTY LOGIC --- 
-      // Removed the block that overwrote dynamicFieldSuiBalance based on event totals.
-      // We now strictly rely on the actual fetched dynamic field balance for SUI security deposits.
-      // ----
+      // 3. (Removed) A CustodyDeposited event scan used to total SUI deposits
+      // here for a console line only; it never fed the balances below. Read
+      // to the end (the only complete way off JSON-RPC) it pulled every
+      // deposit of the package on each refresh, and its failure blanked
+      // balances it did not compute.
 
       // 4. Calculate final balances (Based ONLY on direct object fetches)
       const securityDepositSui = dynamicFieldSuiBalance; // SUI Security deposits ARE the dynamic field balance
@@ -947,17 +905,32 @@ export default function ContributeToCircle() {
       setTotalMembersInRotation(null); // Reset before fetching
     }
     try {
+      setLoadError(false);
       // Determine package ID for this circle
       const determinedPackageId = await getCirclePackageId(id as string, userAddress);
       console.log('Contribute - Using package ID:', determinedPackageId);
       setCirclePackageId(determinedPackageId);
-      
-      const client = getSuiClientFromPool(getCurrentRpcUrl());
 
-      // Get circle object with content (deduped/cached + failover via readObject;
-      // shares the read with the other mount-time circle lookups).
-      const objectData = await readObject(id as string, { showContent: true, showType: true });
-      
+      // Read-only helpers below read through the shared read layer, off
+      // JSON-RPC (reading-sui-client.ts). Nothing here signs or executes.
+      const client = getReadingSuiClient();
+
+      // Get circle object with content (deduped/cached, Sui gRPC first and
+      // GraphQL second; shares the read with the other mount-time circle
+      // lookups). A failed read throws: a load error, not "Circle not found".
+      const objectData = await readObject(
+        id as string,
+        { showContent: true, showType: true },
+        { expectType: CIRCLE_MOVE_TYPE },
+      );
+
+      if (isGoneObjectResponse(objectData)) {
+        // The only "Circle not found": a source answered it does not exist.
+        console.log('Contribute - Circle object is gone:', id);
+        setCircle(null);
+        return;
+      }
+
       if (!objectData.data?.content || !('fields' in objectData.data.content)) {
         throw new Error('Invalid circle object data received');
       }
@@ -994,12 +967,13 @@ export default function ContributeToCircle() {
       
       if (lifecycleState.activeSource === 'default') {
         try {
-          const activationEvents = await client.queryEvents({
-            query: { MoveEventType: `${determinedPackageId}::njangi_circles::CircleActivated` },
-            limit: 50
+          // Every CircleActivated event, not a first page: an activation
+          // past it used to read as "not active".
+          const activationEvents = await readAllEvents({
+            MoveEventType: `${determinedPackageId}::njangi_circles::CircleActivated`,
           });
-          
-          const activationForThisCircle = activationEvents.data.some(event => {
+
+          const activationForThisCircle = activationEvents.some(event => {
             const eventData = event.parsedJson as { circle_id?: string };
             return eventData?.circle_id === id;
           });
@@ -1009,7 +983,9 @@ export default function ContributeToCircle() {
           });
           console.log('Contribute - Lifecycle state after activation event fallback:', lifecycleState);
         } catch (err) {
+          // Unread activation is not "inactive": the circle could not be read.
           logSuiReadError('Contribute - Error checking activation events:', err);
+          throw err;
         }
       }
 
@@ -1020,25 +996,24 @@ export default function ContributeToCircle() {
       } = lifecycleState;
       setCurrentCycle(resolvedCurrentCycle);
         
-      // Get dynamic fields
-      const dynamicFieldsResult = await client.getDynamicFields({
-        parentId: id as string
-      });
-      const dynamicFields = dynamicFieldsResult.data;
+      // Get dynamic fields (the whole list; a failed read throws)
+      const dynamicFields = await listDynamicFields(id as string);
       console.log('Contribute - Dynamic Fields:', dynamicFields);
 
       // Fetch creation event and transaction inputs (similar to dashboard)
       let transactionInput: Record<string, unknown> | undefined;
       let circleCreationEventData: CircleCreatedEvent | undefined;
       let walletId = '';
+      // The CircleCreated event or its transaction could not be read: what
+      // they supply must then come from the CircleConfig (checked below).
+      let creationReadsIncomplete = false;
 
       try {
-        // 1. Fetch CircleCreated event
-        const circleEvents = await client.queryEvents({
-          query: { MoveEventType: `${determinedPackageId}::njangi_circles::CircleCreated` },
-          limit: 50
+        // 1. Fetch CircleCreated event (every one: past the first page too)
+        const circleEvents = await readAllEvents({
+          MoveEventType: `${determinedPackageId}::njangi_circles::CircleCreated`,
         });
-        const createEvent = circleEvents.data.find(event => 
+        const createEvent = circleEvents.find(event =>
           (event.parsedJson as { circle_id?: string })?.circle_id === id
         );
         console.log('Contribute - Found creation event:', !!createEvent);
@@ -1076,9 +1051,11 @@ export default function ContributeToCircle() {
           }
         }
 
-        // 2. Fetch Transaction Block for inputs (like currency_type, potentially others)
+        // 2. Fetch Transaction Block for inputs (like currency_type, potentially others).
+        // Transaction reads are not served off JSON-RPC: this stays on the
+        // pooled client, and its failure is checked below, never a default.
         if (createEvent?.id?.txDigest) {
-          const txData = await client.getTransactionBlock({
+          const txData = await getSuiClientFromPool(getCurrentRpcUrl()).getTransactionBlock({
             digest: createEvent.id.txDigest,
             options: { showInput: true }
           });
@@ -1098,7 +1075,9 @@ export default function ContributeToCircle() {
 
       } catch (error) {
         logSuiReadError('Contribute - Error fetching event/transaction data:', error);
-        // Continue even if this fails, rely on other data sources
+        // Continue even if this fails, rely on other data sources: the
+        // CircleConfig must then supply what these would have (checked below).
+        creationReadsIncomplete = true;
         }
 
       // 3. Resolve the custody wallet id: dynamic field, the circle's v11
@@ -1200,6 +1179,7 @@ export default function ContributeToCircle() {
       }
       console.log('[CONTRIBUTE DEBUG] Config after TransactionInput:', JSON.parse(JSON.stringify(configValues)));
 
+      let circleConfigFields: Record<string, SuiFieldValue> | null = null;
       try {
         const configFields = await getCircleConfigFieldsFromDynamicFields(
           client,
@@ -1208,6 +1188,7 @@ export default function ContributeToCircle() {
 
         if (configFields) {
           const resolvedConfigFields = configFields as Record<string, SuiFieldValue>;
+          circleConfigFields = resolvedConfigFields;
           console.log('Contribute - CircleConfig fields:', resolvedConfigFields);
           setMigrationLedger(await getMigrationLedgerFromDynamicFields(client, dynamicFields));
 
@@ -1269,9 +1250,28 @@ export default function ContributeToCircle() {
           }
         }
       } catch (error) {
+        // The CircleConfig holds the amounts this page charges: an unread
+        // config is a load error, never the creation-time or default amounts.
         logSuiReadError('Contribute - Error fetching CircleConfig fields:', error);
+        throw error;
       }
       console.log('[CONTRIBUTE DEBUG] Config after Dynamic Fields (CircleConfig):', JSON.parse(JSON.stringify(configValues)));
+
+      // What the creation event and its transaction supply, when either could
+      // not be read, must be on the CircleConfig (or the event, when only the
+      // transaction failed): otherwise the currency or a local amount below
+      // would be a default standing in for a failed read.
+      if (creationReadsIncomplete) {
+        const creationEventFields = circleCreationEventData as Record<string, unknown> | undefined;
+        const unread = ['currency_type', 'contribution_amount', 'contribution_amount_local', 'security_deposit_local'].filter(
+          (key) => creationEventFields?.[key] === undefined && circleConfigFields?.[key] === undefined,
+        );
+        if (unread.length > 0) {
+          throw new Error(`Circle ${id as string}: ${unread.join(', ')} could not be read`);
+        }
+      }
+      const configCurrencyType =
+        typeof circleConfigFields?.currency_type === 'string' ? circleConfigFields.currency_type : undefined;
 
       // 4. Use direct fields from the circle object as a final fallback if values are still 0
       if (configValues.contributionAmount === 0 && fields.contribution_amount) configValues.contributionAmount = Number(fields.contribution_amount) / 1e9;
@@ -1333,7 +1333,7 @@ export default function ContributeToCircle() {
       );
         
       // Set the final circle state
-      const finalCurrencyType = (transactionInput?.currency_type as string || circleCreationEventData?.currency_type || 'USD');
+      const finalCurrencyType = (transactionInput?.currency_type as string || circleCreationEventData?.currency_type || configCurrencyType || 'USD');
       
       // Final check: If local amounts are still 0, and it's a non-USD currency, populate from USD as a last resort.
       // This might happen if only USD values were stored everywhere for a non-USD circle.
@@ -1393,15 +1393,14 @@ export default function ContributeToCircle() {
       });
 
     } catch (error) {
-      if (isTransientSuiRpcError(error)) {
-        // RPC momentarily in cooldown (rate-limit / failover). The page keeps
-        // its current state and the next mount/refresh recovers — log quietly
-        // instead of tripping the Next.js dev error overlay.
-        console.warn('Contribute - Circle details fetch deferred (transient RPC):', getSuiRpcErrorMessage(error));
-        return;
+      // A failed read is not a gone circle: the page says so and offers a
+      // retry instead of "Circle not found" (a circle already shown stays).
+      setLoadError(true);
+      // Transient cooldowns log quietly and skip the toast; only genuine
+      // failures surface one.
+      if (!logSuiReadError('Contribute - Error fetching circle details:', error)) {
+        toast.error('Could not load circle information');
       }
-      console.error('Contribute - Error fetching circle details:', error);
-      toast.error('Could not load circle information');
     } finally {
       if (!quiet) setLoading(false);
     }
@@ -1429,24 +1428,24 @@ export default function ContributeToCircle() {
     let memberFoundInTable = false;
 
     try {
-      const client = getSuiClientFromPool(getJsonRpcUrl()); // Use helper function for URL
-      
       // --- Get SUI Balance ---
+      // The whole balance, off JSON-RPC (not a sum of the first coin page).
+      // A failed read is unknown (null), never zero; the checks below still run.
       console.log('[Balance Fetch] Fetching SUI balance for address:', userAddress);
-      const coins = await client.getCoins({ owner: userAddress, coinType: '0x2::sui::SUI' });
-      console.log('[Balance Fetch] Found coins:', coins.data.length);
-      console.log('[Balance Fetch] Coin details:', coins.data.map(coin => ({
-        coinObjectId: coin.coinObjectId,
-        balance: coin.balance
-      })));
-      const totalBalance = coins.data.reduce((sum, coin) => sum + Number(coin.balance), 0) / 1e9;
-      console.log('[Balance Fetch] Total SUI balance:', totalBalance);
-      setUserBalance(totalBalance);
-
-      // --- Get USDC Balance (Remains the same) ---
       try {
-        const usdcCoins = await client.getCoins({ owner: userAddress, coinType: USDC_COIN_TYPE });
-        const totalUsdcBalance = usdcCoins.data.reduce((sum, coin) => sum + Number(coin.balance), 0) / 1e6; // This is in actual USDC units (dollars)
+        const suiBalance = await readBalance(userAddress, '0x2::sui::SUI');
+        const totalBalance = Number(suiBalance.totalBalance) / 1e9;
+        console.log('[Balance Fetch] Total SUI balance:', totalBalance);
+        setUserBalance(totalBalance);
+      } catch (error) {
+        logSuiReadError('Error fetching SUI balance:', error);
+        setUserBalance(null);
+      }
+
+      // --- Get USDC Balance ---
+      try {
+        const usdcBalance = await readBalance(userAddress, USDC_COIN_TYPE);
+        const totalUsdcBalance = Number(usdcBalance.totalBalance) / 1e6; // This is in actual USDC units (dollars)
         setUserUsdcBalance(totalUsdcBalance);
 
         // --- Updated logic for showing direct deposit option --- 
@@ -1496,11 +1495,17 @@ export default function ContributeToCircle() {
       
       // --- Check Deposit Status ---
       console.log(`Checking deposit status for user ${userAddress} in circle ${circle.id}...`);
-      
+      // Any read below that fails leaves the status unknown: it is never
+      // "Not Paid", which would offer a paid-up member the deposit again.
+      let depositStatusUnread = false;
+
       // Method 1: Try fetching the Member object directly (Best Source of Truth)
       try {
-        const circleObject = await readObject(circle.id, { showContent: true });
-        
+        const circleObject = await readObject(circle.id, { showContent: true }, { expectType: CIRCLE_MOVE_TYPE });
+        if (isGoneObjectResponse(circleObject)) {
+          throw new Error(`Circle ${circle.id} is gone; its deposit status cannot be read`);
+        }
+
         if (circleObject.data?.content && 'fields' in circleObject.data.content) {
           const circleFields = circleObject.data.content.fields as {
             members?: { fields?: { id?: { id: string } } } // Check if members table exists
@@ -1511,14 +1516,12 @@ export default function ContributeToCircle() {
             console.log(`Attempting to fetch Member object using key ${userAddress} from table ${membersTableId}`);
             
             // Get the dynamic field representing the Member object within the Table
-            const memberField = await client.getDynamicFieldObject({
-              parentId: membersTableId,
-              name: {
-                type: 'address', // The key type for the members table is address
-                value: userAddress
-              }
+            // (the key type for the members table is address)
+            const memberField = await readDynamicFieldObject(membersTableId, {
+              type: 'address',
+              value: userAddress,
             });
-            
+
             if (memberField.data?.content && 'fields' in memberField.data.content) {
               const memberFields = memberField.data.content.fields as {
                 value?: { fields?: { deposit_paid?: boolean, [key: string]: unknown } } // Access nested value.fields
@@ -1531,29 +1534,35 @@ export default function ContributeToCircle() {
               } else {
                  console.log('Member struct found, but deposit_paid field missing or undefined.');
               }
-            } else {
+            } else if (isDynamicFieldMissingResponse(memberField)) {
                console.log('Could not find dynamic field object for this user in the members table.');
+            } else {
+              // Only dynamicFieldNotFound is "not in the table".
+              throw new Error(`Members table ${membersTableId} did not answer for ${userAddress}`);
             }
           } else {
             console.log('Members table ID not found in Circle object.');
           }
         }
       } catch (error) {
-        console.warn('Could not fetch Member object directly, falling back to event checks:', error);
+        // An unread members table is not "not in the table": the events
+        // below cannot overrule the struct they would be standing in for.
+        logSuiReadError('Could not fetch Member object directly; deposit status unknown:', error);
+        depositStatusUnread = true;
       }
-      
+
       // Method 2: Check MemberActivated Event (only when the struct read above
       // couldn't answer — i.e. the user isn't currently in the members table).
-      if (!memberFoundInTable && !depositPaid) {
+      if (!depositStatusUnread && !memberFoundInTable && !depositPaid) {
         console.log('Checking MemberActivated events...');
         try {
-          const memberActivatedEvents = await client.queryEvents({
+          // Every event, not a first page: an activation past it read as unpaid.
+          const memberActivatedEvents = await readAllEvents({
             // Correct module name is njangi_members
-            query: { MoveEventType: `${circlePackageId}::njangi_members::MemberActivated` }, 
-            limit: 50
+            MoveEventType: `${circlePackageId}::njangi_members::MemberActivated`,
           });
-          
-          depositPaid = memberActivatedEvents.data.some(event => {
+
+          depositPaid = memberActivatedEvents.some(event => {
             const parsed = event.parsedJson as { circle_id?: string; member?: string };
             return parsed?.circle_id === circle.id && parsed?.member === userAddress;
           });
@@ -1563,30 +1572,33 @@ export default function ContributeToCircle() {
             console.log('No MemberActivated event found for this user/circle.');
           }
         } catch (eventError) {
-          if (isTransientSuiRpcError(eventError)) {
-            console.warn('MemberActivated events deferred (transient RPC):', getSuiRpcErrorMessage(eventError));
-          } else {
-            console.error('Error fetching MemberActivated events:', eventError);
-          }
+          // Unread events are not "never activated".
+          logSuiReadError('Error fetching MemberActivated events; deposit status unknown:', eventError);
+          depositStatusUnread = true;
         }
       }
 
       // Method 3: Check Custody/Stablecoin Events (Further fallback)
-      if (!memberFoundInTable && !depositPaid) {
+      if (!depositStatusUnread && !memberFoundInTable && !depositPaid) {
         console.log('Checking deposit-related events as final fallback...');
-        // Check CustodyDeposited events (operation_type 3)
-        const custodyEvents = await client.queryEvents({
-          query: { MoveEventType: `${circlePackageId}::njangi_custody::CustodyDeposited` }, limit: 50
-        });
-        const foundCustodyEvent = custodyEvents.data.some(e => {
-           const p = e.parsedJson as { circle_id?: string; member?: string; operation_type?: number | string };
-           return p?.circle_id === circle.id && p?.member === userAddress && (p?.operation_type === 3 || p?.operation_type === "3");
-        });
-        if(foundCustodyEvent) {
-          depositPaid = true;
-          console.log("Deposit status confirmed via CustodyDeposited event (type 3).");
+        try {
+          // Check CustodyDeposited events (operation_type 3), every one
+          const custodyEvents = await readAllEvents({
+            MoveEventType: `${circlePackageId}::njangi_custody::CustodyDeposited`,
+          });
+          const foundCustodyEvent = custodyEvents.some(e => {
+             const p = e.parsedJson as { circle_id?: string; member?: string; operation_type?: number | string };
+             return p?.circle_id === circle.id && p?.member === userAddress && (p?.operation_type === 3 || p?.operation_type === "3");
+          });
+          if(foundCustodyEvent) {
+            depositPaid = true;
+            console.log("Deposit status confirmed via CustodyDeposited event (type 3).");
+          }
+          // Add more event checks here if needed
+        } catch (eventError) {
+          logSuiReadError('Error fetching CustodyDeposited events; deposit status unknown:', eventError);
+          depositStatusUnread = true;
         }
-        // Add more event checks here if needed
       }
 
       // New Step: Check SecurityDepositReturned Event and compare timestamps with deposit events
@@ -1594,18 +1606,17 @@ export default function ContributeToCircle() {
       // We need to compare the MOST RECENT return event with the MOST RECENT deposit event.
       // Skipped when the member is in the table: the struct's deposit_paid is
       // already authoritative there, and a removed member is gone from the table.
-      if (!memberFoundInTable) try {
+      if (!depositStatusUnread && !memberFoundInTable) try {
         console.log(`[ContributePage] Checking SecurityDepositReturned events for ${userAddress} in circle ${circle.id}...`);
-        const securityReturnedEvents = await client.queryEvents({
+        const securityReturnedEvents = await readAllEvents({
           // Emitted by njangi_circles::admin_remove_member. The njangi_payments
           // rail that used to emit this was deleted in the Phase 1 redesign, so
           // the old `njangi_payments::` type name matched nothing on chain.
-          query: { MoveEventType: `${circlePackageId}::njangi_circles::SecurityDepositReturned` },
-          limit: 50
+          MoveEventType: `${circlePackageId}::njangi_circles::SecurityDepositReturned`,
         });
 
         // Find all return events for this user/circle
-        const relevantReturnEvents = securityReturnedEvents.data.filter(event => {
+        const relevantReturnEvents = securityReturnedEvents.filter(event => {
           const parsed = event.parsedJson as { circle_id?: string; member?: string };
           return parsed?.circle_id === circle.id && 
                  parsed?.member?.toLowerCase() === userAddress.toLowerCase();
@@ -1621,12 +1632,11 @@ export default function ContributeToCircle() {
           // Now find the most recent deposit event (CustodyDeposited with operation_type 3)
           let mostRecentDepositTimestamp = 0;
           
-          const custodyDepositEvents = await client.queryEvents({
-            query: { MoveEventType: `${circlePackageId}::njangi_custody::CustodyDeposited` }, 
-            limit: 100
+          const custodyDepositEvents = await readAllEvents({
+            MoveEventType: `${circlePackageId}::njangi_custody::CustodyDeposited`,
           });
-          
-          for (const event of custodyDepositEvents.data) {
+
+          for (const event of custodyDepositEvents) {
             const parsed = event.parsedJson as { 
               circle_id?: string; 
               member?: string; 
@@ -1662,22 +1672,26 @@ export default function ContributeToCircle() {
           }
         }
       } catch (eventError) {
-        if (isTransientSuiRpcError(eventError)) {
-          console.warn('[ContributePage] SecurityDepositReturned reconciliation deferred (transient RPC):', getSuiRpcErrorMessage(eventError));
-        } else {
-          console.warn(`[ContributePage] Error checking SecurityDepositReturned events:`, eventError);
-        }
+        // An unread return or deposit is not a settled reconciliation.
+        logSuiReadError('[ContributePage] Error checking SecurityDepositReturned events; deposit status unknown:', eventError);
+        depositStatusUnread = true;
       }
 
-      setUserDepositPaid(depositPaid);
-      console.log('Final user deposit status:', depositPaid ? 'Paid' : 'Not Paid');
+      if (depositStatusUnread) {
+        // Keep whatever was last read; the page shows the status as unknown.
+        setDepositStatusUnreadable(true);
+        console.log('Final user deposit status: unknown (a read failed)');
+      } else {
+        setUserDepositPaid(depositPaid);
+        setDepositStatusUnreadable(false);
+        console.log('Final user deposit status:', depositPaid ? 'Paid' : 'Not Paid');
+      }
 
     } catch (error) {
-      if (isTransientSuiRpcError(error)) {
-        console.warn('User wallet info fetch deferred (transient RPC):', getSuiRpcErrorMessage(error));
-      } else {
-        console.error('Error fetching user wallet info:', error);
-      }
+      // Nothing above is meant to reach here; if something does, the deposit
+      // status was not read.
+      logSuiReadError('Error fetching user wallet info:', error);
+      setDepositStatusUnreadable(true);
     } finally {
       setFetchingBalance(false);
     }
@@ -1697,8 +1711,8 @@ export default function ContributeToCircle() {
     console.log(`[Contribution Check] Starting check for user ${userAddress} in circle ${circle.id} for cycle ${currentCycle}`);
 
     try {
-      const client = getSuiClientFromPool(getJsonRpcUrl());
-      const circleObject = await readObject(circle.id, { showContent: true });
+      // Reads throw when they fail (caught below: the state is left as it was).
+      const circleObject = await readObject(circle.id, { showContent: true }, { expectType: CIRCLE_MOVE_TYPE });
 
       if (!circleObject.data?.content || !('fields' in circleObject.data.content)) {
         setUserHasContributed(false);
@@ -1737,10 +1751,11 @@ export default function ContributeToCircle() {
         return false;
       }
 
-      const memberField = await client.getDynamicFieldObject({
-        parentId: membersTableId,
-        name: { type: 'address', value: userAddress }
-      });
+      const memberField = await readDynamicFieldObject(membersTableId, { type: 'address', value: userAddress });
+      // Only dynamicFieldNotFound means "not in the table"; any other answer is unknown.
+      if (!memberField.data && !isDynamicFieldMissingResponse(memberField)) {
+        throw new Error(`Members table ${membersTableId} did not answer for ${userAddress}`);
+      }
 
       let hasContributed = false;
       if (memberField.data?.content && 'fields' in memberField.data.content) {
@@ -1804,7 +1819,7 @@ export default function ContributeToCircle() {
     console.log(`[Recipient Check] Checking if user ${userAddress} is the current recipient in circle ${circle.id}`);
 
     try {
-      const circleObject = await readObject(circle.id, { showContent: true });
+      const circleObject = await readObject(circle.id, { showContent: true }, { expectType: CIRCLE_MOVE_TYPE });
 
       if (circleObject.data?.content && 'fields' in circleObject.data.content) {
         const circleFields = circleObject.data.content.fields as Record<string, unknown>;;
@@ -1840,8 +1855,8 @@ export default function ContributeToCircle() {
       setIsCurrentRecipient(false);
       return false;
     } catch (error) {
+      // A failed read is not "not the recipient": the state stays as last read.
       logSuiReadError('Error checking if user is current recipient:', error);
-      setIsCurrentRecipient(false);
       return false;
     }
   };
@@ -2757,7 +2772,8 @@ export default function ContributeToCircle() {
     setIsInitialBalanceLoad(false);
     
     try {
-      const client = getSuiClientFromPool(getCurrentRpcUrl());
+      // Read-only: the shared read layer, off JSON-RPC (reading-sui-client.ts).
+      const client = getReadingSuiClient();
       const previousBalance = custodyStablecoinBalance;
       // The network's USDC, by exact type: the only stablecoin a custody
       // wallet settles in. This read a `stablecoin_config` field CustodyWallet
@@ -2769,7 +2785,7 @@ export default function ContributeToCircle() {
       }
       const [custodyBalances, outstandingDepositRaw] = await Promise.all([
         readCustodyBalances(client, circle.walletId, stablecoinMeta.coinType),
-        readOutstandingSecurityDepositRaw(client, circle.id)
+        readOutstandingSecurityDepositRaw(circle.id)
       ]);
       const liveStablecoinBalanceRaw = custodyBalances.usdc;
 
@@ -2807,6 +2823,10 @@ export default function ContributeToCircle() {
       }
     } catch (error) {
       logSuiReadError('Error fetching custody wallet stablecoin balance:', error);
+      // Unread balances are unknown ("-"), not the last figures read.
+      setCustodyStablecoinBalance(null);
+      setSecurityDepositBalance(null);
+      setContributionBalance(null);
       if (wasManualRefresh && toastId) {
         toast.error('Failed to fetch balance', { id: toastId });
       }
@@ -3072,8 +3092,12 @@ export default function ContributeToCircle() {
     'rounded-[18px] border border-stone-200 bg-white px-3 py-3 text-left transition hover:border-stone-300 hover:bg-stone-50 sm:rounded-[20px]';
   const circleStatusLabel = circle?.pausedAfterCycle ? 'Paused' : circle?.isActive ? 'Active' : 'Inactive';
   const roundStatusCopy = roundMemberStatusCopy(roundStatus);
-  const paymentStatusLabel = !userDepositPaid ? 'Deposit required' : roundStatusCopy.label;
-  const paymentStatusDetail = !userDepositPaid ? 'Deposit still required.' : roundStatusCopy.detail;
+  const paymentStatusLabel = depositStatusUnreadable
+    ? 'Deposit status unknown'
+    : !userDepositPaid ? 'Deposit required' : roundStatusCopy.label;
+  const paymentStatusDetail = depositStatusUnreadable
+    ? "Couldn't check your deposit just now."
+    : !userDepositPaid ? 'Deposit still required.' : roundStatusCopy.detail;
   const circleModeLabel = isSuiCircleModeEnabled ? 'SUI' : 'USDC';
   const walletSummaryLabel = fetchingBalance ? 'Refreshing' : userAddress ? 'Connected' : 'Not ready';
   const walletSummaryDetail = userAddress
@@ -3143,7 +3167,7 @@ export default function ContributeToCircle() {
     : circle?.isActive
       ? roundStatusCopy.roundState
       : 'Waiting for activation';
-  const mobilePaymentAmountLabel = !circle
+  const mobilePaymentAmountLabel = !circle || depositStatusUnreadable
     ? 'Unavailable'
     : selectedPaymentCurrency === 'SUI'
       ? `${(!userDepositPaid ? getSecurityDepositInSui() : getValidContributionAmount()).toFixed(4)} SUI`
@@ -3218,7 +3242,7 @@ export default function ContributeToCircle() {
           collected takes their next turn when the round comes back around.
         </p>
 
-        {userDepositPaid ? (
+        {depositStatusUnreadable ? null : userDepositPaid ? (
           <button
             type="button"
             onClick={handleConfirmMigrationState}
@@ -3250,6 +3274,29 @@ export default function ContributeToCircle() {
     // the security-deposit step (which still uses that path). Once the deposit
     // is paid, suppress it: otherwise members see a second "contribute" button
     // that pays the wrong place and never reflects in the escrow tracker.
+    if (depositStatusUnreadable) {
+      // Paid or not is unknown: offer no deposit payment, only a re-check.
+      return (
+        <div className={warningPanelClass}>
+          <p className="text-sm font-semibold text-amber-900">
+            Couldn&apos;t check your security deposit just now
+          </p>
+          <p className="mt-1 text-sm leading-6 text-amber-800">
+            The network did not answer, so this page cannot tell whether your
+            deposit is paid. Try again in a moment.
+          </p>
+          <button
+            type="button"
+            onClick={() => void fetchUserWalletInfo()}
+            disabled={fetchingBalance}
+            className={`${secondaryActionClass} mt-3`}
+          >
+            <RefreshCw className="mr-2 h-4 w-4" />
+            {fetchingBalance ? 'Checking...' : 'Try again'}
+          </button>
+        </div>
+      );
+    }
     if (userDepositPaid) {
       return null;
     }
@@ -4257,7 +4304,9 @@ export default function ContributeToCircle() {
                       />
                     </div>
                     <p className="mt-2 text-sm text-slate-500">
-                      {userDepositPaid ? 'Security deposit already paid.' : 'Required before contributing.'}
+                      {depositStatusUnreadable
+                        ? "Couldn't check your deposit just now."
+                        : userDepositPaid ? 'Security deposit already paid.' : 'Required before contributing.'}
                     </p>
                   </div>
                   <div className={mutedPanelClass}>
@@ -4380,6 +4429,11 @@ export default function ContributeToCircle() {
                       <p className={sectionEyebrowClass}>Deposit Status</p>
                       {fetchingBalance ? (
                         <div className="mt-3 h-6 w-28 animate-pulse rounded bg-stone-200"></div>
+                      ) : depositStatusUnreadable ? (
+                        <div className="mt-3 flex items-center gap-3">
+                          <span className="h-2.5 w-2.5 rounded-full bg-stone-400"></span>
+                          <span className="font-medium text-slate-600">Couldn&apos;t check</span>
+                        </div>
                       ) : (
                         <div className="mt-3 flex items-center gap-3">
                           <span className={`h-2.5 w-2.5 rounded-full ${userDepositPaid ? 'bg-emerald-500' : 'bg-amber-500'}`}></span>
@@ -4497,6 +4551,25 @@ export default function ContributeToCircle() {
 
                 {renderMigrationConfirmation()}
                 {renderContributionOptions()}
+              </div>
+            ) : loadError ? (
+              <div className="px-6 py-10 text-center sm:px-8">
+                <AlertTriangle className="mx-auto h-8 w-8 text-amber-600" />
+                <h3 className="mt-4 text-lg font-semibold text-slate-950">
+                  Couldn&apos;t load this circle just now
+                </h3>
+                <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-slate-500">
+                  The network did not answer when we read this circle. That is
+                  not the same as the circle being gone, so try again in a moment.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => loadCircle()}
+                  className={`${primaryActionClass} mt-5`}
+                >
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                  Try again
+                </button>
               </div>
             ) : (
               <div className="px-6 py-10 text-center sm:px-8">

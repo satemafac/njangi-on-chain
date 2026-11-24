@@ -6,9 +6,9 @@
 
 import { getConfiguredNetworkFromEnv, type NetworkType } from '@/config/public-env';
 import { getNetworkConfig } from './network-config';
-import { getPooledSuiClient } from './sui-rpc-failover';
 import joinRequestDatabase from './join-request-database';
 import { readObject, queryEventsCached } from '@/lib/sui-read';
+import { getReadingSuiClient } from '@/lib/reading-sui-client';
 import { resolveCircleLifecycleState } from '@/lib/circle-chain';
 import { resolveCustodyWalletId } from '@/lib/custody-wallet-discovery';
 import { circleRoundNumber } from '@/lib/round-number';
@@ -68,16 +68,19 @@ export async function getCircleStatus(circleId: string, network?: 'testnet' | 'm
   console.log('[CircleStatus] Fetching status for circle:', circleId, 'using RPC:', rpcUrl, 'network:', targetNetwork);
   
   try {
-    // Failover-backed client: gives getDynamicFields/balance reads cooldown
-    // handling instead of a bare per-call SuiClient that fails hard on 429.
-    const client = getPooledSuiClient({ network: targetNetwork, rpcUrl });
+    // Reads only, off JSON-RPC: Sui gRPC then GraphQL for objects and
+    // dynamic fields, GraphQL for events (src/lib/reading-sui-client.ts).
+    // Any read that fails ends in the catch below and returns null, which
+    // the WhatsApp reply turns into a link to the circle page, never a
+    // status built from defaults.
+    const client = getReadingSuiClient(targetNetwork);
 
     // Get circle object
     console.log('[CircleStatus] Getting circle object...');
     const objectData = await readObject(
       circleId,
       { showContent: true, showType: true },
-      { network: targetNetwork },
+      { network: targetNetwork, expectType: '::njangi_circles::Circle' },
     );
     
     console.log('[CircleStatus] Object data received:', objectData.data ? 'found' : 'not found');
@@ -158,7 +161,10 @@ export async function getCircleStatus(circleId: string, network?: 'testnet' | 'm
               }
             }
           } catch (error) {
+            // A config that cannot be read is not the default config: fail
+            // the whole status rather than reply with default amounts.
             console.error('Error fetching config object:', error);
+            throw error;
           }
         }
       }
@@ -275,8 +281,10 @@ export async function getCircleStatus(circleId: string, network?: 'testnet' | 'm
         const eventData = createEvent.parsedJson as { currency_type?: string };
         if (eventData.currency_type) currencyType = eventData.currency_type;
       }
-    } catch {
-      // Ignore errors fetching creation event
+    } catch (error) {
+      // Not "USD": the currency could not be read.
+      console.error('[CircleStatus] Error fetching the creation event:', error);
+      throw error;
     }
     
     // Get members from blockchain
@@ -297,7 +305,9 @@ export async function getCircleStatus(circleId: string, network?: 'testnet' | 'm
           if (memberAddr) memberAddresses.add(memberAddr);
         });
     } catch (error) {
+      // A member list without its join events would under-count members.
       console.error('Error fetching member events:', error);
+      throw error;
     }
     
     // Get rotation order
@@ -376,8 +386,10 @@ export async function getCircleStatus(circleId: string, network?: 'testnet' | 'm
       activationEventFound = activationEvents.data.some(event =>
         (event.parsedJson as { circle_id?: string })?.circle_id === circleId
       );
-    } catch {
-      // Scan unavailable; the on-chain field below is authoritative anyway.
+    } catch (error) {
+      // Scan unavailable; the on-chain field below is authoritative. Without
+      // the field the scan was the only source, so its failure is no answer.
+      if (typeof fields.is_active !== 'boolean') throw error;
     }
     const lifecycle = resolveCircleLifecycleState(
       {

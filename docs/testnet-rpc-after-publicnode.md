@@ -121,9 +121,24 @@ Staged order for C, by user impact, each stage independently shippable:
    **Not yet user-visible:** the pages that offer money actions still load
    over JSON-RPC (stage 2), and the legacy pre-v11 security-deposit builder
    reads the circle config through `getObject`, which stays on JSON-RPC.
-2. **The shared read layer** (`sui-read.ts`: `readObject` / `readObjects`) on
-   `core.getObjects({ include: { json: true } })`, then the round panel,
-   contribute and manage pages.
+2. **The shared read layer and the pages members need. Done on `feat/sdk2-reads`.**
+   `sui-read.ts` reads through a 2.x source the pooled client carries
+   (`v2-read-source.ts`): objects and dynamic-field lists with
+   `core.getObjects({ include: { json: true } })` / `core.listDynamicFields`,
+   gRPC first and GraphQL second; events from GraphQL `events(filter)`, read
+   through every page. Answers keep the JSON-RPC shapes callers parse,
+   converted exactly from each type's Move layout (GraphQL
+   `type { layout }`, `move-json-rpc.ts`), so a `vector<u8>` stays bytes and
+   nested structs keep `{ type, fields }`. A failed read throws; "gone" only
+   when a source answered that the object does not exist; `readObject` can
+   require a Move type. `getReadingSuiClient` (`reading-sui-client.ts`) gives
+   read-only helpers the same reads behind the `SuiClient` interface. The pay
+   (contribute), manage, join and circle pages and the WhatsApp status read
+   this way. Still JSON-RPC: the round panel and round alerts
+   (`cycle-escrow-discovery.ts`, `chain-clock.ts`: next, in their own PR under
+   legal matter LC-T-1741ffb6's conditions), `getTransactionBlock` /
+   `queryTransactionBlocks` (creation-transaction fallbacks, package discovery
+   from history) and `getOwnedObjects` (stage 3).
 3. Dashboard discovery (owned membership receipts, circles, balances).
 4. Join flow, WhatsApp crons and webhook, sponsorship eligibility.
 5. Event history to GraphQL `events(filter)` with cursors, or to object reads.

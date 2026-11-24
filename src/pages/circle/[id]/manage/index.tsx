@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { useRouter } from 'next/router';
 import { useAuth } from '@/contexts/AuthContext';
-import { SuiClient, SuiEvent } from '@mysten/sui/client';
+import { SuiEvent } from '@mysten/sui/client';
 import { toast } from 'react-hot-toast';
 import { copyToClipboard as copyTextToClipboard, manualCopyMessage } from '@/lib/copy-to-clipboard';
 import { ArrowLeft, Copy, Link, Check, X, Pause, ListOrdered, CheckCircle, AlertTriangle, Edit3, Users, Crown, RefreshCw, Info } from 'lucide-react';
@@ -41,10 +41,9 @@ import { lookupMemberNames } from '@/lib/member-name-lookup';
 import { supportedCoinBySymbol, UNSUPPORTED_COIN_LABEL } from '@/lib/supported-coins';
 import { priceService } from '../../../../services/price-service';
 import { JoinRequest } from '../../../../services/database-service';
-import { getCirclePackageId, getSuiClientFromPool } from '../../../../services/circle-service';
+import { getCirclePackageId } from '../../../../services/circle-service';
 import {
   getCurrentCoinTypes,
-  getCurrentRpcUrl,
   getCurrentNetwork,
 } from '../../../../services/network-config';
 import RotationOrderList from '../../../../components/RotationOrderList';
@@ -70,9 +69,19 @@ import {
   settlementModeLockMessage,
   type RoundOpenRead,
 } from '@/lib/settlement-mode-lock';
-import { readObject, queryEventsCached, invalidateObject, invalidateSuiRead } from '@/lib/sui-read';
+import {
+  readObject,
+  readAllEvents,
+  readDynamicFieldObject,
+  listDynamicFields,
+  isGoneObjectResponse,
+  queryEventsCached,
+  invalidateObject,
+  invalidateSuiRead,
+} from '@/lib/sui-read';
+import { getReadingSuiClient } from '@/lib/reading-sui-client';
 import { allDepositsHeldForRounds, depositsHeldButFlagsCleared } from '@/lib/deposit-status';
-import { getPooledSuiClient, logSuiReadError } from '@/services/sui-rpc-failover';
+import { logSuiReadError } from '@/services/sui-rpc-failover';
 import type { NetworkType } from '@/services/whatsapp-registry-service';
 
 // Define a proper Circle type to fix linter errors
@@ -222,7 +231,6 @@ const processConfigValues = (
 
 // Utility function to check member deposit status using multiple methods
 const checkMemberDepositStatus = async (
-  client: SuiClient,
   circleId: string,
   membersTableId: string | undefined,
   address: string,
@@ -236,15 +244,16 @@ const checkMemberDepositStatus = async (
   let lastContributionRaw = 0n;
   let memberObjectId: string | null = null;
   let resolvedFromStruct = false;
-  
-  try {
-    // Method 1: Try fetching the Member struct directly for the deposit_paid flag
-    if (membersTableId) {
-      const memberField = await client.getDynamicFieldObject({
-        parentId: membersTableId,
-        name: { type: 'address', value: address }
-      });
 
+  // Method 1: the Member struct's deposit_paid flag. A read that fails throws
+  // (sui-read) and is not an unpaid deposit, so the events below never stand
+  // in for it; only a confirmed missing record falls through to them.
+  const memberField = membersTableId
+    ? await readDynamicFieldObject(membersTableId, { type: 'address', value: address })
+    : null;
+
+  try {
+    if (memberField) {
       const candidateObjectId = (memberField.data as { objectId?: string } | undefined)?.objectId;
       if (typeof candidateObjectId === 'string' && candidateObjectId.length > 0) {
         memberObjectId = candidateObjectId;
@@ -281,7 +290,7 @@ const checkMemberDepositStatus = async (
       }
     }
   } catch {
-    debugLog(`Could not fetch Member struct directly for ${shortenAddress(address)}, using events`, null);
+    debugLog(`Could not parse the Member struct for ${shortenAddress(address)}, using events`, null);
   }
   
   // Method 2: Fallback to MemberActivated Event (using pre-fetched data)
@@ -544,11 +553,6 @@ const ManageCircleSkeleton = () => (
   </div>
 );
 
-// Add getJsonRpcUrl helper if not already present globally
-const getJsonRpcUrl = (): string => {
-  return getCurrentRpcUrl();
-};
-
 /**
  * Runs a client-signed transaction and shapes the outcome like the
  * `fetch` + `response.json()` pair these call sites were written against.
@@ -576,7 +580,7 @@ async function runSignedTx(
 }> {
   try {
     const r = await fn();
-    await waitForTxIndexed(getSuiClientFromPool(getJsonRpcUrl()), r.digest);
+    await waitForTxIndexed(getReadingSuiClient(), r.digest);
     return { response: { ok: true, status: 200 }, result: { digest: r.digest } };
   } catch (err) {
     const requireRelogin = err instanceof ZkLoginError && err.requireRelogin;
@@ -598,10 +602,13 @@ export default function ManageCircle() {
   const { terms: coinTerms, reload: reloadCoinTerms } = useCircleCoinTerms(
     typeof id === 'string' ? id : null,
     getCurrentNetwork() as NetworkType,
-    () => getSuiClientFromPool(getCurrentRpcUrl()),
+    () => getReadingSuiClient(),
   );
   const [loading, setLoading] = useState(true);
   const [circle, setCircle] = useState<Circle | null>(null);
+  // The last circle read failed (as opposed to the chain saying there is no
+  // such circle): the page offers a retry instead of "Circle not found".
+  const [loadError, setLoadError] = useState(false);
   const [circlePackageId, setCirclePackageId] = useState<string | null>(null);
   const [recoveryStatus, setRecoveryStatus] = useState<RecoveryStatusSnapshot | null>(null);
   // Starts true. A null snapshot is indistinguishable from "auto-release is
@@ -740,6 +747,9 @@ export default function ManageCircle() {
     totalActiveInRotation: 0,
   });
   const [loadingContributions, setLoadingContributions] = useState(false);
+  // The last contribution-status read failed: the progress card says so
+  // instead of showing cycle 0 with no contributions.
+  const [contributionStatusError, setContributionStatusError] = useState(false);
 
   // Phase 12 UX chain: when the admin successfully activates the circle,
   // we set this flag so the CycleEscrowPanel automatically opens the
@@ -865,84 +875,97 @@ export default function ManageCircle() {
     // read below repopulates the cache for the rest of the burst.
     invalidateObject(id as string);
     invalidateSuiRead('events:');
+    setLoadError(false);
 
     try {
-      const client = getSuiClientFromPool(getJsonRpcUrl());
-      
+      // Read-only: off JSON-RPC (Sui gRPC, then GraphQL). Nothing here signs.
+      const client = getReadingSuiClient();
+
       // Determine package ID for this circle
       const determinedPackageId = await getCirclePackageId(id as string, userAddress);
       setCirclePackageId(determinedPackageId);
       debugLog('Using package ID', determinedPackageId);
-      
-      // Parallel fetch: Get circle object and dynamic fields simultaneously
-      const [objectData, dynamicFieldsResult] = await Promise.all([
-        readObject(id as string, { showContent: true, showType: true }),
-        client.getDynamicFields({ parentId: id as string })
+
+      // Parallel fetch: Get circle object and dynamic fields simultaneously.
+      // A read that fails throws (the page then offers a retry); only the
+      // chain answering that the circle is gone is "Circle not found".
+      const [objectRead, dynamicFieldsRead] = await Promise.allSettled([
+        readObject(id as string, { showContent: true, showType: true }, { expectType: '::njangi_circles::Circle' }),
+        listDynamicFields(id as string),
       ]);
-      
-      debugLog('Circle object loaded', { hasContent: !!objectData.data?.content });
-        
-      if (!objectData.data?.content || !('fields' in objectData.data.content)) {
-        console.error('Invalid circle object data received');
-        // Don't set loading to false here, let it be handled in the finally block
+      if (objectRead.status === 'rejected') throw objectRead.reason;
+      const objectData = objectRead.value;
+      if (isGoneObjectResponse(objectData)) {
+        console.warn('Manage - the chain says this circle does not exist', { circleId: id });
+        setCircle(null);
         return;
       }
-        
+
+      debugLog('Circle object loaded', { hasContent: !!objectData.data?.content });
+
+      if (!objectData.data?.content || !('fields' in objectData.data.content)) {
+        throw new Error('The circle was read without its fields');
+      }
+
       const fields = objectData.data.content.fields as Record<string, SuiFieldValue>;
-        
+
       if (fields.admin !== userAddress) {
           toast.error('Only the admin can manage this circle');
           router.push(`/circle/${id}`);
           return;
         }
-        
-      debugLog('Dynamic fields loaded', { count: dynamicFieldsResult.data.length });
-      
+
+      if (dynamicFieldsRead.status === 'rejected') throw dynamicFieldsRead.reason;
+      const dynamicFields = dynamicFieldsRead.value;
+
+      debugLog('Dynamic fields loaded', { count: dynamicFields.length });
+
       let transactionInput: Record<string, unknown> | undefined;
       let creationTimestamp: number | null = fields.created_at ? Number(fields.created_at) : null;
       let circleCreationEventData: CircleCreatedEvent | undefined;
-      
-      try {
-        // Parallel fetch: Get circle events and activation status
-        const [circleEvents] = await Promise.all([
-          queryEventsCached({
-            query: { MoveEventType: `${determinedPackageId}::njangi_circles::CircleCreated` },
-            limit: 50
-          })
-        ]);
-        
-        const createEvent = circleEvents.data.find(event => 
-          (event.parsedJson as { circle_id?: string })?.circle_id === id
-        );
-        
-        debugLog('Creation event found', !!createEvent);
-        
-        if (createEvent?.parsedJson) {
-          circleCreationEventData = createEvent.parsedJson as CircleCreatedEvent;
-          creationTimestamp = Number(createEvent.timestampMs);
-          
-          // Extract initial amounts from event data
-          transactionInput = {
-            contribution_amount: circleCreationEventData.contribution_amount,
-            contribution_amount_usd: circleCreationEventData.contribution_amount_usd,
-            security_deposit_usd: circleCreationEventData.security_deposit_usd,
-          };
-          
-          // Try to get local currency amounts if available (new format)
-          if (circleCreationEventData.contribution_amount_local) {
-            transactionInput.contribution_amount_local = circleCreationEventData.contribution_amount_local;
-          }
-          if (circleCreationEventData.security_deposit_local) {
-            transactionInput.security_deposit_local = circleCreationEventData.security_deposit_local;
-          }
-          
-          debugLog('Creation event data extracted', {
-            hasContribution: !!circleCreationEventData.contribution_amount,
-            hasLocalCurrency: !!circleCreationEventData.contribution_amount_local,
-            currencyType: circleCreationEventData.currency_type
-          });
+
+      // Every page of CircleCreated, or the load fails: a list that could not
+      // be read is not "no creation event", and the circle's currency comes
+      // from this event.
+      const circleEvents = await readAllEvents({
+        MoveEventType: `${determinedPackageId}::njangi_circles::CircleCreated`,
+      });
+      const createEvent = circleEvents.find(event =>
+        (event.parsedJson as { circle_id?: string })?.circle_id === id
+      );
+
+      debugLog('Creation event found', !!createEvent);
+
+      if (createEvent?.parsedJson) {
+        circleCreationEventData = createEvent.parsedJson as CircleCreatedEvent;
+        creationTimestamp = Number(createEvent.timestampMs);
+
+        // Extract initial amounts from event data
+        transactionInput = {
+          contribution_amount: circleCreationEventData.contribution_amount,
+          contribution_amount_usd: circleCreationEventData.contribution_amount_usd,
+          security_deposit_usd: circleCreationEventData.security_deposit_usd,
+        };
+
+        // Try to get local currency amounts if available (new format)
+        if (circleCreationEventData.contribution_amount_local) {
+          transactionInput.contribution_amount_local = circleCreationEventData.contribution_amount_local;
+        }
+        if (circleCreationEventData.security_deposit_local) {
+          transactionInput.security_deposit_local = circleCreationEventData.security_deposit_local;
         }
 
+        debugLog('Creation event data extracted', {
+          hasContribution: !!circleCreationEventData.contribution_amount,
+          hasLocalCurrency: !!circleCreationEventData.contribution_amount_local,
+          currencyType: circleCreationEventData.currency_type
+        });
+      }
+
+      try {
+        // The creation transaction's inputs, best effort: getTransactionBlock
+        // is still JSON-RPC (not served off it), so this usually fails, and
+        // then the event above and the CircleConfig below supply the values.
         if (createEvent?.id?.txDigest) {
           const txData = await client.getTransactionBlock({
             digest: createEvent.id.txDigest,
@@ -963,9 +986,9 @@ export default function ManageCircle() {
             Object.assign(transactionInput, extractedInputs);
             
             debugLog('Transaction inputs extracted', { inputCount: inputs.length });
+          }
         }
-            }
-          } catch (error) {
+      } catch (error) {
         debugLog('Error fetching transaction data', error);
       }
       
@@ -977,14 +1000,14 @@ export default function ManageCircle() {
       try {
         const configFields = await getCircleConfigFieldsFromDynamicFields(
           client,
-          dynamicFieldsResult.data,
+          dynamicFields,
         );
 
         if (configFields) {
           const resolvedConfigFields = configFields as Record<string, SuiFieldValue>;
           console.log('Manage - CircleConfig fields:', resolvedConfigFields);
           setRecoveryStatus(parseRecoveryStatus(resolvedConfigFields as Record<string, unknown>));
-          setMigrationLedger(await getMigrationLedgerFromDynamicFields(client, dynamicFieldsResult.data));
+          setMigrationLedger(await getMigrationLedgerFromDynamicFields(client, dynamicFields));
 
           if (resolvedConfigFields.contribution_amount) {
             configValues.contributionAmount = Number(resolvedConfigFields.contribution_amount) / 1e9;
@@ -1018,8 +1041,11 @@ export default function ManageCircle() {
           setRecoveryStatus(null);
         }
       } catch (error) {
+        // A failed read is not a circle without a config: the amounts, cycle
+        // and member cap would show placeholders. The load fails instead and
+        // the page offers a retry.
         logSuiReadError('Manage - Error fetching CircleConfig fields:', error);
-        setRecoveryStatus(null);
+        throw error;
       }
       debugLog('Config after dynamic fields', { foundInDynamicField, configValues });
 
@@ -1046,18 +1072,14 @@ export default function ManageCircle() {
       } else if (typeof fields.is_active === 'string') {
         isActive = fields.is_active.toLowerCase() === 'true';
       } else {
-        try {
-          const activationEvents = await queryEventsCached({
-            query: { MoveEventType: `${determinedPackageId}::njangi_circles::CircleActivated` },
-            limit: 50
-          });
-          isActive = activationEvents.data.some(event => 
-            (event.parsedJson as { circle_id?: string })?.circle_id === id
-          );
-          debugLog('Circle activation status', isActive);
-        } catch (error) {
-          logSuiReadError('Error checking circle activation:', error);
-        }
+        // Every page, or the load fails: an unread list is not "never activated".
+        const activationEvents = await readAllEvents({
+          MoveEventType: `${determinedPackageId}::njangi_circles::CircleActivated`,
+        });
+        isActive = activationEvents.some(event =>
+          (event.parsedJson as { circle_id?: string })?.circle_id === id
+        );
+        debugLog('Circle activation status', isActive);
       }
 
       // Check for paused status - safely get the boolean value
@@ -1090,11 +1112,12 @@ export default function ManageCircle() {
       if (membersTableId) {
         try {
           debugLog('Fetching all members from blockchain members table', membersTableId);
-          const allMemberFields = await client.getDynamicFields({ 
-            parentId: membersTableId 
-          });
+          // The whole table (every page). A refetch follows writes, so the
+          // table's cached listing is dropped first.
+          invalidateObject(membersTableId);
+          const allMemberFields = await listDynamicFields(membersTableId);
 
-          blockchainMemberList = allMemberFields.data
+          blockchainMemberList = allMemberFields
             .filter((field) => field.name?.type === 'address' && typeof field.name.value === 'string')
             .map((field) => {
               const memberAddress = field.name.value as string;
@@ -1111,88 +1134,48 @@ export default function ManageCircle() {
             addresses: blockchainMemberList.map(addr => `${addr.slice(0, 6)}...${addr.slice(-4)}`)
           });
         } catch (error) {
+          // A list that could not be read is not an empty roster, and events
+          // would only guess at it: the load fails and the page offers a retry.
           logSuiReadError('Error fetching members from blockchain table:', error);
+          throw error;
         }
       }
-      
-      // Fallback: Build event-based member list if blockchain method failed
+
+      // Event history: join dates, and where the Member record cannot say,
+      // deposit status and (with no members in the table) the roster. Every
+      // page of each list, or the load fails: an unread list is not "no such
+      // event", which would read as an unpaid deposit or a missing member.
+      const [memberEventList, custodyEventList, memberActivatedEventList, securityReturnedEventList] = await Promise.all([
+        readAllEvents({ MoveEventType: `${determinedPackageId}::njangi_circles::MemberJoined` }),
+        readAllEvents({ MoveEventType: `${determinedPackageId}::njangi_custody::CustodyDeposited` }),
+        readAllEvents({ MoveEventType: `${determinedPackageId}::njangi_members::MemberActivated` }),
+        readAllEvents({ MoveEventType: `${determinedPackageId}::njangi_circles::SecurityDepositReturned` }),
+      ]);
+      const memberEvents = { data: memberEventList };
+      const custodyEvents = { data: custodyEventList };
+      const memberActivatedEvents = { data: memberActivatedEventList };
+      const securityReturnedEvents = { data: securityReturnedEventList };
+
+      // Fallback: Build event-based member list if the members table has none
       let eventBasedMemberCount = 1; // Start with admin
-      let memberEvents: { data: SuiEvent[] } = { data: [] };
-      let custodyEvents: { data: SuiEvent[] } = { data: [] };
-      let memberActivatedEvents: { data: SuiEvent[] } = { data: [] };
-      let securityReturnedEvents: { data: SuiEvent[] } = { data: [] };
-      
+
       if (memberAddresses.size === 0) {
-        // Only fetch events if blockchain method failed
         debugLog('Falling back to event-based member discovery');
         if (typeof fields.admin === 'string') memberAddresses.add(fields.admin);
-        
-        try {
-          [memberEvents, custodyEvents, memberActivatedEvents, securityReturnedEvents] = await Promise.all([
-            queryEventsCached({
-              query: { MoveEventType: `${determinedPackageId}::njangi_circles::MemberJoined` },
-              limit: 1000
-            }),
-            queryEventsCached({
-              query: { MoveEventType: `${determinedPackageId}::njangi_custody::CustodyDeposited` },
-              limit: 100
-            }),
-            queryEventsCached({
-              query: { MoveEventType: `${determinedPackageId}::njangi_members::MemberActivated` },
-              limit: 100
-            }),
-            queryEventsCached({
-              query: { MoveEventType: `${determinedPackageId}::njangi_circles::SecurityDepositReturned` },
-              limit: 100
-            })
-          ]);
-          
-          const circleMemberEvents = memberEvents.data.filter((event: SuiEvent) => 
-            (event.parsedJson as { circle_id?: string })?.circle_id === id
-          );
-          circleMemberEvents.forEach((event: SuiEvent) => {
-            const memberAddr = (event.parsedJson as { member?: string })?.member;
-            if (memberAddr) memberAddresses.add(memberAddr);
-          });
-          
-          eventBasedMemberCount = memberAddresses.size;
-          debugLog('Event-based member discovery', { 
-            count: eventBasedMemberCount, 
-            addresses: Array.from(memberAddresses).map(addr => `${addr.slice(0, 6)}...${addr.slice(-4)}`)
-          });
-        } catch (error) {
-          logSuiReadError('Error with event-based member discovery:', error);
-          eventBasedMemberCount = 1; // Default fallback
-        }
-      } else {
-        // Still fetch events for deposit status checking, but with smaller limits since we don't need them for member discovery
-        try {
-          [memberEvents, custodyEvents, memberActivatedEvents, securityReturnedEvents] = await Promise.all([
-            queryEventsCached({
-              query: { MoveEventType: `${determinedPackageId}::njangi_circles::MemberJoined` },
-              limit: 100 // Reduced limit since only used for join dates
-            }),
-            queryEventsCached({
-              query: { MoveEventType: `${determinedPackageId}::njangi_custody::CustodyDeposited` },
-              limit: 100
-            }),
-            queryEventsCached({
-              query: { MoveEventType: `${determinedPackageId}::njangi_members::MemberActivated` },
-              limit: 100
-            }),
-            queryEventsCached({
-              query: { MoveEventType: `${determinedPackageId}::njangi_circles::SecurityDepositReturned` },
-              limit: 100
-            })
-          ]);
-        } catch (error) {
-          logSuiReadError('Error fetching events for member details:', error);
-          // Initialize empty arrays if event fetching fails
-          memberEvents = { data: [] };
-          custodyEvents = { data: [] };
-          memberActivatedEvents = { data: [] };
-          securityReturnedEvents = { data: [] };
-        }
+
+        const circleMemberEvents = memberEvents.data.filter((event: SuiEvent) =>
+          (event.parsedJson as { circle_id?: string })?.circle_id === id
+        );
+        circleMemberEvents.forEach((event: SuiEvent) => {
+          const memberAddr = (event.parsedJson as { member?: string })?.member;
+          if (memberAddr) memberAddresses.add(memberAddr);
+        });
+
+        eventBasedMemberCount = memberAddresses.size;
+        debugLog('Event-based member discovery', {
+          count: eventBasedMemberCount,
+          addresses: Array.from(memberAddresses).map(addr => `${addr.slice(0, 6)}...${addr.slice(-4)}`)
+        });
       }
       
       // Use blockchain count as primary, event-based as fallback
@@ -1219,7 +1202,6 @@ export default function ManageCircle() {
         try {
           // Use utility function to check deposit status
           const { hasPaid, position, depositBalanceRaw, lastContributionRaw, memberObjectId } = await checkMemberDepositStatus(
-            client,
             id as string,
             membersTableId,
             address,
@@ -1256,17 +1238,10 @@ export default function ManageCircle() {
             position: finalPosition
           });
         } catch (error) {
+          // A member record that could not be read is not an unpaid deposit
+          // or a zero balance: the load fails and the page offers a retry.
           logSuiReadError(`Manage - Error fetching deposit status for ${address}:`, error);
-          membersList.push({
-            address,
-            memberObjectId: memberObjectIds.get(address),
-            depositPaid: false,
-            depositBalanceRaw: 0n,
-            lastContributionRaw: 0n,
-            status: 'active',
-            joinDate: creationTimestamp ?? Date.now(),
-            position: undefined,
-          });
+          throw error;
         }
       });
       await Promise.all(depositStatusPromises);
@@ -1392,6 +1367,9 @@ export default function ManageCircle() {
         }
 
     } catch (error) {
+      // A failed read is not a gone circle: the page says so and offers a
+      // retry instead of "Circle not found" (a circle already shown stays).
+      setLoadError(true);
       // Transient cooldowns log quietly and skip the toast (self-heals on
       // refresh); only genuine failures surface to the user.
       if (!logSuiReadError('Manage - Error fetching circle details:', error)) {
@@ -2675,7 +2653,7 @@ export default function ManageCircle() {
     const read = await readRoundOpen(
       getCurrentNetwork() as NetworkType,
       circle.id,
-      getSuiClientFromPool(getCurrentRpcUrl()),
+      getReadingSuiClient(),
     );
     setSettlementRound(read);
     return read;
@@ -2769,7 +2747,7 @@ export default function ManageCircle() {
     setFetchingSuiBalance(true);
     setFetchingUsdcBalance(true);
     try {
-      const client = getSuiClientFromPool(getCurrentRpcUrl());
+      const client = getReadingSuiClient();
       const usdcCoinType = manageUsdcCoinType();
       const balances = await readCustodyBalances(client, walletId, usdcCoinType);
       const outstandingDepositRaw = members.reduce((total, member) => {
@@ -3413,7 +3391,7 @@ export default function ManageCircle() {
 
             // Re-read once the node has the new order. A read that beats the
             // indexer showed every member as "without position" until a reload.
-            await waitForTxIndexed(getSuiClientFromPool(getJsonRpcUrl()), digest);
+            await waitForTxIndexed(getReadingSuiClient(), digest);
             await fetchCircleDetails();
             setIsEditingRotation(false);
             
@@ -3526,7 +3504,7 @@ export default function ManageCircle() {
           );
 
           toast.success('Recorded. Members can now confirm it.', { id: toastId });
-          await waitForTxIndexed(getSuiClientFromPool(getJsonRpcUrl()), digest);
+          await waitForTxIndexed(getReadingSuiClient(), digest);
           await fetchCircleDetails();
         } catch (error) {
           console.error('Error declaring migration state:', error);
@@ -3571,7 +3549,7 @@ export default function ManageCircle() {
           );
 
           toast.success('Removed. This circle will start from the beginning.', { id: toastId });
-          await waitForTxIndexed(getSuiClientFromPool(getJsonRpcUrl()), digest);
+          await waitForTxIndexed(getReadingSuiClient(), digest);
           await fetchCircleDetails();
         } catch (error) {
           console.error('Error clearing migration state:', error);
@@ -3869,7 +3847,7 @@ export default function ManageCircle() {
 
     console.log('[ContributionStatus] Fetching for circle:', circle.id);
     setLoadingContributions(true);
-    const client = getSuiClientFromPool(getJsonRpcUrl());
+    setContributionStatusError(false);
     let currentCycleFromServer = 0;
     let determinedActiveMembersInRotation: string[] = [];
     let currentPositionInRotation: number | null = null;
@@ -3877,7 +3855,11 @@ export default function ManageCircle() {
     const uniqueContributors = new Set<string>();
 
     try {
-      const circleObjectData = await readObject(circle.id, { showContent: true });
+      const circleObjectData = await readObject(
+        circle.id,
+        { showContent: true },
+        { expectType: '::njangi_circles::Circle' },
+      );
       if (circleObjectData.data?.content && 'fields' in circleObjectData.data.content) {
         const cFields = circleObjectData.data.content.fields as Record<string, SuiFieldValue>;
         const membersField = cFields.members && typeof cFields.members === 'object' && cFields.members !== null
@@ -3908,11 +3890,13 @@ export default function ManageCircle() {
                 .filter((addr): addr is string => typeof addr === 'string' && addr !== '0x0')
                 .map(async (address) => {
                   try {
-                    const memberField = await client.getDynamicFieldObject({
-                      parentId: membersTableId,
-                      name: { type: 'address', value: address }
+                    const memberField = await readDynamicFieldObject(membersTableId, {
+                      type: 'address',
+                      value: address,
                     });
 
+                    // Only a confirmed missing record lands here; a failed
+                    // read throws.
                     if (!memberField.data?.content || !('fields' in memberField.data.content)) {
                       return null;
                     }
@@ -3942,8 +3926,10 @@ export default function ManageCircle() {
                       statusRaw
                     };
                   } catch (error) {
+                    // An unread record is not an inactive member: the status
+                    // as a whole is unreadable, not a smaller round.
                     console.warn('[ContributionStatus] Failed to read member contribution snapshot:', { address, error });
-                    return null;
+                    throw error;
                   }
                 })
             );
@@ -4023,7 +4009,10 @@ export default function ManageCircle() {
 
     } catch (error) {
       console.error("[ContributionStatus] Error fetching contribution status:", error);
+      // Cycle 0 hides the per-member marks; the progress card says the read
+      // failed rather than "No contributions yet".
       setContributionStatus({ contributedMembers: new Set(), activeMembersInRotation: [], currentCycle: 0, totalActiveInRotation: 0, currentPosition: null });
+      setContributionStatusError(true);
     } finally {
       setLoadingContributions(false);
     }
@@ -4044,11 +4033,11 @@ export default function ManageCircle() {
     setLoadingRecoveryStatus(true);
     setRecoveryStatusError(false);
     try {
-      const client = getSuiClientFromPool(getJsonRpcUrl());
-      const dynamicFieldsResult = await client.getDynamicFields({ parentId: id as string });
-      const configFields = await getCircleConfigFieldsFromDynamicFields(client, dynamicFieldsResult.data);
+      const client = getReadingSuiClient();
+      const dynamicFields = await listDynamicFields(id as string);
+      const configFields = await getCircleConfigFieldsFromDynamicFields(client, dynamicFields);
       setRecoveryStatus(parseRecoveryStatus(configFields));
-      setMigrationLedger(await getMigrationLedgerFromDynamicFields(client, dynamicFieldsResult.data));
+      setMigrationLedger(await getMigrationLedgerFromDynamicFields(client, dynamicFields));
       setRecoveryStatusError(false);
     } catch (error) {
       logSuiReadError('Failed to refresh recovery status:', error);
@@ -4083,7 +4072,7 @@ export default function ManageCircle() {
         setCirclePackageId(resolvedPackageId);
       }
 
-      const client = getSuiClientFromPool(getJsonRpcUrl());
+      const client = getReadingSuiClient();
       setRecoveryExecution(
         await loadRecoveryExecutionStatus({
           client,
@@ -4206,7 +4195,7 @@ export default function ManageCircle() {
       // Re-read only once the node we read from has the transaction, or the
       // panel shows the state from before it (the vote count unchanged, the
       // Execute button still there).
-      await waitForTxIndexed(getSuiClientFromPool(getJsonRpcUrl()), digest);
+      await waitForTxIndexed(getReadingSuiClient(), digest);
       await Promise.all([
         fetchCircleDetails(),
         fetchRecoveryStatus(),
@@ -4305,7 +4294,7 @@ export default function ManageCircle() {
     let recoveryCoinType: string;
     try {
       ({ coinType: recoveryCoinType } = await resolveRecoveryCoinType(
-        getPooledSuiClient(),
+        getReadingSuiClient(),
         recoveryWalletId,
         getCurrentCoinTypes().USDC,
       ));
@@ -4361,7 +4350,7 @@ export default function ManageCircle() {
     let closeCoinType: string;
     try {
       ({ coinType: closeCoinType } = await resolveRecoveryCoinType(
-        getPooledSuiClient(),
+        getReadingSuiClient(),
         closeWalletId,
         getCurrentCoinTypes().USDC,
       ));
@@ -4427,7 +4416,7 @@ export default function ManageCircle() {
         : previous);
       setIsEditingRecoveryDelegate(false);
       // A read that beats the indexer would put the previous delegate back.
-      await waitForTxIndexed(getSuiClientFromPool(getJsonRpcUrl()), digest);
+      await waitForTxIndexed(getReadingSuiClient(), digest);
       await Promise.all([
         fetchCircleDetails(),
         fetchRecoveryStatus(),
@@ -5270,7 +5259,7 @@ export default function ManageCircle() {
                             <p className={sectionEyebrowClass}>Contribution Progress</p>
                             <div className="mt-3 flex items-center justify-between gap-4">
                               <p className="text-sm font-medium text-slate-700">
-                                Cycle {contributionStatus.currentCycle}
+                                Cycle {contributionStatusError ? circle.currentCycle : contributionStatus.currentCycle}
                                 {typeof contributionStatus.currentPosition === 'number' && contributionStatus.totalActiveInRotation > 0 && (
                                   <span className="ml-1 text-slate-500">
                                     (Position {contributionStatus.currentPosition + 1} of {contributionStatus.totalActiveInRotation})
@@ -5280,6 +5269,8 @@ export default function ManageCircle() {
                               <p className="text-xs font-medium text-slate-500">
                                 {loadingContributions
                                   ? 'Loading...'
+                                  : contributionStatusError
+                                    ? 'Couldn’t read contributions. Refresh to try again.'
                                   : contributionStatus.contributedMembers.size > 0
                                     ? `${contributionStatus.contributedMembers.size}/${contributionStatus.totalActiveInRotation - 1} contributed`
                                     : 'No contributions yet'}
@@ -6981,6 +6972,29 @@ export default function ManageCircle() {
                   )}
                 </div>
 
+              </div>
+            ) : loadError ? (
+              <div className="px-4 py-12 text-center sm:px-8">
+                <AlertTriangle className="mx-auto h-8 w-8 text-amber-600" />
+                <h3 className="mt-4 text-xl font-semibold tracking-tight text-slate-950">
+                  Couldn&apos;t load this circle just now
+                </h3>
+                <p className="mx-auto mt-3 max-w-xl text-sm leading-6 text-slate-600">
+                  The network did not answer when we read this circle. That is not
+                  the same as the circle being gone, so try again in a moment.
+                </p>
+                <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void fetchCircleDetails();
+                    }}
+                    className={primaryActionClass}
+                  >
+                    <RefreshCw className="mr-2 h-4 w-4" />
+                    Try again
+                  </button>
+                </div>
               </div>
             ) : (
               <div className="py-4 text-center">
