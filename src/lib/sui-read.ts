@@ -121,6 +121,11 @@ interface CacheEntry<T> {
 const responseCache = new Map<string, CacheEntry<unknown>>();
 const inFlight = new Map<string, Promise<unknown>>();
 
+// Bumped by every invalidation. A read that started before the latest
+// invalidation (before a transaction landed) still answers its own callers,
+// but its result is not kept, and later callers do not join it.
+let readGeneration = 0;
+
 /**
  * Generic single-flight + TTL cache wrapper. Identical concurrent calls (same
  * `key`) share one in-flight promise; successful results are cached for
@@ -147,17 +152,22 @@ export async function cachedRead<T>(
     return existing;
   }
 
-  const promise = (async () => {
+  const generation = readGeneration;
+  const self: { promise?: Promise<T> } = {};
+  const promise: Promise<T> = (async () => {
     try {
-      const value = await loader();
-      if (ttlMs > 0 && keep(value)) {
+      // The loader starts on a microtask, so even one that throws at once
+      // settles after this promise is registered and is then removed.
+      const value = await Promise.resolve().then(loader);
+      if (ttlMs > 0 && keep(value) && generation === readGeneration) {
         responseCache.set(key, { value, expiresAt: Date.now() + ttlMs });
       }
       return value;
     } finally {
-      inFlight.delete(key);
+      if (inFlight.get(key) === self.promise) inFlight.delete(key);
     }
   })();
+  self.promise = promise;
 
   inFlight.set(key, promise);
   return promise;
@@ -365,8 +375,9 @@ async function flushObjectBatchV2(source: V2ReadSource, batch: ObjectBatch, ids:
  * without arguments (any arguments match), or `::module::Struct` for any
  * package (structs added in a package upgrade carry that version's id).
  */
-export function isExpectedMoveType(actualType: string | null | undefined, expected: string): boolean {
+export function isExpectedMoveType(actualType: string | null | undefined, expected: string | readonly string[]): boolean {
   if (typeof actualType !== 'string' || actualType === '') return false;
+  if (typeof expected !== 'string') return expected.some((one) => isExpectedMoveType(actualType, one));
   const actual = toLongTypeString(actualType);
   const open = actual.indexOf('<');
   const actualBase = open < 0 ? actual : actual.slice(0, open);
@@ -377,10 +388,11 @@ export function isExpectedMoveType(actualType: string | null | undefined, expect
   return wanted.includes('<') ? actual === wanted : actualBase === wanted;
 }
 
-function checkExpectedType(id: string, response: SuiObjectResponse, expected: string): SuiObjectResponse {
+function checkExpectedType(id: string, response: SuiObjectResponse, expected: string | readonly string[]): SuiObjectResponse {
   if (response.data && !isExpectedMoveType(response.data.type, expected)) {
+    const wanted = typeof expected === 'string' ? expected : expected.join(' or ');
     throw new SuiReadError(
-      `${id} is a ${response.data.type ?? 'object of unknown type'}, not a ${expected}`,
+      `${id} is a ${response.data.type ?? 'object of unknown type'}, not a ${wanted}`,
       'unexpected-type',
     );
   }
@@ -391,8 +403,13 @@ function checkExpectedType(id: string, response: SuiObjectResponse, expected: st
 export interface ReadObjectOpts {
   network?: NetworkType;
   ttlMs?: number;
-  /** The answer counts only if the object is of this type (see isExpectedMoveType); otherwise the read throws. */
-  expectType?: string;
+  /**
+   * The answer counts only if the object is of this type, or of one of these
+   * types (see isExpectedMoveType); otherwise the read throws. Pin the package
+   * (circle-service.ts circleMoveTypes): `::module::Struct` alone accepts the
+   * struct from any package, including one anybody published.
+   */
+  expectType?: string | readonly string[];
 }
 
 /**
@@ -737,8 +754,10 @@ export async function readDynamicFieldObject(
 /** Drop cached reads. With no prefix, clears everything; otherwise only keys
  *  beginning with `keyPrefix` (e.g. `"obj:"` or a specific `cacheKey`). */
 export function invalidateSuiRead(keyPrefix?: string): void {
+  readGeneration += 1;
   if (!keyPrefix) {
     responseCache.clear();
+    inFlight.clear();
     return;
   }
   for (const key of responseCache.keys()) {
@@ -746,16 +765,24 @@ export function invalidateSuiRead(keyPrefix?: string): void {
       responseCache.delete(key);
     }
   }
-}
-
-/** Invalidate every cached read of a specific object id, across all option
- *  sets / networks. Call this right after a transaction that mutates it. */
-export function invalidateObject(id: string): void {
-  for (const key of responseCache.keys()) {
-    if ((key.startsWith('obj:') || key.startsWith('dfs:')) && key.endsWith(`:${id}`)) {
-      responseCache.delete(key);
+  for (const key of inFlight.keys()) {
+    if (key.startsWith(keyPrefix)) {
+      inFlight.delete(key);
     }
   }
+}
+
+/**
+ * Call right after a transaction that touched `id`. A write changes more than
+ * the object it names: the circle's members-table entries (read under their
+ * own derived ids), its custody wallet and coins, its dynamic fields and the
+ * event lists. So every cached read goes, and so does every read already in
+ * flight (it may have started before the write landed). Move type layouts,
+ * which never change, stay.
+ */
+export function invalidateObject(id: string): void {
+  void id;
+  invalidateSuiRead();
 }
 
 /** Full reset — primarily for tests. */

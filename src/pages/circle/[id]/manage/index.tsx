@@ -41,7 +41,7 @@ import { lookupMemberNames } from '@/lib/member-name-lookup';
 import { supportedCoinBySymbol, UNSUPPORTED_COIN_LABEL } from '@/lib/supported-coins';
 import { priceService } from '../../../../services/price-service';
 import { JoinRequest } from '../../../../services/database-service';
-import { getCirclePackageId } from '../../../../services/circle-service';
+import { circleMoveTypes, readCirclePackageId } from '../../../../services/circle-service';
 import {
   getCurrentCoinTypes,
   getCurrentNetwork,
@@ -229,14 +229,20 @@ const processConfigValues = (
   return configValues;
 };
 
+/** The event lists only the deposit fallback needs (a member without a readable record). */
+interface DepositFallbackEvents {
+  memberActivatedEvents: SuiEvent[];
+  custodyEvents: SuiEvent[];
+  securityReturnedEvents: SuiEvent[];
+}
+
 // Utility function to check member deposit status using multiple methods
 const checkMemberDepositStatus = async (
   circleId: string,
   membersTableId: string | undefined,
   address: string,
-  memberActivatedEvents: SuiEvent[],
-  custodyEvents: SuiEvent[],
-  securityReturnedEvents: SuiEvent[]
+  // Read only when a member's own record cannot say (package-wide scans).
+  loadFallbackEvents: () => Promise<DepositFallbackEvents>,
 ): Promise<{ hasPaid: boolean; position?: number; depositBalanceRaw: bigint; lastContributionRaw: bigint; memberObjectId: string | null }> => {
   let hasPaid = false;
   let position: number | undefined = undefined;
@@ -293,6 +299,12 @@ const checkMemberDepositStatus = async (
     debugLog(`Could not parse the Member struct for ${shortenAddress(address)}, using events`, null);
   }
   
+  // The Member record answered: no event scan is needed.
+  if (resolvedFromStruct) {
+    return { hasPaid, position, depositBalanceRaw, lastContributionRaw, memberObjectId };
+  }
+  const { memberActivatedEvents, custodyEvents, securityReturnedEvents } = await loadFallbackEvents();
+
   // Method 2: Fallback to MemberActivated Event (using pre-fetched data)
   if (!resolvedFromStruct && !hasPaid) {
      hasPaid = memberActivatedEvents.some(event => {
@@ -881,8 +893,14 @@ export default function ManageCircle() {
       // Read-only: off JSON-RPC (Sui gRPC, then GraphQL). Nothing here signs.
       const client = getReadingSuiClient();
 
-      // Determine package ID for this circle
-      const determinedPackageId = await getCirclePackageId(id as string, userAddress);
+      // The package that defines this circle's type (its events carry it),
+      // read from the circle itself: a failed read throws to the load error.
+      const determinedPackageId = await readCirclePackageId(id as string);
+      if (determinedPackageId === null) {
+        console.warn('Manage - the chain says this circle does not exist', { circleId: id });
+        setCircle(null);
+        return;
+      }
       setCirclePackageId(determinedPackageId);
       debugLog('Using package ID', determinedPackageId);
 
@@ -890,7 +908,7 @@ export default function ManageCircle() {
       // A read that fails throws (the page then offers a retry); only the
       // chain answering that the circle is gone is "Circle not found".
       const [objectRead, dynamicFieldsRead] = await Promise.allSettled([
-        readObject(id as string, { showContent: true, showType: true }, { expectType: '::njangi_circles::Circle' }),
+        readObject(id as string, { showContent: true, showType: true }, { expectType: circleMoveTypes() }),
         listDynamicFields(id as string),
       ]);
       if (objectRead.status === 'rejected') throw objectRead.reason;
@@ -1141,20 +1159,28 @@ export default function ManageCircle() {
         }
       }
 
-      // Event history: join dates, and where the Member record cannot say,
-      // deposit status and (with no members in the table) the roster. Every
-      // page of each list, or the load fails: an unread list is not "no such
-      // event", which would read as an unpaid deposit or a missing member.
-      const [memberEventList, custodyEventList, memberActivatedEventList, securityReturnedEventList] = await Promise.all([
-        readAllEvents({ MoveEventType: `${determinedPackageId}::njangi_circles::MemberJoined` }),
-        readAllEvents({ MoveEventType: `${determinedPackageId}::njangi_custody::CustodyDeposited` }),
-        readAllEvents({ MoveEventType: `${determinedPackageId}::njangi_members::MemberActivated` }),
-        readAllEvents({ MoveEventType: `${determinedPackageId}::njangi_circles::SecurityDepositReturned` }),
-      ]);
-      const memberEvents = { data: memberEventList };
-      const custodyEvents = { data: custodyEventList };
-      const memberActivatedEvents = { data: memberActivatedEventList };
-      const securityReturnedEvents = { data: securityReturnedEventList };
+      // Event history: join dates, and (with no members in the table) the
+      // roster. Every page, or the load fails: an unread list is not "no such
+      // event", which would read as a missing member. These scans are
+      // package-wide (Sui GraphQL cannot filter events by circle), so the
+      // deposit-fallback lists below are read only for a member whose own
+      // record cannot say, and once per load.
+      const memberEvents = {
+        data: await readAllEvents({ MoveEventType: `${determinedPackageId}::njangi_circles::MemberJoined` }),
+      };
+      let fallbackEvents: Promise<DepositFallbackEvents> | null = null;
+      const loadFallbackEvents = () => {
+        fallbackEvents ??= Promise.all([
+          readAllEvents({ MoveEventType: `${determinedPackageId}::njangi_members::MemberActivated` }),
+          readAllEvents({ MoveEventType: `${determinedPackageId}::njangi_custody::CustodyDeposited` }),
+          readAllEvents({ MoveEventType: `${determinedPackageId}::njangi_circles::SecurityDepositReturned` }),
+        ]).then(([memberActivatedEvents, custodyEvents, securityReturnedEvents]) => ({
+          memberActivatedEvents,
+          custodyEvents,
+          securityReturnedEvents,
+        }));
+        return fallbackEvents;
+      };
 
       // Fallback: Build event-based member list if the members table has none
       let eventBasedMemberCount = 1; // Start with admin
@@ -1205,9 +1231,7 @@ export default function ManageCircle() {
             id as string,
             membersTableId,
             address,
-            memberActivatedEvents.data,
-            custodyEvents.data,
-            securityReturnedEvents.data
+            loadFallbackEvents,
           );
 
           // Find join date from MemberJoined event if possible
@@ -3858,7 +3882,7 @@ export default function ManageCircle() {
       const circleObjectData = await readObject(
         circle.id,
         { showContent: true },
-        { expectType: '::njangi_circles::Circle' },
+        { expectType: circleMoveTypes() },
       );
       if (circleObjectData.data?.content && 'fields' in circleObjectData.data.content) {
         const cFields = circleObjectData.data.content.fields as Record<string, SuiFieldValue>;
@@ -4061,7 +4085,7 @@ export default function ManageCircle() {
       const resolvedPackageId =
         packageIdOverride ||
         circlePackageId ||
-        (userAddress ? await getCirclePackageId(id as string, userAddress) : null);
+        (await readCirclePackageId(id as string));
 
       if (!resolvedPackageId) {
         setRecoveryExecution(null);
@@ -4085,7 +4109,7 @@ export default function ManageCircle() {
     } finally {
       setLoadingRecoveryExecution(false);
     }
-  }, [circlePackageId, id, userAddress]);
+  }, [circlePackageId, id]);
 
   useEffect(() => {
     if (!id || !userAddress) {

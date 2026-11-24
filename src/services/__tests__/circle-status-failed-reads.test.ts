@@ -79,7 +79,9 @@ describe('getCircleStatus when a read fails', () => {
     expect(readObjectMock).toHaveBeenCalledWith(
       CIRCLE_ID,
       expect.anything(),
-      expect.objectContaining({ expectType: '::njangi_circles::Circle' }),
+      expect.objectContaining({
+        expectType: expect.arrayContaining([`${PKG}::njangi_circles::Circle`.replace(PKG, '0xenvpkg')]),
+      }),
     );
     expect(status).toMatchObject({ name: 'Susu', maxMembers: 5, contributionAmountUsd: 10 });
   });

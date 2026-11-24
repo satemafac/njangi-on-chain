@@ -6,6 +6,15 @@
 
 jest.mock('@/services/network-config', () => ({ getCurrentNetwork: () => 'testnet' }));
 jest.mock('@/services/sui-rpc-failover', () => ({ getPooledSuiClient: jest.fn() }));
+const grpcWait = jest.fn();
+const graphqlWait = jest.fn();
+jest.mock('@/lib/v2-sui-client', () => ({
+  v2TxTransports: jest.fn(async () => [
+    { name: 'v2-grpc', waitForTransaction: grpcWait },
+    { name: 'v2-graphql', waitForTransaction: graphqlWait },
+  ]),
+  v2Reads: jest.fn(),
+}));
 jest.mock('@/lib/sui-read', () => ({
   readObject: jest.fn(),
   readObjects: jest.fn(),
@@ -85,5 +94,30 @@ describe('getReadingSuiClient', () => {
     const a = getReadingSuiClient('testnet');
     expect(getReadingSuiClient('testnet')).toBe(a);
     expect(getReadingSuiClient('testnet')).not.toBe(a);
+  });
+});
+
+describe('waitForTransaction (review of #175, issue 3)', () => {
+  beforeEach(() => {
+    grpcWait.mockReset();
+    graphqlWait.mockReset();
+    (getPooledSuiClient as jest.Mock).mockReturnValue(pooledClient(true));
+  });
+
+  it('resolves only once GraphQL, which the refresh reads first, has the transaction too', async () => {
+    const order: string[] = [];
+    grpcWait.mockImplementation(async () => { order.push('grpc'); return { digest: 'D' }; });
+    graphqlWait.mockImplementation(async () => { order.push('graphql'); return { digest: 'D' }; });
+    await getReadingSuiClient('testnet').waitForTransaction({ digest: 'D', timeout: 5_000 });
+    expect(order).toEqual(['grpc', 'graphql']);
+  });
+
+  it('still waits for GraphQL when gRPC fails, and throws when GraphQL never has it', async () => {
+    grpcWait.mockRejectedValue(new Error('UNAVAILABLE'));
+    graphqlWait.mockResolvedValueOnce({ digest: 'D' });
+    await expect(getReadingSuiClient('testnet').waitForTransaction({ digest: 'D' })).resolves.toEqual({ digest: 'D' });
+
+    graphqlWait.mockRejectedValueOnce(new Error('timed out'));
+    await expect(getReadingSuiClient('testnet').waitForTransaction({ digest: 'D' })).rejects.toThrow(/timed out/);
   });
 });

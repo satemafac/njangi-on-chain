@@ -41,7 +41,7 @@ import { useMilestones } from '@/hooks/useMilestones';
 import { readCircleGoalContext, type CircleGoalContext } from '@/lib/milestone-discovery';
 import type { NetworkType } from '@/services/whatsapp-registry-service';
 import { priceService } from '../../../services/price-service';
-import { getCirclePackageId, getSuiClientFromPool } from '../../../services/circle-service';
+import { getSuiClientFromPool, readCirclePackageId } from '../../../services/circle-service';
 import {
   readObject,
   readAllEvents,
@@ -327,8 +327,10 @@ export default function CircleDetails() {
         return null;
       }
 
-      const determinedPackageId = await getCirclePackageId(id as string, userAddress);
-      
+      // The circle's own package (its events carry it); a failed read throws.
+      const determinedPackageId = await readCirclePackageId(id as string);
+      if (determinedPackageId === null) return null;
+
       // Check if user ever joined this circle and get their join events
       // (every page of them: an unread page is not "never joined")
       const joinEvents = await readEveryEvent(`${determinedPackageId}::njangi_circles::MemberJoined`);
@@ -418,8 +420,15 @@ export default function CircleDetails() {
       setLoading(true);
       setLoadError(false);
       
-      // Determine package ID for this circle
-      const determinedPackageId = await getCirclePackageId(id as string, userAddress);
+      // The package that defines this circle's type (its events carry it),
+      // read from the circle itself: a failed read throws to the load error.
+      const determinedPackageId = await readCirclePackageId(id as string);
+      if (determinedPackageId === null) {
+        // The chain answered that the circle is gone: "Circle not found".
+        console.log('Details - Circle object is gone:', id);
+        setCircle(null);
+        return;
+      }
       console.log('Details - Using package ID:', determinedPackageId);
       setCirclePackageId(determinedPackageId);
       // Get object data: Sui GraphQL first, as the access check reads it (it
@@ -737,7 +746,7 @@ export default function CircleDetails() {
       const resolvedPackageId =
         packageIdOverride ||
         circlePackageId ||
-        (userAddress ? await getCirclePackageId(id as string, userAddress) : null);
+        (await readCirclePackageId(id as string));
 
       if (!resolvedPackageId) {
         setRecoveryExecution(null);
@@ -766,7 +775,7 @@ export default function CircleDetails() {
     } finally {
       setLoadingRecoveryExecution(false);
     }
-  }, [circlePackageId, id, userAddress]);
+  }, [circlePackageId, id]);
 
   // The coin type a recovery unwinds — the type argument execute_recovery /
   // trigger_auto_release take, and the decimals the refund totals below are

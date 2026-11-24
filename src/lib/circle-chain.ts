@@ -1,27 +1,16 @@
-import type { NetworkType } from '@/config/public-env';
+// The package lineage moved to package-lineage.ts (a leaf module, so the
+// list of this app's packages does not depend on the rest of this file).
+export {
+  extractPackageIdFromMoveType,
+  getPackageLookupIds,
+  getPublishedPackageMetadata,
+  normalizePackageId,
+  resolveUpgradeAwarePackageId,
+  type PublishedPackageMetadata,
+} from './package-lineage';
 
 export type CircleActiveSource = 'field' | 'activation-event' | 'default';
 
-export interface PublishedPackageMetadata {
-  /**
-   * Package version that DEFINED the v1.1 timed-escrow types
-   * (ContributionTimeKey). Types introduced in an upgrade anchor to the
-   * id of the version that introduced them — neither the original id nor
-   * whatever published-at later becomes. Null on lineages that have not
-   * published v1.1 yet (mainnet today).
-   */
-  timedEntriesPackageId?: string | null;
-  /**
-   * Package version that DEFINED the v11 asset-terms types and events
-   * (CircleAssetPolicySet, SecurityDepositPosted, AssetRefundCompleted,
-   * RegistryBlessed, AssetFlagsSet, and the deposit-record keys). Same rule
-   * as `timedEntriesPackageId`: it stays here after published-at moves on.
-   * Null on lineages without v11 (mainnet today).
-   */
-  assetTermsPackageId?: string | null;
-  publishedAt: string | null;
-  originalId: string | null;
-}
 
 export interface CircleLifecycleFields {
   is_active?: unknown;
@@ -73,176 +62,6 @@ function parseIntegerLike(value: unknown): number | null {
 }
 
 // Browser-safe mirror of move/Published.toml for upgrade-aware package routing.
-const PACKAGE_LINEAGE_BY_NETWORK: Record<NetworkType, PublishedPackageMetadata> = {
-  mainnet: {
-    publishedAt: '0x7bf5274804a6008ebfbd9bfe766defb7fd5aa5fe6777419c2b6531ec99120b55',
-    originalId: '0x7bf5274804a6008ebfbd9bfe766defb7fd5aa5fe6777419c2b6531ec99120b55',
-    timedEntriesPackageId: null,
-    assetTermsPackageId: null,
-  },
-  // Testnet lineage. Original published 2026-06-12; v2 (2026-06-15) added
-  // njangi_goal_pool; v3 (2026-06-15) added combined "amount by date" goals;
-  // v4 (2026-08-02) locked the rotation order mid-cycle and made
-  // `njangi_cycle_escrow::finalize` recipient-only; v5 (2026-08-20) let a
-  // circle that was already running elsewhere join mid-rotation; v6
-  // (2026-08-22) added the Circle Record v1.1 entries — open_cycle*_indexed
-  // (escrow-history dynamic field on the Circle) and contribute_timed*
-  // (per-member contribution timestamps); v7 (2026-09-06) stopped
-  // `resume_cycle` from clearing held security deposits and added the
-  // permissionless `reconcile_deposit_paid` repair (PR #19); v8 (2026-09-06)
-  // added the open-round marker so a round cannot be opened twice, plus
-  // `release_open_round` for abandoned escrows (PR #20); v9 (2026-09-06)
-  // made `create_circle` store the real custody wallet id instead of the
-  // circle's own id (PR #14) — circles created from v9 on resolve their
-  // wallet from the `wallet_id` field alone; v10 (2026-10-03) lets
-  // `finalize_and_redeem*` collect a round that is already finalized (PR #83)
-  // — a body-only change that defines no new types, so nothing new is
-  // anchored to it; v11 (2026-10-05, PR #109) pins each circle's coin and
-  // amounts, keeps security deposits as per-member records in the circle's
-  // custody wallet, refunds per coin, and guards round opens — it defines
-  // new types and events (`assetTermsPackageId`).
-  //
-  // published-at = latest package (move-call target); original-id stays v1
-  // (type identity + event filters). Every version since has been an UPGRADE,
-  // not a fresh publish, so original-id is unchanged and every circle created
-  // under an earlier version remains reachable — which is why v4 avoided
-  // touching any public struct's abilities, and why v5 put its migration
-  // ledger in a dynamic field rather than adding a field to CircleConfig.
-  // Either would have been upgrade-incompatible and forced a new lineage,
-  // stranding every existing circle.
-  testnet: {
-    publishedAt: '0x5f71b5c82f167be517a09604a1f911a642e037ce0ae2e8f9e004f67eb52893ee',
-    originalId: '0x89cddf4dfe654e7c7b16333096d9e750cf04bb96f7de934403a512d460594f02',
-    // v6 introduced the timed-escrow types; they stay anchored here even
-    // after future upgrades move published-at.
-    timedEntriesPackageId:
-      '0x859e3add80ce891423d49702b2b3350addf1726ca634000c7394748c0c416c8e',
-    // v11 introduced the asset-terms types and events.
-    assetTermsPackageId:
-      '0x5f71b5c82f167be517a09604a1f911a642e037ce0ae2e8f9e004f67eb52893ee',
-  },
-};
-
-export function normalizePackageId(value: string | null | undefined): string | null {
-  if (!value || typeof value !== 'string') {
-    return null;
-  }
-
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return null;
-  }
-
-  return trimmed.startsWith('0x')
-    ? `0x${trimmed.slice(2).toLowerCase()}`
-    : `0x${trimmed.toLowerCase()}`;
-}
-
-export function getPublishedPackageMetadata(
-  network: NetworkType,
-): PublishedPackageMetadata {
-  const metadata = PACKAGE_LINEAGE_BY_NETWORK[network];
-
-  // Spread first so a newly added lineage field cannot be silently
-  // dropped by this accessor — timedEntriesPackageId was, and the loss
-  // was invisible until on-time evidence came back empty in production
-  // (2026-08-24) despite the on-chain data being present.
-  return {
-    ...metadata,
-    publishedAt: normalizePackageId(metadata.publishedAt),
-    originalId: normalizePackageId(metadata.originalId),
-    timedEntriesPackageId: metadata.timedEntriesPackageId
-      ? normalizePackageId(metadata.timedEntriesPackageId)
-      : null,
-    assetTermsPackageId: metadata.assetTermsPackageId
-      ? normalizePackageId(metadata.assetTermsPackageId)
-      : null,
-  };
-}
-
-export function resolveUpgradeAwarePackageId(args: {
-  network: NetworkType;
-  objectPackageId: string;
-  currentPackageId: string;
-}): string {
-  const { network, objectPackageId, currentPackageId } = args;
-  const normalizedCurrentPackageId = normalizePackageId(currentPackageId);
-  const normalizedObjectPackageId = normalizePackageId(objectPackageId);
-  const { publishedAt, originalId } = getPublishedPackageMetadata(network);
-
-  if (!normalizedObjectPackageId) {
-    return normalizedCurrentPackageId ?? objectPackageId;
-  }
-
-  if (!normalizedCurrentPackageId) {
-    return normalizedObjectPackageId;
-  }
-
-  if (normalizedObjectPackageId === normalizedCurrentPackageId) {
-    return normalizedCurrentPackageId;
-  }
-
-  if (
-    publishedAt === normalizedCurrentPackageId &&
-    originalId === normalizedObjectPackageId
-  ) {
-    return normalizedCurrentPackageId;
-  }
-
-  return normalizedObjectPackageId;
-}
-
-export function getPackageLookupIds(args: {
-  network: NetworkType;
-  packageId?: string | null;
-  currentPackageId: string;
-}): string[] {
-  const { network, packageId, currentPackageId } = args;
-  const normalizedPackageId = normalizePackageId(packageId);
-  const normalizedCurrentPackageId = normalizePackageId(currentPackageId);
-  const { publishedAt, originalId, timedEntriesPackageId, assetTermsPackageId } =
-    getPublishedPackageMetadata(network);
-  const lookupIds = new Set<string>();
-  const add = (value: string | null | undefined) => {
-    const normalized = normalizePackageId(value);
-    if (normalized) {
-      lookupIds.add(normalized);
-    }
-  };
-
-  const isCurrentLineagePackage =
-    normalizedPackageId == null ||
-    normalizedPackageId === normalizedCurrentPackageId ||
-    normalizedPackageId === publishedAt ||
-    normalizedPackageId === originalId ||
-    normalizedPackageId === timedEntriesPackageId ||
-    normalizedPackageId === assetTermsPackageId;
-
-  if (isCurrentLineagePackage) {
-    add(normalizedCurrentPackageId);
-    add(publishedAt);
-    add(originalId);
-    // Intermediate version that DEFINED types/events (the timed entries,
-    // v6). Event filters key on the defining package, so a lineage lookup
-    // must keep returning it after published-at moves past it.
-    add(timedEntriesPackageId);
-    // Same for the version that defined the asset-terms types (v11).
-    add(assetTermsPackageId);
-  } else {
-    add(normalizedPackageId);
-  }
-
-  return Array.from(lookupIds);
-}
-
-export function extractPackageIdFromMoveType(moveType?: string | null): string | null {
-  if (!moveType) {
-    return null;
-  }
-
-  const match = moveType.match(/^(0x[a-fA-F0-9]+)::/);
-  return match?.[1] ?? null;
-}
 
 export function resolveCircleLifecycleState(
   fields: CircleLifecycleFields,

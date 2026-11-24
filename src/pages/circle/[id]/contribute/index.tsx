@@ -5,7 +5,13 @@ import { toast } from 'react-hot-toast';
 import { AlertTriangle, ArrowLeft, RefreshCw } from 'lucide-react';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { priceService } from '../../../../services/price-service';
-import { PACKAGE_ID, getCirclePackageId, getSuiClientFromPool } from '../../../../services/circle-service';
+import {
+  PACKAGE_ID,
+  circleMoveTypes,
+  custodyWalletMoveTypes,
+  getSuiClientFromPool,
+  readCirclePackageId,
+} from '../../../../services/circle-service';
 import SimplifiedSwapUI from '../../../../components/SimplifiedSwapUI';
 import { getCoinType } from '../../../../config/constants';
 import {
@@ -33,6 +39,7 @@ import {
   isDynamicFieldMissingResponse,
 } from '@/lib/sui-read';
 import { getReadingSuiClient, readBalance } from '@/lib/reading-sui-client';
+import { waitForTxIndexed } from '@/lib/wait-for-tx-indexed';
 import { memberEventTimes, membershipFromEventTimes, readEveryEvent } from '@/lib/circle-membership-events';
 import type { NetworkType } from '@/services/whatsapp-registry-service';
 import { lookupMemberNames } from '@/lib/member-name-lookup';
@@ -227,7 +234,8 @@ const toDisplayAmount = (value: bigint, decimals: number): number => {
 };
 
 /** A circle object read must be a Circle: any other type is a failed read (sui-read.ts). */
-const CIRCLE_MOVE_TYPE = '::njangi_circles::Circle';
+// The Circle type from this app's packages only (circle-service.ts circleMoveTypes).
+const CIRCLE_MOVE_TYPE = (): string[] => circleMoveTypes();
 
 const isU64Like = (value: unknown): boolean =>
   (typeof value === 'string' && /^\d+$/.test(value)) ||
@@ -236,7 +244,7 @@ const isU64Like = (value: unknown): boolean =>
 // The security deposits the circle still holds, summed from its members
 // table. Every read failure throws: an unread deposit is unknown, never zero.
 const readOutstandingSecurityDepositRaw = async (circleId: string): Promise<bigint> => {
-  const circleObject = await readObject(circleId, { showContent: true }, { expectType: CIRCLE_MOVE_TYPE });
+  const circleObject = await readObject(circleId, { showContent: true }, { expectType: CIRCLE_MOVE_TYPE() });
 
   if (!circleObject.data?.content || !('fields' in circleObject.data.content)) {
     throw new Error(`Circle ${circleId} did not read; its outstanding deposits are unknown`);
@@ -491,7 +499,7 @@ export default function ContributeToCircle() {
       // First check if user is the admin. Deduped/cached read (Sui gRPC
       // first, GraphQL second): the circle object is fetched by several
       // mount-time checks; they share one read. A failed read throws.
-      const objectData = await readObject(id as string, { showContent: true }, { expectType: CIRCLE_MOVE_TYPE });
+      const objectData = await readObject(id as string, { showContent: true }, { expectType: CIRCLE_MOVE_TYPE() });
 
       if (isGoneObjectResponse(objectData)) {
         // No circle to be a member of: the details read says "Circle not
@@ -532,7 +540,9 @@ export default function ContributeToCircle() {
       }
       console.log('[Membership] User not present in members table (verified absent)');
 
-      const determinedPackageId = await getCirclePackageId(id as string, userAddress);
+      // The circle's own package (its events carry it); a failed read throws.
+      const determinedPackageId = await readCirclePackageId(id as string);
+      if (determinedPackageId === null) return null;
 
       // Check if user ever joined this circle and get their join events
       // (every page of them: an unread page is not "never joined")
@@ -802,58 +812,25 @@ export default function ContributeToCircle() {
     
     setFetchingSuiBalance(true);
     try {
-      // Reads go through the shared read layer (Sui gRPC first, GraphQL
-      // second); a failed read throws and the balances read as unknown.
-      let mainSuiBalance = 0;
-      let dynamicFieldSuiBalance = 0;
-
-      // 1. Fetch the CustodyWallet object itself
+      // The wallet must be a CustodyWallet of this app's packages; a read
+      // that fails, is gone, or is another type throws: unknown, not 0.
       const walletData = await readObject(
         circle.walletId,
         { showContent: true },
-        { expectType: '::njangi_custody::CustodyWallet' },
+        { expectType: custodyWalletMoveTypes() },
       );
-
-      if (walletData.data?.content && 'fields' in walletData.data.content) {
-        const wf = walletData.data.content.fields as Record<string, unknown>; // Use unknown instead of any
-        // Extract the main balance (contributions)
-        if (wf.balance && typeof wf.balance === 'object' && 'fields' in wf.balance) {
-          mainSuiBalance = Number((wf.balance.fields as Record<string, unknown>)?.value || 0) / 1e9;
-        } else if (wf.balance) {
-           // Handle case where balance might be a direct value (older structure?)
-           mainSuiBalance = Number(wf.balance) / 1e9;
-        }
-        console.log(`[SUI Balance Fetch] Main Balance (Contributions): ${mainSuiBalance}`);
-      } else {
-        // A wallet that did not read (or is gone) is not an empty one.
+      if (!walletData.data) {
         throw new Error(`Custody wallet ${circle.walletId} did not read`);
       }
 
-      // 2. Fetch dynamic fields to find the SUI Coin object (security deposits)
-      const dynamicFields = await listDynamicFields(circle.walletId);
-      console.log('[SUI Balance] Dynamic Fields:', dynamicFields);
-
-      for (const field of dynamicFields) {
-        if (field.objectType && field.objectType.includes('::coin::Coin<0x2::sui::SUI>')) {
-          console.log(`[SUI Balance] Found SUI Coin dynamic field: ${field.objectId}`);
-          const coinData = await readObject(field.objectId, { showContent: true });
-          if (coinData.data?.content && 'fields' in coinData.data.content) {
-            const coinFields = coinData.data.content.fields as Record<string, unknown>;
-            if (coinFields.balance) {
-              dynamicFieldSuiBalance = Number(coinFields.balance) / 1e9;
-              console.log(`[SUI Balance Fetch] Dynamic Field Balance (Security Deposits): ${dynamicFieldSuiBalance}`);
-              // Assuming only one SUI coin dynamic field for security deposits
-              break; 
-            }
-          }
-        }
-      }
-
-      // 3. (Removed) A CustodyDeposited event scan used to total SUI deposits
-      // here for a console line only; it never fed the balances below. Read
-      // to the end (the only complete way off JSON-RPC) it pulled every
-      // deposit of the package on each refresh, and its failure blanked
-      // balances it did not compute.
+      // Every place a SUI deposit can be held, as the custody card counts it
+      // (custody-wallet-balance.ts): the v11 deposit record, the typed
+      // Balance<SUI> field and any legacy Coin<SUI>. Counting only a
+      // Coin<SUI> field showed "0 SUI" deposits for a v11 SUI circle.
+      const balances = await readCustodyBalances(getReadingSuiClient(), circle.walletId, USDC_COIN_TYPE);
+      const mainSuiBalance = Number(balances.suiMain) / 1e9;
+      const dynamicFieldSuiBalance = Number(balances.suiDeposits) / 1e9;
+      console.log('[SUI Balance Fetch] Custody SUI:', { mainSuiBalance, dynamicFieldSuiBalance });
 
       // 4. Calculate final balances (Based ONLY on direct object fetches)
       const securityDepositSui = dynamicFieldSuiBalance; // SUI Security deposits ARE the dynamic field balance
@@ -906,8 +883,15 @@ export default function ContributeToCircle() {
     }
     try {
       setLoadError(false);
-      // Determine package ID for this circle
-      const determinedPackageId = await getCirclePackageId(id as string, userAddress);
+      // The package that defines this circle's type (its events carry it),
+      // read from the circle itself: a failed read throws to the load error.
+      const determinedPackageId = await readCirclePackageId(id as string);
+      if (determinedPackageId === null) {
+        // The only "Circle not found": a source answered it does not exist.
+        console.log('Contribute - Circle object is gone:', id);
+        setCircle(null);
+        return;
+      }
       console.log('Contribute - Using package ID:', determinedPackageId);
       setCirclePackageId(determinedPackageId);
 
@@ -921,7 +905,7 @@ export default function ContributeToCircle() {
       const objectData = await readObject(
         id as string,
         { showContent: true, showType: true },
-        { expectType: CIRCLE_MOVE_TYPE },
+        { expectType: CIRCLE_MOVE_TYPE() },
       );
 
       if (isGoneObjectResponse(objectData)) {
@@ -1501,7 +1485,7 @@ export default function ContributeToCircle() {
 
       // Method 1: Try fetching the Member object directly (Best Source of Truth)
       try {
-        const circleObject = await readObject(circle.id, { showContent: true }, { expectType: CIRCLE_MOVE_TYPE });
+        const circleObject = await readObject(circle.id, { showContent: true }, { expectType: CIRCLE_MOVE_TYPE() });
         if (isGoneObjectResponse(circleObject)) {
           throw new Error(`Circle ${circle.id} is gone; its deposit status cannot be read`);
         }
@@ -1712,7 +1696,7 @@ export default function ContributeToCircle() {
 
     try {
       // Reads throw when they fail (caught below: the state is left as it was).
-      const circleObject = await readObject(circle.id, { showContent: true }, { expectType: CIRCLE_MOVE_TYPE });
+      const circleObject = await readObject(circle.id, { showContent: true }, { expectType: CIRCLE_MOVE_TYPE() });
 
       if (!circleObject.data?.content || !('fields' in circleObject.data.content)) {
         setUserHasContributed(false);
@@ -1819,7 +1803,7 @@ export default function ContributeToCircle() {
     console.log(`[Recipient Check] Checking if user ${userAddress} is the current recipient in circle ${circle.id}`);
 
     try {
-      const circleObject = await readObject(circle.id, { showContent: true }, { expectType: CIRCLE_MOVE_TYPE });
+      const circleObject = await readObject(circle.id, { showContent: true }, { expectType: CIRCLE_MOVE_TYPE() });
 
       if (circleObject.data?.content && 'fields' in circleObject.data.content) {
         const circleFields = circleObject.data.content.fields as Record<string, unknown>;;
@@ -2577,7 +2561,9 @@ export default function ContributeToCircle() {
             : 'Security deposit paid successfully in SUI.',
           { id: 'pay-security-deposit' }
         );
-        // Deposit changed on-chain state — drop cached circle reads first.
+        // Deposit changed on-chain state: wait until both Sui transports have
+        // it, then drop cached circle reads.
+        await waitForTxIndexed(getReadingSuiClient(), responseData.digest);
         invalidateObject(circle.id);
         // Refresh user's wallet info and circle data
         fetchUserWalletInfo();
@@ -2957,8 +2943,10 @@ export default function ContributeToCircle() {
       
       console.log('Direct USDC deposit transaction digest:', responseData.digest);
 
-      // The deposit just mutated on-chain state; drop cached circle reads so
-      // the refresh below reflects it rather than the pre-write snapshot.
+      // Refresh once both Sui transports have the deposit (the refresh reads
+      // Sui GraphQL, which indexes a moment after the fullnode), then drop
+      // cached reads so it reflects the write, not the pre-write snapshot.
+      await waitForTxIndexed(getReadingSuiClient(), responseData.digest);
       invalidateObject(circle.id);
 
       // Refresh user wallet info, circle data, and custody wallet balance
