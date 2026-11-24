@@ -14,8 +14,8 @@ import {
   getGraphqlUrlForNetwork,
 } from './network-config';
 import { getPooledSuiClient } from './sui-rpc-failover';
-import { readObject, queryEventsCached, IMMUTABLE_READ_TTL_MS, isGoneObjectResponse } from '@/lib/sui-read';
-import { circleMoveTypes, KNOWN_PACKAGE_IDS } from '@/lib/app-packages';
+import { readObject, queryEventsCached, IMMUTABLE_READ_TTL_MS, isGoneObjectResponse, isSuiReadError } from '@/lib/sui-read';
+import { appPackageIds, circleMoveTypes, KNOWN_PACKAGE_IDS } from '@/lib/app-packages';
 
 export function getPackageId(): string {
   return getCurrentPackageId();
@@ -351,12 +351,64 @@ export async function readCirclePackageId(circleId: string): Promise<string | nu
   return packageId;
 }
 
+/** What a member sees when a transaction would call a package outside this app. */
+const NOT_A_NJANGI_CIRCLE = "This circle isn't a Njangi circle.";
+
+/** A plain error for the member, with the failed read (if any) kept as its cause. */
+function transactionGuardError(message: string, cause?: unknown): Error {
+  const error = new Error(message);
+  if (cause !== undefined) (error as { cause?: unknown }).cause = cause;
+  return error;
+}
+
+/** Whether `packageId` is one of this app's packages on the current network (appPackageIds). */
+function isAppPackageIdForCurrentNetwork(packageId: string | null | undefined): boolean {
+  const normalized = normalizePackageId(packageId);
+  return normalized != null && appPackageIds(getCurrentNetwork()).includes(normalized);
+}
+
+/**
+ * The move-call target for an object of `packageId`, an app package already
+ * checked: its upgrade-aware package (resolveUpgradeAwarePackageId), which
+ * must itself be one of this app's. Throws rather than return anything else.
+ */
+function appTransactionPackageId(packageId: string): string {
+  const target = normalizePackageId(resolvePackageIdForCurrentNetwork(packageId));
+  if (!target || !isAppPackageIdForCurrentNetwork(target)) {
+    throw transactionGuardError("Couldn't confirm this app's package for this transaction.");
+  }
+  return target;
+}
+
+/**
+ * The package a transaction on `circleId` must call: the circle's own
+ * package, read pinned to this app's packages (readCirclePackageId) and
+ * checked against appPackageIds, then mapped to its upgrade. Never a
+ * default: throws when the chain answered the circle is gone, when it is not
+ * one of our circles, and, with its own message because an unread circle is
+ * not a forgery, when it cannot be read right now. `userAddress` is kept for
+ * existing callers; getCirclePackageId's event scans and configured-package
+ * fallback are not used: a call target comes only from the circle's type.
+ */
 export async function getCircleTransactionPackageId(
   circleId: string,
   userAddress?: string,
 ): Promise<string> {
-  const circlePackageId = await getCirclePackageId(circleId, userAddress);
-  return resolvePackageIdForCurrentNetwork(circlePackageId);
+  void userAddress;
+  const circlePackageId = await readCirclePackageId(circleId).catch((error: unknown) => {
+    throw isSuiReadError(error) && error.reason === 'unexpected-type'
+      ? transactionGuardError(NOT_A_NJANGI_CIRCLE, error)
+      : transactionGuardError("Couldn't check this circle right now. Please try again.", error);
+  });
+  if (circlePackageId === null) {
+    throw transactionGuardError('This circle no longer exists.');
+  }
+  // readCirclePackageId pins the read to circleMoveTypes(); this check holds
+  // for any answer that reaches here without that pin.
+  if (!isAppPackageIdForCurrentNetwork(circlePackageId)) {
+    throw transactionGuardError(NOT_A_NJANGI_CIRCLE);
+  }
+  return appTransactionPackageId(circlePackageId);
 }
 
 export async function getObjectPackageId(objectId: string): Promise<string> {
@@ -374,9 +426,32 @@ export async function getObjectPackageId(objectId: string): Promise<string> {
   return getPackageId();
 }
 
+/**
+ * The package a transaction on `objectId` must call: the package of the
+ * object's own Move type, which must be one of this app's (appPackageIds),
+ * then mapped to its upgrade. Never a default: throws when the chain answered
+ * the object is gone, when its type comes from a package outside this app,
+ * and when it cannot be read right now (getObjectPackageId's configured
+ * package after a failed read is not a call target).
+ */
 export async function getObjectTransactionPackageId(objectId: string): Promise<string> {
-  const objectPackageId = await getObjectPackageId(objectId);
-  return resolvePackageIdForCurrentNetwork(objectPackageId);
+  const object = await readObject(objectId, { showType: true }, { ttlMs: IMMUTABLE_READ_TTL_MS }).catch(
+    (error: unknown) => {
+      throw transactionGuardError("Couldn't check this item right now. Please try again.", error);
+    },
+  );
+  if (isGoneObjectResponse(object)) {
+    throw transactionGuardError('This item no longer exists.');
+  }
+  // Read with showType, so an answer with no readable type is not an answer.
+  const objectPackageId = normalizePackageId(extractPackageIdFromMoveType(object.data?.type));
+  if (!objectPackageId) {
+    throw transactionGuardError("Couldn't check this item right now. Please try again.", object.error ?? undefined);
+  }
+  if (!isAppPackageIdForCurrentNetwork(objectPackageId)) {
+    throw transactionGuardError("This item isn't part of Njangi.");
+  }
+  return appTransactionPackageId(objectPackageId);
 }
 
 /**
