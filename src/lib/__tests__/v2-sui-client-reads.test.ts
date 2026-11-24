@@ -63,7 +63,7 @@ describe('v2GetObjects', () => {
     expect(result.kind).toBe('failed');
   });
 
-  it('treats a gRPC notFound answer as gone', async () => {
+  it('treats a notFound answer as gone', async () => {
     grpcCore.getObjects.mockResolvedValue({ objects: [new ObjectError('not found', 'notExists', 'notFound')] });
     expect(await v2GetObjects('testnet', [A])).toEqual([{ kind: 'gone' }]);
     expect(graphqlCore.getObjects).not.toHaveBeenCalled();
