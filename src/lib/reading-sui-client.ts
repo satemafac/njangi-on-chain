@@ -19,6 +19,7 @@ import type { SuiClient } from '@mysten/sui/client';
 import { getCurrentNetwork, type NetworkType } from '@/services/network-config';
 import { getPooledSuiClient } from '@/services/sui-rpc-failover';
 import { V2_READS_KEY, type V2Reads } from './tx-transport';
+import { attachedV2ReadSource } from './v2-read-source';
 import {
   listDynamicFields,
   queryEventsCached,
@@ -41,15 +42,21 @@ function lazyV2Reads(network: NetworkType): V2Reads {
 
 type Method<K extends keyof SuiClient> = SuiClient[K] extends (...args: infer A) => infer R ? (...args: A) => R : never;
 
-const readingClients = new Map<NetworkType, SuiClient>();
+// Keyed by the pooled client it wraps, so a new pooled client gets a new wrapper.
+let readingClients = new WeakMap<object, SuiClient>();
 
-/** The read-only client for `network` (default: the current one). */
+/**
+ * The read-only client for `network` (default: the current one). A pooled
+ * client without a 2.x read source (a test's stub) is returned as it is,
+ * as sui-read.ts keeps JSON-RPC for one.
+ */
 export function getReadingSuiClient(network?: NetworkType): SuiClient {
   const net = network ?? getCurrentNetwork();
-  const existing = readingClients.get(net);
+  const pooled = getPooledSuiClient({ network: net });
+  if (!attachedV2ReadSource(pooled)) return pooled;
+  const existing = readingClients.get(pooled);
   if (existing) return existing;
 
-  const pooled = getPooledSuiClient({ network: net });
   const opts = { network: net };
   const reads = lazyV2Reads(net);
 
@@ -104,13 +111,13 @@ export function getReadingSuiClient(network?: NetworkType): SuiClient {
       return typeof value === 'function' ? value.bind(target) : value;
     },
   });
-  readingClients.set(net, client);
+  readingClients.set(pooled, client);
   return client;
 }
 
-/** Drops the cached clients (tests, network switches). */
+/** Drops the cached clients (tests). */
 export function clearReadingSuiClients(): void {
-  readingClients.clear();
+  readingClients = new WeakMap();
 }
 
 /**
