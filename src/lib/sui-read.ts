@@ -76,8 +76,12 @@ const MAX_MULTIGET_IDS = 50;
 /** Pages of a JSON-RPC list (events, dynamic fields) read before it counts as unreadable. */
 const MAX_JSON_RPC_LIST_PAGES = 50;
 
-/** A Move type's layout never changes, so it is kept until the cache is cleared. */
-const LAYOUT_TTL_MS = Number.POSITIVE_INFINITY;
+/**
+ * Move type layouts, by network and type. A type's layout never changes, so
+ * these outlive invalidateSuiRead (pages clear reads after every
+ * transaction); only clearSuiReadCache drops them. Failures are not kept.
+ */
+const layoutCache = new Map<string, Promise<{ layout: MoveLayout; abilities: string[] }>>();
 
 export type SuiReadFailure = 'unavailable' | 'unexpected-type' | 'unreadable' | 'unsupported';
 
@@ -267,12 +271,15 @@ const UNSUPPORTED_OBJECT_OPTIONS = ['showBcs', 'showDisplay', 'showStorageRebate
 async function layoutOf(source: V2ReadSource, type: string): Promise<{ layout: MoveLayout; abilities: string[] }> {
   const known = knownLayout(type);
   if (known) return { layout: known, abilities: [] };
+  const key = `${source.network}:${toLongTypeString(type)}`;
+  let pending = layoutCache.get(key);
+  if (!pending) {
+    pending = source.typeLayout(type);
+    layoutCache.set(key, pending);
+    pending.catch(() => layoutCache.delete(key));
+  }
   try {
-    return await cachedRead(
-      `layout:${source.network}:${toLongTypeString(type)}`,
-      () => source.typeLayout(type),
-      LAYOUT_TTL_MS,
-    );
+    return await pending;
   } catch (error) {
     throw new SuiReadError(`the Move layout of ${type} could not be read`, 'unavailable', { cause: error });
   }
@@ -768,4 +775,5 @@ export function clearSuiReadCache(): void {
   responseCache.clear();
   inFlight.clear();
   objectBatches.clear();
+  layoutCache.clear();
 }

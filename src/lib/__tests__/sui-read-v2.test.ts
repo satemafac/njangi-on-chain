@@ -121,7 +121,7 @@ beforeEach(() => {
   source = {
     network: 'testnet',
     getObjects: jest.fn(async (ids: string[]) =>
-      ids.map((id) => answers.get(id) ?? { kind: 'failed', error: new Error('no transport answered') }),
+      ids.map((id): V2ObjectResult => answers.get(id) ?? { kind: 'failed', error: new Error('no transport answered') }),
     ),
     listDynamicFields: jest.fn(async () => []),
     readAllEvents: jest.fn(async () => []),
