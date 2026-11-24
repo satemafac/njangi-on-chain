@@ -58,6 +58,7 @@ jest.mock('@mysten/sui/client', () => ({
 
 import {
   clearSuiRpcClientPool,
+  isJsonRpcWithdrawnError,
   getHealthySuiClient,
   getPooledSuiClient,
   getRpcCandidateUrls,
@@ -100,7 +101,6 @@ describe('sui-rpc-failover', () => {
     // thing only it can do — so it sorts last regardless of list position.
     expect(getRpcCandidateUrls('testnet')).toEqual([
       'https://primary.rpc',
-      'https://sui-testnet-rpc.publicnode.com',
       'https://sui-testnet-endpoint.blockvision.org',
     ]);
   });
@@ -115,7 +115,6 @@ describe('sui-rpc-failover', () => {
       'https://preferred.rpc',
       'https://primary.rpc',
       'https://alt.rpc',
-      'https://sui-testnet-rpc.publicnode.com',
       'https://sui-testnet-endpoint.blockvision.org',
     ]);
   });
@@ -135,9 +134,6 @@ describe('sui-rpc-failover', () => {
     expect(candidates[0]).toBe('https://primary.rpc');
     expect(candidates[candidates.length - 1]).toBe(
       'https://sui-testnet-endpoint.blockvision.org',
-    );
-    expect(candidates.indexOf('https://sui-testnet-rpc.publicnode.com')).toBeLessThan(
-      candidates.indexOf('https://sui-testnet-endpoint.blockvision.org'),
     );
   });
 
@@ -228,13 +224,13 @@ describe('sui-rpc-failover', () => {
     });
 
     expect(result).toBe('ok');
-    // The third candidate is now publicnode, not blockvision — rate-limited
-    // hosts sort to the back, so the rotation reaches an unmetered endpoint
-    // before spending blockvision's budget.
+    // Rate-limited hosts sort to the back, so blockvision is reached only
+    // after the configured endpoints. (publicnode used to sit before it; it
+    // retired testnet JSON-RPC on 2026-10-16.)
     expect(attemptedUrls).toEqual([
       'https://primary.rpc',
       'https://alt.rpc',
-      'https://sui-testnet-rpc.publicnode.com',
+      'https://sui-testnet-endpoint.blockvision.org',
     ]);
   });
 
@@ -298,6 +294,27 @@ describe('sui-rpc-failover', () => {
     });
   });
 
+  // The 2026-10-16 production failure: publicnode answered every testnet call
+  // with this, the old phrase list missed it, and failover never reached the
+  // next endpoint.
+  it('fails over past an endpoint that retired JSON-RPC, then stops asking it', async () => {
+    const client = getPooledSuiClient({ network: 'testnet' }) as unknown as {
+      transport: { request: (input: { method: string; params: unknown[] }) => Promise<unknown> };
+    };
+    transportRequestMocks.get('https://primary.rpc')!.mockRejectedValue(
+      new Error(
+        'Sui JSON-RPC endpoint has been deprecated. Please use the gRPC endpoint instead: https://sui-testnet-grpc.publicnode.com:443',
+      ),
+    );
+    transportRequestMocks.get('https://alt.rpc')!.mockResolvedValue({ ok: true });
+
+    await expect(client.transport.request({ method: 'sui_getObject', params: [] })).resolves.toEqual({ ok: true });
+    await expect(client.transport.request({ method: 'sui_getObject', params: [] })).resolves.toEqual({ ok: true });
+
+    expect(transportRequestMocks.get('https://primary.rpc')).toHaveBeenCalledTimes(1);
+    expect(transportRequestMocks.get('https://alt.rpc')).toHaveBeenCalledTimes(2);
+  });
+
   it('cools down an RPC after 429 so the next request starts with the alternate', async () => {
     const client = getPooledSuiClient({
       network: 'testnet',
@@ -342,9 +359,6 @@ describe('sui-rpc-failover', () => {
     transportRequestMocks.get('https://sui-testnet-endpoint.blockvision.org')!.mockRejectedValueOnce(
       new Error('Unexpected status code: 429'),
     );
-    transportRequestMocks.get('https://sui-testnet-rpc.publicnode.com')!.mockRejectedValueOnce(
-      new Error('Unexpected status code: 429'),
-    );
 
     await expect(
       client.transport.request({ method: 'suix_queryEvents', params: [] }),
@@ -357,7 +371,6 @@ describe('sui-rpc-failover', () => {
     expect(transportRequestMocks.get('https://primary.rpc')).toHaveBeenCalledTimes(1);
     expect(transportRequestMocks.get('https://alt.rpc')).toHaveBeenCalledTimes(1);
     expect(transportRequestMocks.get('https://sui-testnet-endpoint.blockvision.org')).toHaveBeenCalledTimes(1);
-    expect(transportRequestMocks.get('https://sui-testnet-rpc.publicnode.com')).toHaveBeenCalledTimes(1);
   });
 
   it('fails a subscription over without benching the endpoint for requests', async () => {
@@ -434,17 +447,33 @@ describe('capability gaps vs ill health', () => {
   // 429'd, everything entered cooldown, and a funded account rendered as
   // 0 circles / $0.
 
-  it('classifies pruned event history and withdrawn JSON-RPC as capability gaps', () => {
+  it('classifies pruned event history and a missing method as capability gaps', () => {
     expect(
       isCapabilityGapError(
         'Could not find the referenced transaction events [TransactionDigest(abc)].',
       ),
     ).toBe(true);
-    expect(
-      isCapabilityGapError(
-        'Method not found. JSON-RPC on public fullnodes has been deprecated.',
-      ),
-    ).toBe(true);
+    expect(isCapabilityGapError('Method not found')).toBe(true);
+  });
+
+  // A retired JSON-RPC surface serves nothing, so it is not a per-method gap:
+  // it fails over AND sits out, instead of being asked first on every request.
+  it.each([
+    // publicnode testnet, live since 2026-10-16
+    'Sui JSON-RPC endpoint has been deprecated. Please use the gRPC endpoint instead: https://sui-testnet-grpc.publicnode.com:443',
+    // Sui's public fullnodes, since 2026-08
+    'Method not found. JSON-RPC on public fullnodes has been deprecated.',
+    // a third wording, to keep the match loose on purpose
+    'jsonrpc has been deprecated',
+  ])('treats a retired JSON-RPC surface as withdrawn, not a gap: %s', (msg) => {
+    expect(isJsonRpcWithdrawnError(msg)).toBe(true);
+    expect(isCapabilityGapError(msg)).toBe(false);
+    expect(isRetriableSuiRpcError(new Error(msg))).toBe(true);
+  });
+
+  it('does not call ordinary errors that mention deprecation in passing withdrawn', () => {
+    expect(isJsonRpcWithdrawnError('Unexpected status code: 503')).toBe(false);
+    expect(isJsonRpcWithdrawnError('This Move function is deprecated')).toBe(false);
   });
 
   it('does not treat genuine ill health as a capability gap', () => {
