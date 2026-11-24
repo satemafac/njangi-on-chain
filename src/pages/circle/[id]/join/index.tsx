@@ -4,12 +4,17 @@ import { useAuth } from '@/contexts/AuthContext';
 import { ArrowLeft, AlertCircle, LogIn } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { getCircleConfigFieldsFromDynamicFields } from '@/lib/circle-config';
-import { resolveCircleLifecycleState } from '@/lib/circle-chain';
+import {
+  extractPackageIdFromMoveType,
+  normalizePackageId,
+  resolveCircleLifecycleState,
+} from '@/lib/circle-chain';
 import {
   getSuiRpcErrorMessage,
   isTransientSuiRpcError,
 } from '@/services/sui-rpc-failover';
-import { readObject, queryEventsCached } from '@/lib/sui-read';
+import { isGoneObjectResponse, listDynamicFields, readAllEvents, readObject } from '@/lib/sui-read';
+import { getReadingSuiClient } from '@/lib/reading-sui-client';
 import { logSuiReadError } from '@/services/sui-rpc-failover';
 import { priceService } from '@/services/price-service';
 import { getCirclePackageId, getSuiClientFromPool } from '../../../../services/circle-service';
@@ -114,7 +119,10 @@ export const getServerSideProps: GetServerSideProps<JoinCircleProps> = async ({ 
   if (!circleId) {
     return { props: { invitePreview: null } };
   }
-  const invitePreview = await readInvitePreview(circleId, getCurrentNetwork());
+  // The reading client: without one the helper reads over JSON-RPC, which
+  // testnet no longer serves, and every card falls back to generic copy.
+  const network = getCurrentNetwork();
+  const invitePreview = await readInvitePreview(circleId, network, getReadingSuiClient(network));
   return { props: { invitePreview } };
 };
 
@@ -129,6 +137,11 @@ export default function JoinCircle({ invitePreview }: JoinCircleProps) {
   } = useAuth();
   const [loading, setLoading] = useState(true);
   const [circle, setCircle] = useState<Circle | null>(null);
+  // A failed read is not a missing circle: `circleGone` only when the network
+  // answered that the object does not exist; any other failure is a load
+  // error the page offers to retry.
+  const [circleGone, setCircleGone] = useState(false);
+  const [loadError, setLoadError] = useState(false);
   const [isMember, setIsMember] = useState(false);
   const [suiPrice, setSuiPrice] = useState(1.25); // Default price until we fetch real price
   const [hasPendingRequest, setHasPendingRequest] = useState(false);
@@ -209,51 +222,66 @@ export default function JoinCircle({ invitePreview }: JoinCircleProps) {
     console.log('Join - Fetching circle details for:', id);
     
     setLoading(true);
+    setLoadError(false);
+    setCircleGone(false);
     try {
+      // Reads go through the shared read layer (Sui gRPC, then GraphQL),
+      // complete or thrown. This pooled client serves only getTransactionBlock,
+      // which nothing serves off JSON-RPC: its failure is caught below.
       const client = getSuiClientFromPool(getCurrentRpcUrl());
-      
-      // Get circle object
-      const objectData = await readObject(id as string, { showContent: true, showType: true });
-      
+
+      // Get circle object (any other Move type throws: it is not a circle)
+      const objectData = await readObject(
+        id as string,
+        { showContent: true, showType: true },
+        { expectType: '::njangi_circles::Circle' },
+      );
+      if (isGoneObjectResponse(objectData)) {
+        // The network answered that the object does not exist.
+        console.log('Join - Circle object is gone:', id);
+        setCircle(null);
+        setCircleGone(true);
+        return;
+      }
+
       if (!objectData.data?.content || !('fields' in objectData.data.content)) {
         throw new Error('Invalid circle object data received');
       }
-      const determinedPackageId = await getCirclePackageId(
-        id as string,
-        userAddress ?? undefined,
-      );
+      // The package that defines this circle's type: its events carry it.
+      const circleTypePackageId = extractPackageIdFromMoveType(objectData.data.type);
+      const determinedPackageId = circleTypePackageId
+        ? normalizePackageId(circleTypePackageId) ?? circleTypePackageId
+        : await getCirclePackageId(id as string, userAddress ?? undefined);
       const fields = objectData.data.content.fields as CircleFields;
       const lifecycle = resolveCircleLifecycleState(fields);
       console.log('Join - Using package ID:', determinedPackageId);
       console.log('Join - Raw Circle Object Fields:', fields);
       console.log('Join - Circle lifecycle:', lifecycle);
-        
-      // Get dynamic fields
-      const dynamicFieldsResult = await client.getDynamicFields({
-        parentId: id as string
-      });
-      const dynamicFields = dynamicFieldsResult.data;
+
+      // Get dynamic fields: the whole list, or a throw (a partial list would
+      // hide the CircleConfig and leave the terms at their defaults).
+      const dynamicFields = await listDynamicFields(id as string);
       console.log('Join - Dynamic Fields:', dynamicFields);
-        
+
       // --- Fetch Event/Transaction Data (like dashboard) ---
       let transactionInput: TransactionInputData | undefined;
       let circleCreationEventData: CircleCreationEventData | undefined;
+      let creationTxUnread = false;
+
+      // 1. Fetch CircleCreated event: every event, or a throw to the load error.
+      const circleEvents = await readAllEvents({
+        MoveEventType: `${determinedPackageId}::njangi_circles::CircleCreated`,
+      });
+      const createEvent = circleEvents.find(event =>
+        (event.parsedJson as { circle_id?: string })?.circle_id === id
+      );
+      console.log('Join - Found creation event:', !!createEvent);
+
+      if (createEvent?.parsedJson) {
+        circleCreationEventData = createEvent.parsedJson as CircleCreationEventData;
+      }
 
       try {
-        // 1. Fetch CircleCreated event
-        const circleEvents = await queryEventsCached({
-          query: { MoveEventType: `${determinedPackageId}::njangi_circles::CircleCreated` },
-          limit: 50 // Limit scope if needed
-        });
-        const createEvent = circleEvents.data.find(event => 
-          (event.parsedJson as { circle_id?: string })?.circle_id === id
-        );
-        console.log('Join - Found creation event:', !!createEvent);
-
-        if (createEvent?.parsedJson) {
-          circleCreationEventData = createEvent.parsedJson as CircleCreationEventData;
-        }
-
         // 2. Fetch Transaction Block for inputs (if possible)
         if (createEvent?.id?.txDigest) {
           const txData = await client.getTransactionBlock({
@@ -287,10 +315,12 @@ export default function JoinCircle({ invitePreview }: JoinCircleProps) {
           }
         }
       } catch (error) {
-        logSuiReadError('Join - Error fetching event/transaction data:', error);
-        // Continue even if this fails
+        // Not served off JSON-RPC. The CircleConfig below supplies what this
+        // gave; when there is none, the check after it stops the load.
+        creationTxUnread = true;
+        logSuiReadError('Join - Error fetching the creation transaction:', error);
       }
-      
+
       // --- Process Extracted Data (Prioritize sources) ---
       const configValues = {
         contributionAmount: 0,      // SUI
@@ -320,45 +350,48 @@ export default function JoinCircle({ invitePreview }: JoinCircleProps) {
       }
       console.log('Join - Config after Tx/Event:', configValues);
 
-      try {
-        const configFields = await getCircleConfigFieldsFromDynamicFields(
-          client,
-          dynamicFields,
-        );
+      // The CircleConfig the complete list names. A failed read throws to the
+      // load error, never to the default terms; null means only that the
+      // list has no CircleConfig field.
+      const configFields = await getCircleConfigFieldsFromDynamicFields(
+        getReadingSuiClient(),
+        dynamicFields,
+      );
 
-        if (configFields) {
-          console.log('Join - CircleConfig fields:', configFields);
+      if (configFields) {
+        console.log('Join - CircleConfig fields:', configFields);
 
-          if (configFields.contribution_amount) {
-            configValues.contributionAmount = Number(configFields.contribution_amount) / 1e9;
-          }
-          if (configFields.contribution_amount_local) {
-            configValues.contributionAmountUsd = Number(configFields.contribution_amount_local) / 100;
-          }
-          if (configFields.security_deposit) {
-            configValues.securityDeposit = Number(configFields.security_deposit) / 1e9;
-          }
-          if (configFields.security_deposit_local) {
-            configValues.securityDepositUsd = Number(configFields.security_deposit_local) / 100;
-          }
-          if (configFields.cycle_length) {
-            configValues.cycleLength = Number(configFields.cycle_length);
-          }
-          if (configFields.cycle_day) {
-            configValues.cycleDay = Number(configFields.cycle_day);
-          }
-          if (configFields.max_members) {
-            configValues.maxMembers = Number(configFields.max_members);
-            console.log('Join - Extracted max_members from CircleConfig:', configValues.maxMembers);
-          }
-          // The coin members pay in. A USDC circle charges its stored USD
-          // cents in USDC; a SUI circle its stored SUI amount.
-          configValues.coin = circleCoinFromConfig(configFields.auto_swap_enabled);
-          configValues.contributionUsdc = formatUsdcFromCents(configFields.contribution_amount_usd);
-          configValues.securityDepositUsdc = formatUsdcFromCents(configFields.security_deposit_usd);
+        if (configFields.contribution_amount) {
+          configValues.contributionAmount = Number(configFields.contribution_amount) / 1e9;
         }
-      } catch (error) {
-        logSuiReadError('Join - Error fetching CircleConfig fields:', error);
+        if (configFields.contribution_amount_local) {
+          configValues.contributionAmountUsd = Number(configFields.contribution_amount_local) / 100;
+        }
+        if (configFields.security_deposit) {
+          configValues.securityDeposit = Number(configFields.security_deposit) / 1e9;
+        }
+        if (configFields.security_deposit_local) {
+          configValues.securityDepositUsd = Number(configFields.security_deposit_local) / 100;
+        }
+        if (configFields.cycle_length) {
+          configValues.cycleLength = Number(configFields.cycle_length);
+        }
+        if (configFields.cycle_day) {
+          configValues.cycleDay = Number(configFields.cycle_day);
+        }
+        if (configFields.max_members) {
+          configValues.maxMembers = Number(configFields.max_members);
+          console.log('Join - Extracted max_members from CircleConfig:', configValues.maxMembers);
+        }
+        // The coin members pay in. A USDC circle charges its stored USD
+        // cents in USDC; a SUI circle its stored SUI amount.
+        configValues.coin = circleCoinFromConfig(configFields.auto_swap_enabled);
+        configValues.contributionUsdc = formatUsdcFromCents(configFields.contribution_amount_usd);
+        configValues.securityDepositUsdc = formatUsdcFromCents(configFields.security_deposit_usd);
+      } else if (creationTxUnread && fields.cycle_day === undefined) {
+        // No CircleConfig and no cycle day on the object: only the creation
+        // transaction had it, and it could not be read. Unknown, not day 1.
+        throw new Error('Join - no CircleConfig, and the creation transaction could not be read');
       }
       console.log('Join - Config after Dynamic Fields:', configValues);
 
@@ -397,88 +430,82 @@ export default function JoinCircle({ invitePreview }: JoinCircleProps) {
       }
 
       // --- Check Membership and Fetch Member Count only if user is authenticated ---
+      // Every join and removal event, read to the end: a list that cannot be
+      // read throws to the load error, never to "not a member" or a count.
       let isUserAdmin = false;
-      let memberCount = 1; // Start with admin
       const memberAddresses = new Set<string>();
-      
-      try {
-        // Only add admin to member set
-        memberAddresses.add(fields.admin); // Add admin
-        
-        // Fetch all members from join events
-        const joinedEvents = await queryEventsCached({
-          query: { MoveEventType: `${determinedPackageId}::njangi_circles::MemberJoined` },
-          limit: 1000 // Fetch enough events
-        });
-        
-        joinedEvents.data.forEach(event => {
-          if ((event.parsedJson as { circle_id?: string })?.circle_id === id && 
-              (event.parsedJson as { member?: string })?.member) {
-            memberAddresses.add((event.parsedJson as { member: string }).member);
-          }
-        });
-        
-        // 🔴 CRITICAL FIX: Also fetch MemberRemoved events to filter out removed members
-        const removedEvents = await queryEventsCached({
-          query: { MoveEventType: `${determinedPackageId}::njangi_circles::MemberRemoved` },
-          limit: 1000
-        });
-        
-        // Create a set of removed member addresses for this circle
-        const removedAddresses = new Set<string>();
-        removedEvents.data.forEach(event => {
-          if ((event.parsedJson as { circle_id?: string })?.circle_id === id && 
-              (event.parsedJson as { member?: string })?.member) {
-            removedAddresses.add((event.parsedJson as { member: string }).member);
-          }
-        });
-        
-        // Remove the removed members from the member set (except admin who can't be removed)
-        removedAddresses.forEach(removedAddr => {
-          if (removedAddr !== fields.admin) {
-            memberAddresses.delete(removedAddr);
-            console.log(`Join - Filtered out removed member: ${removedAddr}`);
-          }
-        });
-        
-        memberCount = memberAddresses.size;
-        console.log(`Join - Final member count after filtering removed: ${memberCount}`);
-        
-        // If user is authenticated, check membership
-        if (userAddress) {
-          console.log('Join - Checking if user is admin or member');
-          isUserAdmin = fields.admin === userAddress;
-          
-          // Check if user was removed from this circle
-          const wasUserRemoved = removedAddresses.has(userAddress);
-          if (wasUserRemoved) {
-            console.log('Join - User was previously removed from this circle, allowing rejoin');
-          }
-          
-          // Set member status based on admin status or event membership (accounting for removals)
-          const isUserMember = isUserAdmin || (memberAddresses.has(userAddress) && !wasUserRemoved);
-          setIsMember(isUserMember);
-          
-          // Show toast and redirect IF user is authenticated AND is admin/member
-          if (isUserAdmin) {
-            console.log('Join - User is the admin of this circle');
-            toast('You are the admin of this circle.');
-            router.push(`/circle/${id}`); // Redirect admin
-            return; // Exit early
-          } else if (isUserMember) {
-            console.log('Join - User is already a member based on event query');
-            toast('You are already a member of this circle.');
-            router.push(`/circle/${id}`); // Redirect member
-            return; // Exit early
-          }
-        } else {
-          console.log('Join - User not authenticated, skipping membership checks');
+
+      // Only add admin to member set
+      memberAddresses.add(fields.admin); // Add admin
+
+      // Fetch all members from join events
+      const joinedEvents = await readAllEvents({
+        MoveEventType: `${determinedPackageId}::njangi_circles::MemberJoined`,
+      });
+
+      joinedEvents.forEach(event => {
+        if ((event.parsedJson as { circle_id?: string })?.circle_id === id &&
+            (event.parsedJson as { member?: string })?.member) {
+          memberAddresses.add((event.parsedJson as { member: string }).member);
         }
-      } catch (error) {
-        logSuiReadError(`Join - Error processing membership for circle ${id}:`, error);
-        memberCount = Number(fields.current_members || 1); // Fallback
+      });
+
+      // 🔴 CRITICAL FIX: Also fetch MemberRemoved events to filter out removed members
+      const removedEvents = await readAllEvents({
+        MoveEventType: `${determinedPackageId}::njangi_circles::MemberRemoved`,
+      });
+
+      // Create a set of removed member addresses for this circle
+      const removedAddresses = new Set<string>();
+      removedEvents.forEach(event => {
+        if ((event.parsedJson as { circle_id?: string })?.circle_id === id &&
+            (event.parsedJson as { member?: string })?.member) {
+          removedAddresses.add((event.parsedJson as { member: string }).member);
+        }
+      });
+
+      // Remove the removed members from the member set (except admin who can't be removed)
+      removedAddresses.forEach(removedAddr => {
+        if (removedAddr !== fields.admin) {
+          memberAddresses.delete(removedAddr);
+          console.log(`Join - Filtered out removed member: ${removedAddr}`);
+        }
+      });
+
+      const memberCount = memberAddresses.size;
+      console.log(`Join - Final member count after filtering removed: ${memberCount}`);
+
+      // If user is authenticated, check membership
+      if (userAddress) {
+        console.log('Join - Checking if user is admin or member');
+        isUserAdmin = fields.admin === userAddress;
+
+        // Check if user was removed from this circle
+        const wasUserRemoved = removedAddresses.has(userAddress);
+        if (wasUserRemoved) {
+          console.log('Join - User was previously removed from this circle, allowing rejoin');
+        }
+
+        // Set member status based on admin status or event membership (accounting for removals)
+        const isUserMember = isUserAdmin || (memberAddresses.has(userAddress) && !wasUserRemoved);
+        setIsMember(isUserMember);
+
+        // Show toast and redirect IF user is authenticated AND is admin/member
+        if (isUserAdmin) {
+          console.log('Join - User is the admin of this circle');
+          toast('You are the admin of this circle.');
+          router.push(`/circle/${id}`); // Redirect admin
+          return; // Exit early
+        } else if (isUserMember) {
+          console.log('Join - User is already a member based on event query');
+          toast('You are already a member of this circle.');
+          router.push(`/circle/${id}`); // Redirect member
+          return; // Exit early
+        }
+      } else {
+        console.log('Join - User not authenticated, skipping membership checks');
       }
-        
+
       // --- Final State Update ---
       console.log('Join - Setting circle state with data:', {
         id,
@@ -494,7 +521,12 @@ export default function JoinCircle({ invitePreview }: JoinCircleProps) {
         admin: typeof fields.admin === 'string' ? fields.admin : '',
         contributionAmount: configValues.contributionAmount,
         contributionAmountUsd: configValues.contributionAmountUsd,
-        currencyType: transactionInput?.currency_type || circleCreationEventData?.currency_type || fields.currency_type || 'USD', // Get currency type from transaction input, creation event, or fields
+        currencyType:
+          transactionInput?.currency_type ||
+          circleCreationEventData?.currency_type ||
+          (typeof configFields?.currency_type === 'string' ? configFields.currency_type : '') ||
+          fields.currency_type ||
+          'USD', // Get currency type from transaction input, creation event, CircleConfig, or fields
         securityDeposit: configValues.securityDeposit,
         securityDepositUsd: configValues.securityDepositUsd,
         coin: configValues.coin,
@@ -510,20 +542,21 @@ export default function JoinCircle({ invitePreview }: JoinCircleProps) {
       });
         
     } catch (error) {
+      // A failed read is not a missing circle and not a set of default terms:
+      // the page says it couldn't load and offers a retry.
+      setCircle(null);
+      setLoadError(true);
       if (isTransientSuiRpcError(error)) {
-        // RPC is momentarily unavailable (rate-limit / failover cooldown). The
-        // page already rendered; this is expected and will recover on retry.
+        // RPC is momentarily unavailable (rate-limit / failover cooldown).
         console.warn(
           'Join - Circle details fetch deferred (transient RPC):',
           getSuiRpcErrorMessage(error),
         );
-        toast.error('Network busy — retrying shortly');
+        toast.error('Network busy — try again shortly');
         return;
       }
       console.error('Join - Error fetching circle details:', error);
       toast.error('Could not load circle information');
-      // Set a minimal circle object to prevent UI failures
-      setCircle(null);
     } finally {
       setLoading(false);
     }
@@ -1382,17 +1415,46 @@ export default function JoinCircle({ invitePreview }: JoinCircleProps) {
                   </aside>
                 </div>
               </>
+            ) : circleGone ? (
+              <div className="px-6 py-14 text-center sm:px-8 sm:py-20">
+                <span className={eyebrowClass}>Join circle</span>
+                <h1 className="mt-4 text-3xl font-semibold tracking-[-0.04em] text-[#171923] sm:text-[2.8rem]">
+                  Circle not found
+                </h1>
+                <p className="mx-auto mt-4 max-w-xl text-base leading-8 text-[#5f6b7f]">
+                  The network says this circle no longer exists. Ask the admin for
+                  a new invitation link.
+                </p>
+                <div className="mt-8 flex justify-center">
+                  <button
+                    onClick={() => router.push(backDestination)}
+                    className={secondaryActionClass}
+                  >
+                    <ArrowLeft className="h-4 w-4" />
+                    {backLabel}
+                  </button>
+                </div>
+              </div>
             ) : (
               <div className="px-6 py-14 text-center sm:px-8 sm:py-20">
                 <span className={eyebrowClass}>Join circle</span>
                 <h1 className="mt-4 text-3xl font-semibold tracking-[-0.04em] text-[#171923] sm:text-[2.8rem]">
-                  Circle information could not be loaded
+                  We couldn&apos;t load this circle just now
                 </h1>
-                <p className="mx-auto mt-4 max-w-xl text-base leading-8 text-[#5f6b7f]">
-                  Refresh the page or reopen the invitation link. The circle details
-                  may be temporarily unavailable.
+                <p className="mx-auto mt-4 max-w-xl text-base leading-8 text-[#5f6b7f]" role={loadError ? 'alert' : undefined}>
+                  The network did not answer when we read this circle. That is not
+                  the same as the circle being gone, so try again in a moment.
                 </p>
-                <div className="mt-8 flex justify-center">
+                <div className="mt-8 flex flex-wrap justify-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void fetchCircleDetails();
+                    }}
+                    className={secondaryActionClass}
+                  >
+                    Try again
+                  </button>
                   <button
                     onClick={() => router.push(backDestination)}
                     className={secondaryActionClass}
