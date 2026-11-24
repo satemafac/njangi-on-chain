@@ -19,6 +19,7 @@ import { deriveDynamicFieldID } from '@mysten/sui/utils';
 import { getPooledSuiClient } from '@/services/sui-rpc-failover';
 import {
   clearSuiReadCache,
+  invalidateObject,
   isDynamicFieldMissingResponse,
   isGoneObjectResponse,
   listDynamicFields,
@@ -371,5 +372,68 @@ describe('dynamic fields', () => {
     answers.set(CHILD, circleRecord(CHILD));
     const response = await readDynamicFieldObject(TABLE, { type: 'address', value: ADMIN });
     expect(response.data?.objectId).toBe(CHILD);
+  });
+});
+
+describe('after a write (review of #175, issue 1)', () => {
+  const memberFieldId = () => deriveDynamicFieldID(TABLE, 'address', rpcValueToBcs(ADMIN, 'address'));
+  const memberRecord = (paid: boolean): V2ObjectResult => ({
+    kind: 'found',
+    object: {
+      objectId: memberFieldId(),
+      version: paid ? '5' : '4',
+      digest: 'D',
+      type: FIELD_TYPE,
+      owner: { $kind: 'ObjectOwner', ObjectOwner: TABLE },
+      json: { id: memberFieldId(), name: ADMIN, value: { deposit_paid: paid } },
+    },
+  });
+  const paidFlag = async () => {
+    const response = await readDynamicFieldObject(TABLE, { type: 'address', value: ADMIN });
+    return (response.data?.content as unknown as { fields: { value: { fields: { deposit_paid: boolean } } } }).fields.value.fields.deposit_paid;
+  };
+
+  it('shows the paid flag after a deposit and a refresh: invalidating the circle drops its member records too', async () => {
+    answers.set(memberFieldId(), memberRecord(false));
+    expect(await paidFlag()).toBe(false);
+
+    // The deposit lands; the page invalidates the CIRCLE id (not the table or field id) and re-reads.
+    answers.set(memberFieldId(), memberRecord(true));
+    invalidateObject(CIRCLE);
+    expect(await paidFlag()).toBe(true);
+  });
+
+  it('does not keep or share a read that started before the write', async () => {
+    let release: (value: V2ObjectResult[]) => void = () => {};
+    source.getObjects.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const before = readObject(CIRCLE);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    invalidateObject(CIRCLE);
+    answers.set(CIRCLE, circleRecord());
+    const after = readObject(CIRCLE);
+    release([{ kind: 'gone' }]);
+
+    expect(isGoneObjectResponse(await before)).toBe(true);
+    await expect(after).resolves.toMatchObject({ data: { objectId: CIRCLE } });
+    // Neither the pre-write answer nor a shared promise serves later readers.
+    await expect(readObject(CIRCLE)).resolves.toMatchObject({ data: { objectId: CIRCLE } });
+  });
+});
+
+describe('pinned Move types (review of #175, issue 5)', () => {
+  it('accepts a list of full types and refuses the same struct from another package', async () => {
+    const OTHER_PKG = `0x${'ee'.repeat(32)}`;
+    answers.set(CIRCLE, circleRecord(CIRCLE, `${OTHER_PKG}::njangi_circles::Circle`));
+    LAYOUTS[`${OTHER_PKG}::njangi_circles::Circle`] = LAYOUTS[CIRCLE_TYPE];
+    await expect(readObject(CIRCLE, { showContent: true }, { expectType: [CIRCLE_TYPE] })).rejects.toMatchObject({
+      reason: 'unexpected-type',
+    });
+
+    clearSuiReadCache();
+    answers.set(CIRCLE, circleRecord());
+    await expect(readObject(CIRCLE, { showContent: true }, { expectType: [`${OTHER_PKG}::x::Y`, CIRCLE_TYPE] })).resolves.toMatchObject({
+      data: { objectId: CIRCLE },
+    });
   });
 });

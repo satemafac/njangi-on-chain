@@ -229,14 +229,20 @@ const processConfigValues = (
   return configValues;
 };
 
+/** The event lists only the deposit fallback needs (a member without a readable record). */
+interface DepositFallbackEvents {
+  memberActivatedEvents: SuiEvent[];
+  custodyEvents: SuiEvent[];
+  securityReturnedEvents: SuiEvent[];
+}
+
 // Utility function to check member deposit status using multiple methods
 const checkMemberDepositStatus = async (
   circleId: string,
   membersTableId: string | undefined,
   address: string,
-  memberActivatedEvents: SuiEvent[],
-  custodyEvents: SuiEvent[],
-  securityReturnedEvents: SuiEvent[]
+  // Read only when a member's own record cannot say (package-wide scans).
+  loadFallbackEvents: () => Promise<DepositFallbackEvents>,
 ): Promise<{ hasPaid: boolean; position?: number; depositBalanceRaw: bigint; lastContributionRaw: bigint; memberObjectId: string | null }> => {
   let hasPaid = false;
   let position: number | undefined = undefined;
@@ -293,6 +299,12 @@ const checkMemberDepositStatus = async (
     debugLog(`Could not parse the Member struct for ${shortenAddress(address)}, using events`, null);
   }
   
+  // The Member record answered: no event scan is needed.
+  if (resolvedFromStruct) {
+    return { hasPaid, position, depositBalanceRaw, lastContributionRaw, memberObjectId };
+  }
+  const { memberActivatedEvents, custodyEvents, securityReturnedEvents } = await loadFallbackEvents();
+
   // Method 2: Fallback to MemberActivated Event (using pre-fetched data)
   if (!resolvedFromStruct && !hasPaid) {
      hasPaid = memberActivatedEvents.some(event => {
@@ -1147,20 +1159,28 @@ export default function ManageCircle() {
         }
       }
 
-      // Event history: join dates, and where the Member record cannot say,
-      // deposit status and (with no members in the table) the roster. Every
-      // page of each list, or the load fails: an unread list is not "no such
-      // event", which would read as an unpaid deposit or a missing member.
-      const [memberEventList, custodyEventList, memberActivatedEventList, securityReturnedEventList] = await Promise.all([
-        readAllEvents({ MoveEventType: `${determinedPackageId}::njangi_circles::MemberJoined` }),
-        readAllEvents({ MoveEventType: `${determinedPackageId}::njangi_custody::CustodyDeposited` }),
-        readAllEvents({ MoveEventType: `${determinedPackageId}::njangi_members::MemberActivated` }),
-        readAllEvents({ MoveEventType: `${determinedPackageId}::njangi_circles::SecurityDepositReturned` }),
-      ]);
-      const memberEvents = { data: memberEventList };
-      const custodyEvents = { data: custodyEventList };
-      const memberActivatedEvents = { data: memberActivatedEventList };
-      const securityReturnedEvents = { data: securityReturnedEventList };
+      // Event history: join dates, and (with no members in the table) the
+      // roster. Every page, or the load fails: an unread list is not "no such
+      // event", which would read as a missing member. These scans are
+      // package-wide (Sui GraphQL cannot filter events by circle), so the
+      // deposit-fallback lists below are read only for a member whose own
+      // record cannot say, and once per load.
+      const memberEvents = {
+        data: await readAllEvents({ MoveEventType: `${determinedPackageId}::njangi_circles::MemberJoined` }),
+      };
+      let fallbackEvents: Promise<DepositFallbackEvents> | null = null;
+      const loadFallbackEvents = () => {
+        fallbackEvents ??= Promise.all([
+          readAllEvents({ MoveEventType: `${determinedPackageId}::njangi_members::MemberActivated` }),
+          readAllEvents({ MoveEventType: `${determinedPackageId}::njangi_custody::CustodyDeposited` }),
+          readAllEvents({ MoveEventType: `${determinedPackageId}::njangi_circles::SecurityDepositReturned` }),
+        ]).then(([memberActivatedEvents, custodyEvents, securityReturnedEvents]) => ({
+          memberActivatedEvents,
+          custodyEvents,
+          securityReturnedEvents,
+        }));
+        return fallbackEvents;
+      };
 
       // Fallback: Build event-based member list if the members table has none
       let eventBasedMemberCount = 1; // Start with admin
@@ -1211,9 +1231,7 @@ export default function ManageCircle() {
             id as string,
             membersTableId,
             address,
-            memberActivatedEvents.data,
-            custodyEvents.data,
-            securityReturnedEvents.data
+            loadFallbackEvents,
           );
 
           // Find join date from MemberJoined event if possible

@@ -17,7 +17,7 @@ jest.mock('@/services/network-config', () => ({
   getGraphqlUrlForNetwork: () => 'https://graphql.test.invalid/graphql',
 }));
 
-import { v2GetObjects, v2ListDynamicFields } from '@/lib/v2-sui-client';
+import { v2GetObjects, v2ListDynamicFields, v2Reads } from '@/lib/v2-sui-client';
 
 const A = `0x${'a1'.repeat(32)}`;
 const B = `0x${'b2'.repeat(32)}`;
@@ -56,7 +56,14 @@ describe('v2GetObjects', () => {
     expect(graphqlCore.getObjects).not.toHaveBeenCalled();
   });
 
-  it('treats a notFound answer as gone', async () => {
+  it('treats a GraphQL notFound as a failed read, not gone: GraphQL lags the chain (review of #175, issue 2)', async () => {
+    grpcCore.getObjects.mockRejectedValue(new TypeError('Failed to fetch'));
+    graphqlCore.getObjects.mockResolvedValue({ objects: [new ObjectError('Object not found', 'notFound', 'notFound')] });
+    const [result] = await v2GetObjects('testnet', [A]);
+    expect(result.kind).toBe('failed');
+  });
+
+  it('treats a gRPC notFound answer as gone', async () => {
     grpcCore.getObjects.mockResolvedValue({ objects: [new ObjectError('not found', 'notExists', 'notFound')] });
     expect(await v2GetObjects('testnet', [A])).toEqual([{ kind: 'gone' }]);
     expect(graphqlCore.getObjects).not.toHaveBeenCalled();
@@ -131,5 +138,13 @@ describe('v2ListDynamicFields', () => {
     grpcCore.listDynamicFields.mockResolvedValue({ dynamicFields: [entry(1)], hasNextPage: true, cursor: null });
     graphqlCore.listDynamicFields.mockRejectedValue(new Error('503'));
     await expect(v2ListDynamicFields('testnet', A)).rejects.toThrow(/v2-read:graphql/);
+  });
+});
+
+describe('v2Reads.dynamicFieldValueJson', () => {
+  it('throws, rather than answer "no such field", when a page says there is more but gives no cursor', async () => {
+    grpcCore.listDynamicFields.mockResolvedValue({ dynamicFields: [], hasNextPage: true, cursor: null });
+    graphqlCore.listDynamicFields.mockResolvedValue({ dynamicFields: [], hasNextPage: true, cursor: null });
+    await expect(v2Reads('testnet').dynamicFieldValueJson(A, '::AssetPolicyKey')).rejects.toThrow(/without a new cursor/);
   });
 });

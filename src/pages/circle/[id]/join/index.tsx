@@ -13,7 +13,14 @@ import {
   getSuiRpcErrorMessage,
   isTransientSuiRpcError,
 } from '@/services/sui-rpc-failover';
-import { isGoneObjectResponse, listDynamicFields, readAllEvents, readObject } from '@/lib/sui-read';
+import {
+  isDynamicFieldMissingResponse,
+  isGoneObjectResponse,
+  listDynamicFields,
+  readAllEvents,
+  readDynamicFieldObject,
+  readObject,
+} from '@/lib/sui-read';
 import { getReadingSuiClient } from '@/lib/reading-sui-client';
 import { logSuiReadError } from '@/services/sui-rpc-failover';
 import { priceService } from '@/services/price-service';
@@ -430,65 +437,45 @@ export default function JoinCircle({ invitePreview }: JoinCircleProps) {
           console.log(`Join - Calculated security deposit SUI from USD: ${configValues.securityDeposit}`);
       }
 
-      // --- Check Membership and Fetch Member Count only if user is authenticated ---
-      // Every join and removal event, read to the end: a list that cannot be
-      // read throws to the load error, never to "not a member" or a count.
+      // --- Member count and the viewer's membership, from current state ---
+      // The circle's own current_members (the contract adds the admin and
+      // every member to it and takes removed members off) and the viewer's
+      // entry in its members table, not package-wide event scans: those grow
+      // with every circle in the package. A read that fails throws to the
+      // load error, never to "not a member" or a count.
       let isUserAdmin = false;
-      const memberAddresses = new Set<string>();
-
-      // Only add admin to member set
-      memberAddresses.add(fields.admin); // Add admin
-
-      // Fetch all members from join events
-      const joinedEvents = await readAllEvents({
-        MoveEventType: `${determinedPackageId}::njangi_circles::MemberJoined`,
-      });
-
-      joinedEvents.forEach(event => {
-        if ((event.parsedJson as { circle_id?: string })?.circle_id === id &&
-            (event.parsedJson as { member?: string })?.member) {
-          memberAddresses.add((event.parsedJson as { member: string }).member);
-        }
-      });
-
-      // 🔴 CRITICAL FIX: Also fetch MemberRemoved events to filter out removed members
-      const removedEvents = await readAllEvents({
-        MoveEventType: `${determinedPackageId}::njangi_circles::MemberRemoved`,
-      });
-
-      // Create a set of removed member addresses for this circle
-      const removedAddresses = new Set<string>();
-      removedEvents.forEach(event => {
-        if ((event.parsedJson as { circle_id?: string })?.circle_id === id &&
-            (event.parsedJson as { member?: string })?.member) {
-          removedAddresses.add((event.parsedJson as { member: string }).member);
-        }
-      });
-
-      // Remove the removed members from the member set (except admin who can't be removed)
-      removedAddresses.forEach(removedAddr => {
-        if (removedAddr !== fields.admin) {
-          memberAddresses.delete(removedAddr);
-          console.log(`Join - Filtered out removed member: ${removedAddr}`);
-        }
-      });
-
-      const memberCount = memberAddresses.size;
-      console.log(`Join - Final member count after filtering removed: ${memberCount}`);
+      const currentMembersField = fields.current_members as unknown;
+      const memberCount =
+        typeof currentMembersField === 'string' && /^\d+$/.test(currentMembersField)
+          ? Number(currentMembersField)
+          : typeof currentMembersField === 'number' && Number.isSafeInteger(currentMembersField) && currentMembersField >= 0
+            ? currentMembersField
+            : null;
+      if (memberCount === null) {
+        throw new Error('Join - the circle was read without a readable member count');
+      }
+      console.log(`Join - Member count: ${memberCount}`);
 
       // If user is authenticated, check membership
       if (userAddress) {
         console.log('Join - Checking if user is admin or member');
         isUserAdmin = fields.admin === userAddress;
 
-        // Check if user was removed from this circle
-        const wasUserRemoved = removedAddresses.has(userAddress);
-        if (wasUserRemoved) {
-          console.log('Join - User was previously removed from this circle, allowing rejoin');
+        // A member has an entry in the members table; a removed member's entry
+        // is deleted, so they may join again. Only a confirmed absence is "not
+        // a member".
+        let isUserMember = isUserAdmin;
+        if (!isUserAdmin) {
+          const membersTableId = (fields.members as { fields?: { id?: { id?: unknown } } } | undefined)?.fields?.id?.id;
+          if (typeof membersTableId !== 'string') {
+            throw new Error('Join - the circle was read without its members table');
+          }
+          const entry = await readDynamicFieldObject(membersTableId, { type: 'address', value: userAddress });
+          if (!entry.data && !isDynamicFieldMissingResponse(entry)) {
+            throw new Error('Join - the members table did not answer');
+          }
+          isUserMember = Boolean(entry.data);
         }
-
-        // Set member status based on admin status or event membership (accounting for removals)
-        const isUserMember = isUserAdmin || (memberAddresses.has(userAddress) && !wasUserRemoved);
         setIsMember(isUserMember);
 
         // Show toast and redirect IF user is authenticated AND is admin/member
@@ -498,7 +485,7 @@ export default function JoinCircle({ invitePreview }: JoinCircleProps) {
           router.push(`/circle/${id}`); // Redirect admin
           return; // Exit early
         } else if (isUserMember) {
-          console.log('Join - User is already a member based on event query');
+          console.log('Join - User is already a member (members table)');
           toast('You are already a member of this circle.');
           router.push(`/circle/${id}`); // Redirect member
           return; // Exit early
