@@ -130,6 +130,8 @@ export async function cachedRead<T>(
   key: string,
   loader: () => Promise<T>,
   ttlMs: number = DEFAULT_READ_TTL_MS,
+  /** Whether to keep this result; an absence answer is not kept, since the object or field may appear any moment. */
+  keep: (value: T) => boolean = () => true,
 ): Promise<T> {
   const cached = responseCache.get(key) as CacheEntry<T> | undefined;
   if (cached && cached.expiresAt > Date.now()) {
@@ -144,7 +146,7 @@ export async function cachedRead<T>(
   const promise = (async () => {
     try {
       const value = await loader();
-      if (ttlMs > 0) {
+      if (ttlMs > 0 && keep(value)) {
         responseCache.set(key, { value, expiresAt: Date.now() + ttlMs });
       }
       return value;
@@ -410,6 +412,8 @@ export function readObject(
     cacheKey,
     () => enqueueObjectRead(network, batchKey, id, effectiveOptions),
     ttlMs,
+    // A just-created object (a member's new table entry) must not read as gone for the TTL.
+    (response) => !isGoneObjectResponse(response),
   );
   const expected = opts.expectType;
   return expected ? read.then((response) => checkExpectedType(id, response, expected)) : read;
@@ -680,6 +684,7 @@ export async function readDynamicFieldObject(
       `dfo:${network}:${parentId}:${JSON.stringify(name)}`,
       () => client.getDynamicFieldObject({ parentId, name }),
       opts.ttlMs ?? DEFAULT_READ_TTL_MS,
+      (response) => !isDynamicFieldMissingResponse(response) && !isGoneObjectResponse(response),
     );
   }
 

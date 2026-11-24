@@ -176,6 +176,14 @@ describe('readObject over the 2.x source', () => {
     expect(isGoneObjectResponse(response)).toBe(true);
   });
 
+  it('does not keep a gone answer: an object created a moment later is read', async () => {
+    answers.set(CIRCLE, { kind: 'gone' });
+    await readObject(CIRCLE);
+    answers.set(CIRCLE, circleRecord());
+    await expect(readObject(CIRCLE)).resolves.toMatchObject({ data: { objectId: CIRCLE } });
+    expect(source.getObjects).toHaveBeenCalledTimes(2);
+  });
+
   it('throws when no source answered, and does not cache the failure', async () => {
     await expect(readObject(CIRCLE)).rejects.toMatchObject({ name: 'SuiReadError', reason: 'unavailable' });
     answers.set(CIRCLE, circleRecord());
