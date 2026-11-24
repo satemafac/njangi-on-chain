@@ -1,5 +1,3 @@
-import type { NetworkType } from '@/config/public-env';
-
 // The package lineage moved to package-lineage.ts (a leaf module, so the
 // list of this app's packages does not depend on the rest of this file).
 export {

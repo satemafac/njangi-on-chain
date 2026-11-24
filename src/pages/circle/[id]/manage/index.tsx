@@ -4109,7 +4109,7 @@ export default function ManageCircle() {
     } finally {
       setLoadingRecoveryExecution(false);
     }
-  }, [circlePackageId, id, userAddress]);
+  }, [circlePackageId, id]);
 
   useEffect(() => {
     if (!id || !userAddress) {

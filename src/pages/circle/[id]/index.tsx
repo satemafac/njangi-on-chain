@@ -775,7 +775,7 @@ export default function CircleDetails() {
     } finally {
       setLoadingRecoveryExecution(false);
     }
-  }, [circlePackageId, id, userAddress]);
+  }, [circlePackageId, id]);
 
   // The coin type a recovery unwinds — the type argument execute_recovery /
   // trigger_auto_release take, and the decimals the refund totals below are
