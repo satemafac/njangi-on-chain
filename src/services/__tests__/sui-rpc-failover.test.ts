@@ -63,13 +63,14 @@ import {
   getPooledSuiClient,
   getRpcCandidateUrls,
   getRpcCandidateUrlsForRpcUrl,
-  getSigningSuiClient,
   isCapabilityGapError,
   isRateLimitedSuiRpcError,
   isRetriableSuiRpcError,
   logSuiReadError,
   withSuiRpcFailover,
 } from '../sui-rpc-failover';
+import { getSigningSuiClient } from '../../lib/signing-sui-client';
+import { attachedTxTransport } from '../../lib/tx-transport';
 
 describe('sui-rpc-failover', () => {
   const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
@@ -289,8 +290,12 @@ describe('sui-rpc-failover', () => {
       expect(transportRequestMocks.get('https://alt.rpc')).toHaveBeenCalledWith(signed);
     });
 
-    it('is the pooled failover client for that network', () => {
-      expect(getSigningSuiClient('testnet')).toBe(getPooledSuiClient({ network: 'testnet' }));
+    it('delegates to the pooled failover client and carries a transaction transport', () => {
+      const signing = getSigningSuiClient('testnet') as unknown as { transport: unknown };
+      const pooled = getPooledSuiClient({ network: 'testnet' }) as unknown as { transport: unknown };
+      expect(signing.transport).toBe(pooled.transport);
+      // gRPC, then GraphQL, then JSON-RPC through the pooled client.
+      expect(attachedTxTransport(signing as object)?.name).toBe('v2-grpc>v2-graphql>json-rpc');
     });
   });
 

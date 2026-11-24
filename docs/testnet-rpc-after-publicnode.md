@@ -110,11 +110,17 @@ needs, with identical shapes on both transports. A buys time. B is now
 strictly worse than C.
 
 Staged order for C, by user impact, each stage independently shippable:
-1. **Signing and execution**: `getSigningSuiClient` and the zkLogin signer
-   build, simulate and execute through a 2.x `core` client (gRPC, GraphQL
-   fallback). Probably the smallest stage, because the build path is
-   self-contained, and the most valuable: it brings deposits, contributions,
-   collects and admin actions back.
+1. **Signing and execution. Done on `feat/sdk2-signing`.**
+   `getSigningSuiClient` (`src/lib/signing-sui-client.ts`) builds, simulates,
+   submits and confirms through 2.x (gRPC, then GraphQL), with JSON-RPC last.
+   The payment builders' coin reads and the v11 asset-policy read go the same
+   way. Results and abort errors keep the JSON-RPC shape and text, so callers
+   and parsers are unchanged. Verified live on testnet with production's RPC
+   config: builder reads, policy read, abort 234 classified, builds, a
+   rejected bad signature, and the sponsor verifier accepting a 2.x kind.
+   **Not yet user-visible:** the pages that offer money actions still load
+   over JSON-RPC (stage 2), and the legacy pre-v11 security-deposit builder
+   reads the circle config through `getObject`, which stays on JSON-RPC.
 2. **The shared read layer** (`sui-read.ts`: `readObject` / `readObjects`) on
    `core.getObjects({ include: { json: true } })`, then the round panel,
    contribute and manage pages.

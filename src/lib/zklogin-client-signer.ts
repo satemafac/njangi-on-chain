@@ -22,6 +22,7 @@ import { Transaction } from '@mysten/sui/transactions';
 import { decodeSuiPrivateKey } from '@mysten/sui/cryptography';
 import { genAddressSeed, getZkLoginSignature } from '@mysten/sui/zklogin';
 import type { ZkLoginProofs, AccountData } from '../services/zkLoginService';
+import { txTransportFor } from './tx-transport';
 
 const SESSION_KEY = 'njangi.zklogin.signer';
 
@@ -213,7 +214,9 @@ async function resolveTransactionBytes(
     await input.build(txb, client);
   }
 
-  return txb.build({ client });
+  // Through the client's transport (gRPC, then GraphQL, then JSON-RPC on the
+  // signing client; plain JSON-RPC on any other).
+  return txTransportFor(client).build(txb);
 }
 
 /**
@@ -230,14 +233,7 @@ export async function signAndExecuteWithZkLogin(
   const txBytes = await resolveTransactionBytes(session, client, input);
   const zkSignature = await signTransactionBytes(session, txBytes);
 
-  const result = await client.executeTransactionBlock({
-    transactionBlock: txBytes,
-    signature: zkSignature,
-    options: {
-      showEffects: true,
-      showEvents: true,
-    },
-  });
+  const result = await txTransportFor(client).execute(txBytes, zkSignature);
 
   return {
     digest: result.digest,

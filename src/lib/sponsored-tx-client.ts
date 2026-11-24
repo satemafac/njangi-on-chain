@@ -27,6 +27,7 @@ import {
   type ClientSignerSession,
 } from './zklogin-client-signer';
 import { kindUsesGasCoin } from './sponsorable-kind';
+import { txTransportFor } from './tx-transport';
 
 export interface SponsorPrepareResponse {
   sponsored: boolean;
@@ -99,7 +100,7 @@ async function landedAlready(
   cause: unknown,
 ): Promise<SponsoredExecuteResult | null> {
   try {
-    const landed = await client.waitForTransaction({ digest, options: { showEffects: true } });
+    const landed = await txTransportFor(client).waitForTransaction(digest);
     console.warn(
       '[sponsored-tx] execute reported a failure but the transaction landed; not re-signing:',
       digest,
@@ -148,10 +149,7 @@ export async function trySponsoredExecute(args: {
     } else {
       return null;
     }
-    const kindBytes = await txb.build({
-      client: args.client,
-      onlyTransactionKind: true,
-    });
+    const kindBytes = await txTransportFor(args.client).build(txb, { onlyTransactionKind: true });
 
     // A kind that touches the gas coin would spend the sponsor's SUI: a SUI
     // share is split from it. The server refuses those too, so asking would
@@ -235,10 +233,7 @@ export async function trySponsoredExecute(args: {
     // reconcile. Returning null here is what would double-charge the member.
     let effects: unknown;
     try {
-      const confirmed = await args.client.waitForTransaction({
-        digest: executed.digest,
-        options: { showEffects: true },
-      });
+      const confirmed = await txTransportFor(args.client).waitForTransaction(executed.digest);
       effects = confirmed?.effects;
     } catch (err) {
       console.warn(
