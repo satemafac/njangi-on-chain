@@ -17,7 +17,7 @@ import { isGoneObjectResponse, listDynamicFields, readAllEvents, readObject } fr
 import { getReadingSuiClient } from '@/lib/reading-sui-client';
 import { logSuiReadError } from '@/services/sui-rpc-failover';
 import { priceService } from '@/services/price-service';
-import { getCirclePackageId, getSuiClientFromPool } from '../../../../services/circle-service';
+import { circleMoveTypes, getSuiClientFromPool } from '../../../../services/circle-service';
 import { getCurrentRpcUrl } from '../../../../services/network-config';
 import { LoginButton } from '@/components/LoginButton';
 import { useTranslation } from '@/hooks/useTranslation';
@@ -234,7 +234,7 @@ export default function JoinCircle({ invitePreview }: JoinCircleProps) {
       const objectData = await readObject(
         id as string,
         { showContent: true, showType: true },
-        { expectType: '::njangi_circles::Circle' },
+        { expectType: circleMoveTypes() },
       );
       if (isGoneObjectResponse(objectData)) {
         // The network answered that the object does not exist.
@@ -248,10 +248,11 @@ export default function JoinCircle({ invitePreview }: JoinCircleProps) {
         throw new Error('Invalid circle object data received');
       }
       // The package that defines this circle's type: its events carry it.
-      const circleTypePackageId = extractPackageIdFromMoveType(objectData.data.type);
-      const determinedPackageId = circleTypePackageId
-        ? normalizePackageId(circleTypePackageId) ?? circleTypePackageId
-        : await getCirclePackageId(id as string, userAddress ?? undefined);
+      // (The type check above already pinned it to this app's packages.)
+      const determinedPackageId = normalizePackageId(extractPackageIdFromMoveType(objectData.data.type));
+      if (!determinedPackageId) {
+        throw new Error('Join - the circle was read without its Move type');
+      }
       const fields = objectData.data.content.fields as CircleFields;
       const lifecycle = resolveCircleLifecycleState(fields);
       console.log('Join - Using package ID:', determinedPackageId);

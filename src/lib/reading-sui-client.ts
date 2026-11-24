@@ -77,19 +77,23 @@ export function getReadingSuiClient(network?: NetworkType): SuiClient {
     (await reads.getCoins(input)) as unknown as Awaited<ReturnType<SuiClient['getCoins']>>;
   const getBalance: Method<'getBalance'> = async (input) =>
     (await reads.getBalance(input)) as unknown as Awaited<ReturnType<SuiClient['getBalance']>>;
+  // Resolves once BOTH Sui transports have the transaction. The fullnode
+  // (gRPC) sees it first, but the refresh that follows reads GraphQL first
+  // (circle-config.ts, every event list), and GraphQL indexes a little later:
+  // waiting on gRPC alone let the old tally, delegate or "Execute" button
+  // come back. Throws when GraphQL has not indexed it in time
+  // (waitForTxIndexed then refreshes anyway, as before).
   const waitForTransaction: Method<'waitForTransaction'> = async ({ digest, timeout }) => {
-    const transports = await (await loadV2()).v2TxTransports(net);
-    let lastError: unknown;
-    for (const transport of transports) {
-      try {
-        return (await transport.waitForTransaction(digest, timeout ? { timeoutMs: timeout } : undefined)) as unknown as Awaited<
-          ReturnType<SuiClient['waitForTransaction']>
-        >;
-      } catch (error) {
-        lastError = error;
-      }
+    const [grpc, graphql] = await (await loadV2()).v2TxTransports(net);
+    const deadline = Date.now() + (timeout ?? 60_000);
+    let confirmed: unknown;
+    try {
+      confirmed = await grpc.waitForTransaction(digest, { timeoutMs: Math.max(1_000, deadline - Date.now()) });
+    } catch {
+      // GraphQL below decides.
     }
-    throw lastError ?? new Error(`[reading-client] ${digest} was not confirmed`);
+    const indexed = await graphql.waitForTransaction(digest, { timeoutMs: Math.max(1_000, deadline - Date.now()) });
+    return (confirmed ?? indexed) as Awaited<ReturnType<SuiClient['waitForTransaction']>>;
   };
 
   const overrides: Record<PropertyKey, unknown> = {

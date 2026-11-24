@@ -14,7 +14,8 @@ import {
   getGraphqlUrlForNetwork,
 } from './network-config';
 import { getPooledSuiClient } from './sui-rpc-failover';
-import { readObject, queryEventsCached, IMMUTABLE_READ_TTL_MS } from '@/lib/sui-read';
+import { readObject, queryEventsCached, IMMUTABLE_READ_TTL_MS, isGoneObjectResponse } from '@/lib/sui-read';
+import { circleMoveTypes, KNOWN_PACKAGE_IDS } from '@/lib/app-packages';
 
 export function getPackageId(): string {
   return getCurrentPackageId();
@@ -62,22 +63,6 @@ export function getPackageLookupIdsForCurrentNetwork(
   return Array.from(lookupIds);
 }
 
-/**
- * Known package IDs to always check for circles.
- * This ensures member-only circles from previous deployments remain discoverable.
- */
-const KNOWN_PACKAGE_IDS: Record<'testnet' | 'mainnet', string[]> = {
-  testnet: [
-    '0x9f916ce4a0a4970e1d466a79ec2a916ec930feac10218e2b94c282a3906d7926',
-    '0x8d44cd03809c95bd8b46c3f26cc9f7a62085d0f8b1bb22082b6ff768be0cb78f',
-    '0xd0f586ee515a0289be671399c3a4550f96cd556592e10686b820cdba6a56ecdc',
-    '0xafdc1beeda48394d47ecfacf2f03592af72dd59f54887099551ca8c369c460cd',
-  ],
-  mainnet: [
-    '0xcec9cfc2bd69cd02e302433333142db502ab1566fab71d8489630b164927177b',
-    '0x7bf5274804a6008ebfbd9bfe766defb7fd5aa5fe6777419c2b6531ec99120b55',
-  ],
-};
 
 const MAX_USER_PACKAGE_DISCOVERY_PAGES = 10;
 const MAX_EVENT_QUERY_PAGES_PER_PACKAGE = 50;
@@ -339,6 +324,31 @@ export async function getCirclePackageId(circleId: string, userAddress?: string)
     console.error('Error in getCirclePackageId:', error);
     return getPackageId(); // Return default as fallback
   }
+}
+
+export { appPackageIds, circleMoveTypes, custodyWalletMoveTypes } from '@/lib/app-packages';
+
+/**
+ * The package that defines `circleId`'s type: the id its events carry. Read
+ * from the circle object itself, pinned to this app's packages. Null only
+ * when the chain answered that the circle is gone ("Circle not found"); throws
+ * when it cannot be read or is not one of our circles. Pages use this for
+ * event lookups: getCirclePackageId's default package after a failed read
+ * would send them to another package's events (unpaid, inactive, "no longer
+ * a member").
+ */
+export async function readCirclePackageId(circleId: string): Promise<string | null> {
+  const object = await readObject(
+    circleId,
+    { showType: true },
+    { ttlMs: IMMUTABLE_READ_TTL_MS, expectType: circleMoveTypes() },
+  );
+  if (isGoneObjectResponse(object)) return null;
+  const packageId = normalizePackageId(extractPackageIdFromMoveType(object.data?.type));
+  if (!packageId) {
+    throw new Error(`[circle-service] circle ${circleId} was read without its Move type`);
+  }
+  return packageId;
 }
 
 export async function getCircleTransactionPackageId(

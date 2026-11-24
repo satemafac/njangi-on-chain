@@ -5,7 +5,13 @@ import { toast } from 'react-hot-toast';
 import { AlertTriangle, ArrowLeft, RefreshCw } from 'lucide-react';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { priceService } from '../../../../services/price-service';
-import { PACKAGE_ID, getCirclePackageId, getSuiClientFromPool } from '../../../../services/circle-service';
+import {
+  PACKAGE_ID,
+  circleMoveTypes,
+  custodyWalletMoveTypes,
+  getSuiClientFromPool,
+  readCirclePackageId,
+} from '../../../../services/circle-service';
 import SimplifiedSwapUI from '../../../../components/SimplifiedSwapUI';
 import { getCoinType } from '../../../../config/constants';
 import {
@@ -33,6 +39,7 @@ import {
   isDynamicFieldMissingResponse,
 } from '@/lib/sui-read';
 import { getReadingSuiClient, readBalance } from '@/lib/reading-sui-client';
+import { waitForTxIndexed } from '@/lib/wait-for-tx-indexed';
 import { memberEventTimes, membershipFromEventTimes, readEveryEvent } from '@/lib/circle-membership-events';
 import type { NetworkType } from '@/services/whatsapp-registry-service';
 import { lookupMemberNames } from '@/lib/member-name-lookup';
@@ -227,7 +234,8 @@ const toDisplayAmount = (value: bigint, decimals: number): number => {
 };
 
 /** A circle object read must be a Circle: any other type is a failed read (sui-read.ts). */
-const CIRCLE_MOVE_TYPE = '::njangi_circles::Circle';
+// The Circle type from this app's packages only (circle-service.ts circleMoveTypes).
+const CIRCLE_MOVE_TYPE = (): string[] => circleMoveTypes();
 
 const isU64Like = (value: unknown): boolean =>
   (typeof value === 'string' && /^\d+$/.test(value)) ||
@@ -236,7 +244,7 @@ const isU64Like = (value: unknown): boolean =>
 // The security deposits the circle still holds, summed from its members
 // table. Every read failure throws: an unread deposit is unknown, never zero.
 const readOutstandingSecurityDepositRaw = async (circleId: string): Promise<bigint> => {
-  const circleObject = await readObject(circleId, { showContent: true }, { expectType: CIRCLE_MOVE_TYPE });
+  const circleObject = await readObject(circleId, { showContent: true }, { expectType: CIRCLE_MOVE_TYPE() });
 
   if (!circleObject.data?.content || !('fields' in circleObject.data.content)) {
     throw new Error(`Circle ${circleId} did not read; its outstanding deposits are unknown`);
@@ -491,7 +499,7 @@ export default function ContributeToCircle() {
       // First check if user is the admin. Deduped/cached read (Sui gRPC
       // first, GraphQL second): the circle object is fetched by several
       // mount-time checks; they share one read. A failed read throws.
-      const objectData = await readObject(id as string, { showContent: true }, { expectType: CIRCLE_MOVE_TYPE });
+      const objectData = await readObject(id as string, { showContent: true }, { expectType: CIRCLE_MOVE_TYPE() });
 
       if (isGoneObjectResponse(objectData)) {
         // No circle to be a member of: the details read says "Circle not
@@ -532,7 +540,9 @@ export default function ContributeToCircle() {
       }
       console.log('[Membership] User not present in members table (verified absent)');
 
-      const determinedPackageId = await getCirclePackageId(id as string, userAddress);
+      // The circle's own package (its events carry it); a failed read throws.
+      const determinedPackageId = await readCirclePackageId(id as string);
+      if (determinedPackageId === null) return null;
 
       // Check if user ever joined this circle and get their join events
       // (every page of them: an unread page is not "never joined")
@@ -811,7 +821,7 @@ export default function ContributeToCircle() {
       const walletData = await readObject(
         circle.walletId,
         { showContent: true },
-        { expectType: '::njangi_custody::CustodyWallet' },
+        { expectType: custodyWalletMoveTypes() },
       );
 
       if (walletData.data?.content && 'fields' in walletData.data.content) {
@@ -906,8 +916,15 @@ export default function ContributeToCircle() {
     }
     try {
       setLoadError(false);
-      // Determine package ID for this circle
-      const determinedPackageId = await getCirclePackageId(id as string, userAddress);
+      // The package that defines this circle's type (its events carry it),
+      // read from the circle itself: a failed read throws to the load error.
+      const determinedPackageId = await readCirclePackageId(id as string);
+      if (determinedPackageId === null) {
+        // The only "Circle not found": a source answered it does not exist.
+        console.log('Contribute - Circle object is gone:', id);
+        setCircle(null);
+        return;
+      }
       console.log('Contribute - Using package ID:', determinedPackageId);
       setCirclePackageId(determinedPackageId);
 
@@ -921,7 +938,7 @@ export default function ContributeToCircle() {
       const objectData = await readObject(
         id as string,
         { showContent: true, showType: true },
-        { expectType: CIRCLE_MOVE_TYPE },
+        { expectType: CIRCLE_MOVE_TYPE() },
       );
 
       if (isGoneObjectResponse(objectData)) {
@@ -1501,7 +1518,7 @@ export default function ContributeToCircle() {
 
       // Method 1: Try fetching the Member object directly (Best Source of Truth)
       try {
-        const circleObject = await readObject(circle.id, { showContent: true }, { expectType: CIRCLE_MOVE_TYPE });
+        const circleObject = await readObject(circle.id, { showContent: true }, { expectType: CIRCLE_MOVE_TYPE() });
         if (isGoneObjectResponse(circleObject)) {
           throw new Error(`Circle ${circle.id} is gone; its deposit status cannot be read`);
         }
@@ -1712,7 +1729,7 @@ export default function ContributeToCircle() {
 
     try {
       // Reads throw when they fail (caught below: the state is left as it was).
-      const circleObject = await readObject(circle.id, { showContent: true }, { expectType: CIRCLE_MOVE_TYPE });
+      const circleObject = await readObject(circle.id, { showContent: true }, { expectType: CIRCLE_MOVE_TYPE() });
 
       if (!circleObject.data?.content || !('fields' in circleObject.data.content)) {
         setUserHasContributed(false);
@@ -1819,7 +1836,7 @@ export default function ContributeToCircle() {
     console.log(`[Recipient Check] Checking if user ${userAddress} is the current recipient in circle ${circle.id}`);
 
     try {
-      const circleObject = await readObject(circle.id, { showContent: true }, { expectType: CIRCLE_MOVE_TYPE });
+      const circleObject = await readObject(circle.id, { showContent: true }, { expectType: CIRCLE_MOVE_TYPE() });
 
       if (circleObject.data?.content && 'fields' in circleObject.data.content) {
         const circleFields = circleObject.data.content.fields as Record<string, unknown>;;
@@ -2577,7 +2594,9 @@ export default function ContributeToCircle() {
             : 'Security deposit paid successfully in SUI.',
           { id: 'pay-security-deposit' }
         );
-        // Deposit changed on-chain state — drop cached circle reads first.
+        // Deposit changed on-chain state: wait until both Sui transports have
+        // it, then drop cached circle reads.
+        await waitForTxIndexed(getReadingSuiClient(), responseData.digest);
         invalidateObject(circle.id);
         // Refresh user's wallet info and circle data
         fetchUserWalletInfo();
@@ -2957,8 +2976,10 @@ export default function ContributeToCircle() {
       
       console.log('Direct USDC deposit transaction digest:', responseData.digest);
 
-      // The deposit just mutated on-chain state; drop cached circle reads so
-      // the refresh below reflects it rather than the pre-write snapshot.
+      // Refresh once both Sui transports have the deposit (the refresh reads
+      // Sui GraphQL, which indexes a moment after the fullnode), then drop
+      // cached reads so it reflects the write, not the pre-write snapshot.
+      await waitForTxIndexed(getReadingSuiClient(), responseData.digest);
       invalidateObject(circle.id);
 
       // Refresh user wallet info, circle data, and custody wallet balance

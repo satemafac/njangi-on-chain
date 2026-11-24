@@ -41,7 +41,7 @@ import { lookupMemberNames } from '@/lib/member-name-lookup';
 import { supportedCoinBySymbol, UNSUPPORTED_COIN_LABEL } from '@/lib/supported-coins';
 import { priceService } from '../../../../services/price-service';
 import { JoinRequest } from '../../../../services/database-service';
-import { getCirclePackageId } from '../../../../services/circle-service';
+import { circleMoveTypes, readCirclePackageId } from '../../../../services/circle-service';
 import {
   getCurrentCoinTypes,
   getCurrentNetwork,
@@ -881,8 +881,14 @@ export default function ManageCircle() {
       // Read-only: off JSON-RPC (Sui gRPC, then GraphQL). Nothing here signs.
       const client = getReadingSuiClient();
 
-      // Determine package ID for this circle
-      const determinedPackageId = await getCirclePackageId(id as string, userAddress);
+      // The package that defines this circle's type (its events carry it),
+      // read from the circle itself: a failed read throws to the load error.
+      const determinedPackageId = await readCirclePackageId(id as string);
+      if (determinedPackageId === null) {
+        console.warn('Manage - the chain says this circle does not exist', { circleId: id });
+        setCircle(null);
+        return;
+      }
       setCirclePackageId(determinedPackageId);
       debugLog('Using package ID', determinedPackageId);
 
@@ -890,7 +896,7 @@ export default function ManageCircle() {
       // A read that fails throws (the page then offers a retry); only the
       // chain answering that the circle is gone is "Circle not found".
       const [objectRead, dynamicFieldsRead] = await Promise.allSettled([
-        readObject(id as string, { showContent: true, showType: true }, { expectType: '::njangi_circles::Circle' }),
+        readObject(id as string, { showContent: true, showType: true }, { expectType: circleMoveTypes() }),
         listDynamicFields(id as string),
       ]);
       if (objectRead.status === 'rejected') throw objectRead.reason;
@@ -3858,7 +3864,7 @@ export default function ManageCircle() {
       const circleObjectData = await readObject(
         circle.id,
         { showContent: true },
-        { expectType: '::njangi_circles::Circle' },
+        { expectType: circleMoveTypes() },
       );
       if (circleObjectData.data?.content && 'fields' in circleObjectData.data.content) {
         const cFields = circleObjectData.data.content.fields as Record<string, SuiFieldValue>;
@@ -4061,7 +4067,7 @@ export default function ManageCircle() {
       const resolvedPackageId =
         packageIdOverride ||
         circlePackageId ||
-        (userAddress ? await getCirclePackageId(id as string, userAddress) : null);
+        (await readCirclePackageId(id as string));
 
       if (!resolvedPackageId) {
         setRecoveryExecution(null);

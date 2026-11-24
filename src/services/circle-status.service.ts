@@ -9,6 +9,7 @@ import { getNetworkConfig } from './network-config';
 import joinRequestDatabase from './join-request-database';
 import { readObject, queryEventsCached } from '@/lib/sui-read';
 import { getReadingSuiClient } from '@/lib/reading-sui-client';
+import { circleMoveTypes } from '@/lib/app-packages';
 import { resolveCircleLifecycleState } from '@/lib/circle-chain';
 import { resolveCustodyWalletId } from '@/lib/custody-wallet-discovery';
 import { circleRoundNumber } from '@/lib/round-number';
@@ -80,7 +81,7 @@ export async function getCircleStatus(circleId: string, network?: 'testnet' | 'm
     const objectData = await readObject(
       circleId,
       { showContent: true, showType: true },
-      { network: targetNetwork, expectType: '::njangi_circles::Circle' },
+      { network: targetNetwork, expectType: circleMoveTypes(targetNetwork) },
     );
     
     console.log('[CircleStatus] Object data received:', objectData.data ? 'found' : 'not found');

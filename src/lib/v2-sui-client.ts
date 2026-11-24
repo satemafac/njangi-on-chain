@@ -152,6 +152,10 @@ export function v2Reads(network: NetworkType): V2Reads {
             if (!json || !('value' in json)) throw new Error(`dynamic field ${entry.fieldId} has no value`);
             return json.value;
           }
+          if (page.hasNextPage && (!page.cursor || page.cursor === cursor)) {
+            // A list cut short is not "no such field".
+            throw new Error(`dynamic fields of ${parentId}: a next page without a new cursor`);
+          }
           cursor = page.hasNextPage ? page.cursor : null;
         } while (cursor);
         return null;
@@ -179,9 +183,12 @@ function isNotFoundAnswer(error: Error): boolean {
 
 /**
  * `ids` read with `core.getObjects({ include: { json: true } })`, gRPC first,
- * GraphQL for whatever gRPC did not answer. An id is `gone` only when a
- * source said it does not exist; an answer for another id, or a Move object
- * without its JSON, does not count, and an id no source answered is `failed`.
+ * GraphQL for whatever gRPC did not answer. An id is `gone` only when gRPC,
+ * which serves the fullnode's current state, said it does not exist. GraphQL
+ * is an indexer that lags the chain, so its "not found" can be a circle or a
+ * member record created a moment ago: it counts as a failed read. An answer
+ * for another id, or a Move object without its JSON, does not count either,
+ * and an id no source answered is `failed`.
  */
 export async function v2GetObjects(
   network: NetworkType,
@@ -213,7 +220,7 @@ export async function v2GetObjects(
     pending.forEach((id, index) => {
       const answer = objects[index];
       if (answer instanceof Error) {
-        if (isNotFoundAnswer(answer)) results.set(id, { kind: 'gone' });
+        if (isNotFoundAnswer(answer) && endpoint.name === 'grpc') results.set(id, { kind: 'gone' });
         else errors.set(id, describe(endpoint.name, answer));
         return;
       }
