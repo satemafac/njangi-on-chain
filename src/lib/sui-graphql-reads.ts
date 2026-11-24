@@ -157,9 +157,9 @@ function readEventNode(node: unknown, where: string): GraphqlEventRecord {
   const seq = field(node, 'sequenceNumber');
   const timestamp = field(node, 'timestamp');
   const sender = field(field(node, 'sender'), 'address');
-  const module = field(node, 'transactionModule');
-  const moduleName = field(module, 'name');
-  const packageId = field(field(module, 'package'), 'address');
+  const emitModule = field(node, 'transactionModule');
+  const moduleName = field(emitModule, 'name');
+  const packageId = field(field(emitModule, 'package'), 'address');
   const contents = field(node, 'contents');
   const type = field(field(contents, 'type'), 'repr');
   const json = field(contents, 'json');
