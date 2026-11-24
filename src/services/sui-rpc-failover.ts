@@ -11,6 +11,7 @@ import {
   getNetworkConfig,
   type NetworkType,
 } from './network-config';
+import { attachV2ReadSource, lazyV2ReadSource } from '@/lib/v2-read-source';
 
 const directClientPool = new Map<string, SuiClient>();
 const failoverClientPool = new Map<string, SuiClient>();
@@ -423,15 +424,36 @@ export function getPooledSuiClient(args: SharedSuiClientArgs = {}): SuiClient {
   const cacheKey = candidateUrls.join('|');
 
   if (!failoverClientPool.has(cacheKey)) {
-    failoverClientPool.set(
-      cacheKey,
-      new SuiClient({
-        transport: new SuiFailoverTransport(candidateUrls),
-      }),
-    );
+    const client = new SuiClient({
+      transport: new SuiFailoverTransport(candidateUrls),
+    });
+    // The shared read layer (src/lib/sui-read.ts) reads through this source,
+    // Sui's gRPC then GraphQL, instead of the JSON-RPC transport above.
+    const network = networkOfPooledClient(args);
+    if (network) {
+      attachV2ReadSource(client, lazyV2ReadSource(network));
+    }
+    failoverClientPool.set(cacheKey, client);
   }
 
   return failoverClientPool.get(cacheKey)!;
+}
+
+/** The network a pooled client serves: the one asked for, the one its URL belongs to, else the current one. */
+function networkOfPooledClient(args: SharedSuiClientArgs): NetworkType | null {
+  if (args.network) return args.network;
+  if (!args.rpcUrl) return getCurrentNetwork();
+  const requested = normalizeRpcUrl(args.rpcUrl);
+  for (const network of KNOWN_NETWORKS) {
+    try {
+      if (getRpcCandidateUrls(network).some((candidate) => normalizeRpcUrl(candidate) === requested)) {
+        return network;
+      }
+    } catch {
+      // A network without a usable config cannot be this client's.
+    }
+  }
+  return null;
 }
 
 export function clearSuiRpcClientPool(): void {
