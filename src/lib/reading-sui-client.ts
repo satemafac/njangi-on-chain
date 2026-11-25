@@ -8,20 +8,25 @@
 // client is the pooled one with its read methods routed through the shared
 // read layer (sui-read.ts: Sui gRPC, then GraphQL; events from GraphQL), in
 // the JSON-RPC shapes the helpers already parse. Lists (dynamic fields,
-// events) come back whole, as one page, except that queryEvents given a
-// cursor or a limit pages over that whole list: it starts after the cursor's
-// event, stops at the limit, and throws for a cursor the list does not hold.
+// events, owned objects) come back whole, as one page, except that
+// queryEvents and getOwnedObjects given a cursor or a limit page over that
+// whole list: they start after the cursor's event or object, stop at the
+// limit, and throw for a cursor the list does not hold. Owned objects are
+// listed by Move type off JSON-RPC (v2-sui-client.ts v2ListOwnedObjects:
+// gRPC, then GraphQL) and, when more than their refs is asked for, read the
+// way multiGetObjects reads them.
 //
 // Hand it only to code that reads. Transactions are built, signed and
 // confirmed by the signing client (signing-sui-client.ts), unchanged.
-// Methods not listed here (getTransactionBlock, queryTransactionBlocks,
-// getOwnedObjects, …) are the pooled client's own, still JSON-RPC.
+// Methods not listed here (getTransactionBlock, queryTransactionBlocks, …)
+// are the pooled client's own, still JSON-RPC.
 
-import type { EventId, PaginatedEvents, SuiClient, SuiEventFilter } from '@mysten/sui/client';
+import type { EventId, PaginatedEvents, SuiClient, SuiEventFilter, SuiObjectDataOptions } from '@mysten/sui/client';
 import { getCurrentNetwork, type NetworkType } from '@/services/network-config';
 import { getPooledSuiClient } from '@/services/sui-rpc-failover';
 import { V2_READS_KEY, type V2Reads } from './tx-transport';
 import { attachedV2ReadSource } from './v2-read-source';
+import type { V2OwnedObjectRef } from './v2-sui-client';
 import {
   listDynamicFields,
   queryEventsCached,
@@ -81,6 +86,56 @@ function pageOfEvents(
   return { data, hasNextPage: end < whole.data.length, nextCursor: last ? last.id : cursor };
 }
 
+/** `id` at full width and in lower case, as the 2.x listing writes object ids. */
+function fullWidthId(id: string): string {
+  return `0x${id.trim().toLowerCase().replace(/^0x/, '').padStart(64, '0')}`;
+}
+
+/** The Move type a `{ StructType }` filter names; null for any other filter, or none. */
+function structTypeOf(filter: unknown): string | null {
+  if (typeof filter !== 'object' || filter === null || Array.isArray(filter)) return null;
+  const keys = Object.keys(filter);
+  const type = (filter as { StructType?: unknown }).StructType;
+  if (keys.length !== 1 || keys[0] !== 'StructType' || typeof type !== 'string' || type.trim() === '') return null;
+  return type;
+}
+
+/**
+ * The page of `whole` (every object listed, in listing order) that starts
+ * right after the object `cursor` names and holds at most `limit` objects.
+ * Throws rather than guess when `whole` is not a list, when the cursor is not
+ * among its objects, or when `limit` is not a positive integer. nextCursor is
+ * the last object returned, or `cursor` when none is, as in pageOfEvents.
+ */
+function pageOfOwned(
+  what: string,
+  whole: V2OwnedObjectRef[],
+  cursor: string | null,
+  limit: number | null,
+): { refs: V2OwnedObjectRef[]; hasNextPage: boolean; nextCursor: string | null } {
+  if (!Array.isArray(whole)) {
+    throw new Error(`[reading-client] ${what} did not come back as a list`);
+  }
+  if (limit !== null && (!Number.isInteger(limit) || limit <= 0)) {
+    throw new Error(`[reading-client] ${what}: limit ${String(limit)} is not a positive integer`);
+  }
+  let start = 0;
+  if (cursor !== null) {
+    const wanted = fullWidthId(cursor);
+    const at = whole.findIndex(
+      (object) => typeof object?.objectId === 'string' && fullWidthId(object.objectId) === wanted,
+    );
+    if (at < 0) {
+      throw new Error(`[reading-client] ${what}: cursor ${cursor} is not among the objects listed`);
+    }
+    start = at + 1;
+  }
+  const end = limit === null ? whole.length : Math.min(whole.length, start + limit);
+  const refs = whole.slice(start, end);
+  const last = refs[refs.length - 1];
+  return { refs, hasNextPage: end < whole.length, nextCursor: last ? last.objectId : cursor };
+}
+
 // Keyed by the pooled client it wraps, so a new pooled client gets a new wrapper.
 let readingClients = new WeakMap<object, SuiClient>();
 
@@ -109,6 +164,52 @@ export function getReadingSuiClient(network?: NetworkType): SuiClient {
     }) as unknown as Awaited<ReturnType<SuiClient['getDynamicFields']>>;
   const getDynamicFieldObject: Method<'getDynamicFieldObject'> = ({ parentId, name }) =>
     readDynamicFieldObject(parentId, name, opts);
+  // The owner's objects of the filter's Move type, listed whole off JSON-RPC
+  // (v2ListOwnedObjects: gRPC, then GraphQL from the start; a listing that
+  // fails or stops short throws, never an empty or partial list), then paged
+  // for a cursor or a limit (pageOfOwned). When no more than refs and type is
+  // asked for, the listing is the answer; anything more is read as
+  // multiGetObjects reads it, so content.fields is sui-read's own conversion,
+  // and a listed object that does not come back read throws rather than
+  // being dropped. Only a `{ StructType }` filter is served: ignoring any
+  // other would hand back objects the caller never asked for.
+  const getOwnedObjects: Method<'getOwnedObjects'> = async ({ owner, filter, options, cursor, limit }) => {
+    const what = `owned objects of ${owner}`;
+    const structType = structTypeOf(filter);
+    if (structType === null) {
+      throw new Error(
+        `[reading-client] ${what}: only a { StructType } filter is served, not ${JSON.stringify(filter ?? null)}`,
+      );
+    }
+    const whole = await (await loadV2()).v2ListOwnedObjects(net, owner, structType);
+    const page = pageOfOwned(`${what} (${structType})`, whole, cursor ?? null, limit ?? null);
+    const asked: SuiObjectDataOptions = options ?? {};
+    const refsAnswer = Object.entries(asked).every(([key, value]) => key === 'showType' || !value);
+    let data: unknown[];
+    if (refsAnswer) {
+      data = page.refs.map(({ objectId, version, digest, type }) => ({
+        data: { objectId, version, digest, ...(asked.showType ? { type } : {}) },
+      }));
+    } else {
+      const ids = page.refs.map((object) => object.objectId);
+      const read: unknown = ids.length === 0 ? [] : await readObjects(ids, asked, opts);
+      if (!Array.isArray(read) || read.length !== ids.length) {
+        throw new Error(
+          `[reading-client] ${what}: ${ids.length} listed but ${Array.isArray(read) ? read.length : 'no list'} read`,
+        );
+      }
+      read.forEach((entry: { data?: { objectId?: unknown } | null; error?: unknown } | null, index: number) => {
+        const readId = entry?.data?.objectId;
+        if (entry?.error != null || typeof readId !== 'string' || fullWidthId(readId) !== fullWidthId(ids[index])) {
+          throw new Error(`[reading-client] ${what}: ${ids[index]} was listed but did not come back read`);
+        }
+      });
+      data = read;
+    }
+    return { data, hasNextPage: page.hasNextPage, nextCursor: page.nextCursor } as unknown as Awaited<
+      ReturnType<SuiClient['getOwnedObjects']>
+    >;
+  };
   // Reads the whole list as before (read failures propagate unchanged); a
   // cursor or a limit then pages over it (pageOfEvents), so a cron resuming
   // from its stored id gets only what came after it.
@@ -144,6 +245,7 @@ export function getReadingSuiClient(network?: NetworkType): SuiClient {
   const overrides: Record<PropertyKey, unknown> = {
     getObject,
     multiGetObjects,
+    getOwnedObjects,
     getDynamicFields,
     getDynamicFieldObject,
     queryEvents,

@@ -8,7 +8,7 @@
 // docs/testnet-rpc-after-publicnode.md).
 
 import type { Transaction } from '@mysten/sui/transactions';
-import { normalizeSuiAddress } from '@mysten/sui/utils';
+import { isValidSuiAddress, normalizeStructTag, normalizeSuiAddress } from '@mysten/sui/utils';
 import { getGraphqlUrlForNetwork, type NetworkType } from '@/services/network-config';
 import type { TxTransport, V2Reads } from './tx-transport';
 import type { V2DynamicFieldRecord, V2ObjectResult } from './v2-read-source';
@@ -314,6 +314,118 @@ export async function v2ListDynamicFields(network: NetworkType, parentId: string
         if (!response.hasNextPage) return fields;
         if (!response.cursor || response.cursor === cursor) throw new Error('a next page without a new cursor');
         cursor = response.cursor;
+      }
+    } catch (error) {
+      lastError = describe(endpoint.name, error);
+    }
+  }
+  throw lastError;
+}
+
+// ---------------------------------------------------------------------------
+// Owned-object listing for the reading client (reading-sui-client.ts)
+// ---------------------------------------------------------------------------
+
+/** Pages of an owned-object listing read before the listing counts as unreadable. */
+export const MAX_OWNED_OBJECT_PAGES = 50;
+
+/** Objects asked for per page of an owned-object listing. */
+export const OWNED_OBJECT_PAGE_SIZE = 50;
+
+/** One object an address owns, as its owner's listing names it. */
+export interface V2OwnedObjectRef {
+  /** Full width. */
+  objectId: string;
+  version: string;
+  digest: string;
+  /** Its full Move type, as the transport wrote it. */
+  type: string;
+}
+
+/** A page of `core.listOwnedObjects` as it arrives, before it is checked. */
+type OwnedObjectsAnswer = { objects?: unknown; hasNextPage?: unknown; cursor?: unknown } | null | undefined;
+
+/**
+ * True when `listed` is the Move type `wanted` names, addresses compared at
+ * full width. A type given without type arguments names each of its
+ * instantiations, as the transports' type filter does. A type that does not
+ * parse names nothing, so a listing that holds one fails.
+ */
+function isOfMoveType(listed: string, wanted: string): boolean {
+  try {
+    const want = normalizeStructTag(wanted);
+    const got = normalizeStructTag(listed);
+    return got === want || (!want.includes('<') && got.startsWith(`${want}<`));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Every object `owner` holds of the Move type `type`, read with
+ * `core.listOwnedObjects` through every page on one transport (cursors do not
+ * carry across), gRPC first, then GraphQL from the start. Throws when neither
+ * reads it to the end: a failed page, a page without its list or hasNextPage,
+ * an object without its id, version, digest or type, an object of another
+ * type, a next page without a new cursor, or more than MAX_OWNED_OBJECT_PAGES
+ * pages. None of these becomes an empty list or the pages read so far.
+ */
+export async function v2ListOwnedObjects(
+  network: NetworkType,
+  owner: string,
+  type: string,
+): Promise<V2OwnedObjectRef[]> {
+  const endpoints = (await loadV2()).endpointsFor(network);
+  const address = normalizeSuiAddress(owner);
+  let lastError: unknown = new Error(`[v2-read] no source listed the ${type} objects of ${address}`);
+  for (const endpoint of endpoints) {
+    try {
+      const objects: V2OwnedObjectRef[] = [];
+      let cursor: string | null = null;
+      for (let page = 1; ; page += 1) {
+        if (page > MAX_OWNED_OBJECT_PAGES) throw new Error(`more than ${MAX_OWNED_OBJECT_PAGES} pages of owned objects`);
+        const response: OwnedObjectsAnswer = (await endpoint.client.core.listOwnedObjects({
+          owner: address,
+          type,
+          limit: OWNED_OBJECT_PAGE_SIZE,
+          ...(cursor ? { cursor } : {}),
+        })) as unknown as OwnedObjectsAnswer;
+        const listed = response?.objects;
+        const hasNextPage = response?.hasNextPage;
+        if (!Array.isArray(listed) || typeof hasNextPage !== 'boolean') {
+          throw new Error('answered without an owned-object list');
+        }
+        for (const entry of listed as Array<Record<string, unknown> | null | undefined>) {
+          const rawId = entry?.objectId;
+          const rawVersion = entry?.version;
+          const objectId = typeof rawId === 'string' ? normalizeSuiAddress(rawId) : '';
+          const version =
+            typeof rawVersion === 'string' || typeof rawVersion === 'number' || typeof rawVersion === 'bigint'
+              ? String(rawVersion)
+              : '';
+          const digest = entry?.digest;
+          const objectType = entry?.type;
+          if (
+            !isValidSuiAddress(objectId) ||
+            !/^\d+$/.test(version) ||
+            typeof digest !== 'string' ||
+            digest === '' ||
+            typeof objectType !== 'string' ||
+            objectType === ''
+          ) {
+            throw new Error('answered an owned object without its id, version, digest or type');
+          }
+          if (!isOfMoveType(objectType, type)) {
+            throw new Error(`answered ${objectId} of type ${objectType}, not ${type}`);
+          }
+          objects.push({ objectId, version, digest, type: objectType });
+        }
+        if (!hasNextPage) return objects;
+        const next = response?.cursor;
+        if (typeof next !== 'string' || next === '' || next === cursor) {
+          throw new Error('a next page without a new cursor');
+        }
+        cursor = next;
       }
     } catch (error) {
       lastError = describe(endpoint.name, error);
