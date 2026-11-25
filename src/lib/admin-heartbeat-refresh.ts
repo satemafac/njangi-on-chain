@@ -211,6 +211,11 @@ export async function discoverStaleAdminHeartbeatCircles(args: {
       maxConcurrent: 5,
       limit: 1000,
       order: 'descending',
+      // A package that fails every retry must fail the scan. Otherwise the
+      // empty or partial list reads as "no stale circles", and the refresh
+      // records a noop held for the discovery throttle. Throwing sends it
+      // through the caller's failure path instead.
+      throwOnFailure: true,
     },
   );
 
