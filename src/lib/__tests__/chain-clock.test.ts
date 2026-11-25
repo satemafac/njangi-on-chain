@@ -54,11 +54,17 @@ describe('readChainClockMs', () => {
 });
 
 describe('readCycleEscrowState: claim window', () => {
+  // One of this app's testnet escrows (the lineage's original id,
+  // package-lineage.ts): readCycleEscrowState reads no other.
+  const ESCROW_TYPE =
+    '0x89cddf4dfe654e7c7b16333096d9e750cf04bb96f7de934403a512d460594f02::njangi_cycle_escrow::CycleEscrow<0x2::sui::SUI>';
   const escrowWith = (fields: Record<string, unknown>) => ({
     data: {
       objectId: '0xe30c91fee48d74587d6dc549b301f8c7424031116e7c8d8cefaf410c3894fbe0',
+      type: ESCROW_TYPE,
       content: {
         dataType: 'moveObject',
+        type: ESCROW_TYPE,
         fields: {
           snapshot: { fields: { cycle_no: '5', members: [], required_contributors: '2' } },
           finalized: true,
