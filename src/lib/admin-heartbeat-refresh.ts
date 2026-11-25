@@ -151,12 +151,18 @@ export function getAdminHeartbeatRefreshThrottleState(args: {
     return { shouldThrottle: false, reason: null };
   }
 
-  if (
-    record.lastResult === 'failure'
-    && typeof record.lastFailureAt === 'number'
-    && now - record.lastFailureAt < failureRetryMs
-  ) {
-    return { shouldThrottle: true, reason: 'recent_failure' };
+  // A failure is retried once the failure window has passed and is never
+  // held for the discovery throttle. The failure path stamps lastAttemptAt
+  // and lastFailureAt together, so falling through to the recent_attempt
+  // check below would hold every recorded failure for 6 hours like a noop.
+  if (record.lastResult === 'failure') {
+    const failedAt = typeof record.lastFailureAt === 'number'
+      ? record.lastFailureAt
+      : record.lastAttemptAt;
+    if (now - failedAt < failureRetryMs) {
+      return { shouldThrottle: true, reason: 'recent_failure' };
+    }
+    return { shouldThrottle: false, reason: null };
   }
 
   if (now - record.lastAttemptAt < discoveryThrottleMs) {
@@ -215,6 +221,7 @@ export async function discoverStaleAdminHeartbeatCircles(args: {
       // empty or partial list reads as "no stale circles", and the refresh
       // records a noop held for the discovery throttle. Throwing sends it
       // through the caller's failure path instead.
+      // The per-circle inspection below follows the same rule.
       throwOnFailure: true,
     },
   );
@@ -260,11 +267,13 @@ export async function discoverStaleAdminHeartbeatCircles(args: {
     }),
   );
 
+  const failedCircleIds: string[] = [];
   const staleCircles = discoveryResults.flatMap((result, index) => {
     if (result.status === 'fulfilled') {
       return result.value ? [result.value] : [];
     }
 
+    failedCircleIds.push(candidateCircleIds[index]);
     logger.warn(
       '[admin-heartbeat-refresh] Failed to inspect circle during stale discovery.',
       {
@@ -274,6 +283,18 @@ export async function discoverStaleAdminHeartbeatCircles(args: {
     );
     return [];
   });
+
+  // A circle that could not be inspected is not a fresh one. If nothing stale
+  // was found among the circles that could be read, an empty list would read
+  // as "no stale circles" and be recorded as a noop held for the discovery
+  // throttle. Throw so the caller records a failure, retried after the
+  // failure window. When stale circles were found, return them so their
+  // heartbeat still goes out.
+  if (failedCircleIds.length > 0 && staleCircles.length === 0) {
+    throw new Error(
+      `Could not inspect ${failedCircleIds.length} of ${candidateCircleIds.length} candidate circle(s); the result would be incomplete.`,
+    );
+  }
 
   return staleCircles.sort((left, right) => left.lastAdminHeartbeatAt - right.lastAdminHeartbeatAt);
 }
