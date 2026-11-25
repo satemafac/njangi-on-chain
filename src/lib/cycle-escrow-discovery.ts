@@ -52,6 +52,8 @@ import type { PaginatedEvents, SuiClient } from '@mysten/sui/client';
 import type { NetworkType } from '../services/whatsapp-registry-service';
 import { getNetworkConfig, getPackageIdForNetwork } from '../services/network-config';
 import { getPublishedPackageMetadata } from './circle-chain';
+import { appPackageIds } from './app-packages';
+import { extractPackageIdFromMoveType } from './package-lineage';
 import { getPooledSuiClient, withSuiRpcFailover } from '../services/sui-rpc-failover';
 import type { CircleRotationPointer } from './cycle-round-progression';
 
@@ -314,12 +316,15 @@ export async function readCircleOpenRound(
  * members' round is the marked one. Throws when that question cannot be
  * answered — an unreadable marker, or a marked escrow that cannot be
  * verified — rather than guessing that the newest entry is the round.
+ * The marked escrow is judged against `network`'s packages: the network
+ * discovery was asked about, never the ambient one.
  */
 async function preferMarkedEscrow(
   client: SuiClient,
   circleId: string,
   newest: CycleEscrowSummary,
   marker: CircleOpenRoundRead,
+  network: NetworkType,
 ): Promise<CycleEscrowSummary> {
   if (marker.kind === 'absent') return newest;
   if (marker.kind === 'unknown') {
@@ -334,7 +339,7 @@ async function preferMarkedEscrow(
   // A marker for another round says nothing about this one.
   if (!sameRound) return newest;
 
-  const verified = await verifyCycleEscrowForCircle(client, marker.escrowId, circleId);
+  const verified = await verifyCycleEscrowForCircle(client, marker.escrowId, circleId, network);
   if (verified.verdict === null) {
     throw new Error(
       `[cycle-escrow-discovery] Could not verify the escrow ${marker.escrowId} that the open-round marker of ${circleId} names.`,
@@ -363,6 +368,44 @@ async function preferMarkedEscrow(
 // Generic over the coin type, so the marker is matched rather than a suffix.
 const CYCLE_ESCROW_TYPE_MARKER = '::njangi_cycle_escrow::CycleEscrow<';
 
+/**
+ * Whose object a Move type names, for the one question this file asks: is
+ * it this app's CycleEscrow? A type counts as ours only when its package is
+ * one of this app's (app-packages.ts): anybody can publish a package with a
+ * `njangi_cycle_escrow::CycleEscrow` struct, so the package-less marker
+ * alone would accept a look-alike.
+ *
+ *  - 'ours': `<package>::njangi_cycle_escrow::CycleEscrow<T>` from one of
+ *    this app's packages on `network` (the current network when omitted).
+ *    The marker must follow the package directly, so a wrapper whose type
+ *    parameter merely mentions it does not pass.
+ *  - 'not-ours': read, decoded, and something else: another struct, or a
+ *    CycleEscrow from a package that is not this app's.
+ *  - 'unknown': nothing may be inferred: no type, a package that does not
+ *    decode as an address, or this app's packages could not be resolved.
+ *    Never 'not-ours': an undecodable type is no proof the object is not ours.
+ */
+type CycleEscrowTypeOwner = 'ours' | 'not-ours' | 'unknown';
+
+function classifyCycleEscrowType(type: unknown, network?: NetworkType): CycleEscrowTypeOwner {
+  if (typeof type !== 'string' || type.trim() === '') return 'unknown';
+  const packageId = extractPackageIdFromMoveType(type);
+  // `0x` and at most 32 bytes of hex; anything else is not an address.
+  if (!packageId || packageId.length > 66) return 'unknown';
+  if (!type.slice(packageId.length).startsWith(CYCLE_ESCROW_TYPE_MARKER)) return 'not-ours';
+  let appPackages: string[];
+  try {
+    appPackages = appPackageIds(network);
+  } catch (err) {
+    console.warn('[cycle-escrow-discovery] could not resolve this app’s packages', { network, err });
+    return 'unknown';
+  }
+  // An empty allow-list is a broken config, not a verdict on the object.
+  if (!Array.isArray(appPackages) || appPackages.length === 0) return 'unknown';
+  const ownPackage = normalizeAddress(packageId);
+  return appPackages.some((id) => normalizeAddress(id) === ownPackage) ? 'ours' : 'not-ours';
+}
+
 export type CycleEscrowVerification =
   | { verdict: true; summary: Omit<CycleEscrowSummary, 'source'> }
   | { verdict: false }
@@ -381,11 +424,20 @@ export type CycleEscrowVerification =
  * On success the summary is built from the object itself rather than from
  * whatever named the candidate, so both tiers answer in the same shape from
  * the same source of truth.
+ *
+ * Only this app's CycleEscrow counts (app-packages.ts), judged against the
+ * packages of `network`: the network the caller is reading, which every
+ * discovery tier passes, and the current one only when it is omitted. A
+ * CycleEscrow from any other package is "some other object type", whatever
+ * it names as its circle. A Move type whose package does not decode, or
+ * this app's packages failing to resolve, is a read that says nothing:
+ * null, never false.
  */
 export async function verifyCycleEscrowForCircle(
   client: SuiClient,
   escrowId: string,
   circleId: string,
+  network?: NetworkType,
 ): Promise<CycleEscrowVerification> {
   try {
     const obj = await client.getObject({
@@ -400,7 +452,16 @@ export async function verifyCycleEscrowForCircle(
     }
     const type = obj.data?.type ?? '';
     if (!type) return { verdict: null };
-    if (!type.includes(CYCLE_ESCROW_TYPE_MARKER)) return { verdict: false };
+    const owner = classifyCycleEscrowType(type, network);
+    if (owner === 'unknown') {
+      console.warn(
+        '[cycle-escrow-discovery] could not tell from its Move type whether the candidate is this app’s CycleEscrow',
+        { escrowId, type, network },
+      );
+      return { verdict: null };
+    }
+    // Read and decoded: some other struct, or a look-alike from another package.
+    if (owner === 'not-ours') return { verdict: false };
 
     const content = obj.data?.content;
     if (!content || content.dataType !== 'moveObject') return { verdict: null };
@@ -442,13 +503,15 @@ export async function verifyCycleEscrowForCircle(
  * null when it could not be read. The boolean view of
  * `verifyCycleEscrowForCircle`, for callers that hold an id and want a
  * verdict rather than a summary.
+ * `network` is as for `verifyCycleEscrowForCircle`.
  */
 export async function isCycleEscrowForCircle(
   client: SuiClient,
   escrowId: string,
   circleId: string,
+  network?: NetworkType,
 ): Promise<boolean | null> {
-  return (await verifyCycleEscrowForCircle(client, escrowId, circleId)).verdict;
+  return (await verifyCycleEscrowForCircle(client, escrowId, circleId, network)).verdict;
 }
 
 // ---------------------------------------------------------------------------
@@ -509,7 +572,7 @@ async function findCycleEscrowFromEvents(
     const escrowId = typeof parsed.escrow_id === 'string' ? parsed.escrow_id : '';
     if (!escrowId) continue;
 
-    const verified = await verifyCycleEscrowForCircle(client, escrowId, circleId);
+    const verified = await verifyCycleEscrowForCircle(client, escrowId, circleId, network);
     if (verified.verdict === null) {
       throw new Error(
         `[cycle-escrow-discovery] Found a CycleEscrowOpened event for ${circleId} but could not read escrow ${escrowId} to verify it.`,
@@ -604,7 +667,7 @@ export async function findCurrentCycleEscrow(
     const newestFirst = [...history.escrowIds].reverse();
     const candidates = wantedCycle === undefined ? newestFirst.slice(0, 1) : newestFirst;
     for (const escrowId of candidates) {
-      const verified = await verifyCycleEscrowForCircle(client, escrowId, circleId);
+      const verified = await verifyCycleEscrowForCircle(client, escrowId, circleId, network);
       if (verified.verdict === null) {
         historyUnknown = true;
         break;
@@ -622,7 +685,9 @@ export async function findCurrentCycleEscrow(
       }
       if (wantedCycle !== undefined && verified.summary.cycleNo !== wantedCycle) continue;
       const newest: CycleEscrowSummary = { ...verified.summary, source: 'escrow_history' };
-      return markerRead ? preferMarkedEscrow(client, circleId, newest, await markerRead) : newest;
+      return markerRead
+        ? preferMarkedEscrow(client, circleId, newest, await markerRead, network)
+        : newest;
     }
   }
   if (historyUnknown) {
@@ -696,6 +761,12 @@ export function potBaseUnits(
 /**
  * Fetches the current on-chain state of a CycleEscrow for UI progress
  * displays ("4 of 7 members have paid in", "finalized / claimed").
+ *
+ * Only this app's CycleEscrow on `network` counts (app-packages.ts): null
+ * when the object was read and is something else, a look-alike CycleEscrow
+ * from another package included. A read whose Move type is missing or does
+ * not decode, or whose package cannot be checked, is unknown and throws, as
+ * a failed getObject does: never null, never a state.
  */
 export async function readCycleEscrowState(
   escrowId: string,
@@ -715,6 +786,20 @@ export async function readCycleEscrowState(
   if (!obj.data?.content || obj.data.content.dataType !== 'moveObject') {
     return null;
   }
+  // The content's own type names the struct whose fields are read below;
+  // showContent serves it on every moveObject.
+  const contentMoveType = (obj.data.content as { type?: unknown }).type;
+  const escrowTypeOwner = classifyCycleEscrowType(
+    typeof contentMoveType === 'string' && contentMoveType.trim() !== '' ? contentMoveType : obj.data.type,
+    network,
+  );
+  if (escrowTypeOwner === 'unknown') {
+    throw new Error(
+      `[cycle-escrow-discovery] Could not tell from its Move type whether ${escrowId} is this app’s CycleEscrow on ${network}.`,
+    );
+  }
+  // Read and decoded: some other struct, or a look-alike from another package.
+  if (escrowTypeOwner === 'not-ours') return null;
   const fields =
     (obj.data.content as { fields: Record<string, unknown> }).fields;
 
