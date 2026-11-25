@@ -8,14 +8,16 @@
 // client is the pooled one with its read methods routed through the shared
 // read layer (sui-read.ts: Sui gRPC, then GraphQL; events from GraphQL), in
 // the JSON-RPC shapes the helpers already parse. Lists (dynamic fields,
-// events) come back whole, as one page.
+// events) come back whole, as one page, except that queryEvents given a
+// cursor or a limit pages over that whole list: it starts after the cursor's
+// event, stops at the limit, and throws for a cursor the list does not hold.
 //
 // Hand it only to code that reads. Transactions are built, signed and
 // confirmed by the signing client (signing-sui-client.ts), unchanged.
 // Methods not listed here (getTransactionBlock, queryTransactionBlocks,
 // getOwnedObjects, …) are the pooled client's own, still JSON-RPC.
 
-import type { SuiClient } from '@mysten/sui/client';
+import type { EventId, PaginatedEvents, SuiClient, SuiEventFilter } from '@mysten/sui/client';
 import { getCurrentNetwork, type NetworkType } from '@/services/network-config';
 import { getPooledSuiClient } from '@/services/sui-rpc-failover';
 import { V2_READS_KEY, type V2Reads } from './tx-transport';
@@ -41,6 +43,43 @@ function lazyV2Reads(network: NetworkType): V2Reads {
 }
 
 type Method<K extends keyof SuiClient> = SuiClient[K] extends (...args: infer A) => infer R ? (...args: A) => R : never;
+
+/**
+ * The page of `whole` (every matching event, in the order asked for, as the
+ * read layer returns it) that starts right after the event `cursor` names and
+ * holds at most `limit` events. Throws rather than guess when `whole` is not
+ * the whole list, when the cursor is not among its events, or when `limit` is
+ * not a positive integer. nextCursor is the last event returned, or `cursor`
+ * when none is, so a caller that stores it never falls back to the start.
+ */
+function pageOfEvents(
+  query: SuiEventFilter,
+  whole: PaginatedEvents,
+  cursor: EventId | null,
+  limit: number | null,
+): PaginatedEvents {
+  const what = `events ${JSON.stringify(query)}`;
+  if (!Array.isArray(whole?.data) || whole.hasNextPage !== false) {
+    throw new Error(`[reading-client] ${what} did not come back whole, so they cannot be paged`);
+  }
+  if (limit !== null && (!Number.isInteger(limit) || limit <= 0)) {
+    throw new Error(`[reading-client] ${what}: limit ${String(limit)} is not a positive integer`);
+  }
+  let start = 0;
+  if (cursor !== null) {
+    const at = whole.data.findIndex(
+      (event) => event?.id?.txDigest === cursor.txDigest && event?.id?.eventSeq === cursor.eventSeq,
+    );
+    if (at < 0) {
+      throw new Error(`[reading-client] ${what}: cursor ${cursor.txDigest}#${cursor.eventSeq} is not among the events read`);
+    }
+    start = at + 1;
+  }
+  const end = limit === null ? whole.data.length : Math.min(whole.data.length, start + limit);
+  const data = whole.data.slice(start, end);
+  const last = data[data.length - 1];
+  return { data, hasNextPage: end < whole.data.length, nextCursor: last ? last.id : cursor };
+}
 
 // Keyed by the pooled client it wraps, so a new pooled client gets a new wrapper.
 let readingClients = new WeakMap<object, SuiClient>();
@@ -70,8 +109,14 @@ export function getReadingSuiClient(network?: NetworkType): SuiClient {
     }) as unknown as Awaited<ReturnType<SuiClient['getDynamicFields']>>;
   const getDynamicFieldObject: Method<'getDynamicFieldObject'> = ({ parentId, name }) =>
     readDynamicFieldObject(parentId, name, opts);
-  const queryEvents: Method<'queryEvents'> = ({ query, order }) =>
-    queryEventsCached({ query, ...(order ? { order } : {}) }, opts);
+  // Reads the whole list as before (read failures propagate unchanged); a
+  // cursor or a limit then pages over it (pageOfEvents), so a cron resuming
+  // from its stored id gets only what came after it.
+  const queryEvents: Method<'queryEvents'> = async ({ query, cursor, limit, order }) => {
+    const whole = await queryEventsCached({ query, ...(order ? { order } : {}) }, opts);
+    if (cursor == null && limit == null) return whole;
+    return pageOfEvents(query, whole, cursor ?? null, limit ?? null);
+  };
   // The 2.x coin pages carry the fields readers use (coinObjectId, balance, paging).
   const getCoins: Method<'getCoins'> = async (input) =>
     (await reads.getCoins(input)) as unknown as Awaited<ReturnType<SuiClient['getCoins']>>;
