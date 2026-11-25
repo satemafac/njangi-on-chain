@@ -757,7 +757,8 @@ export default function CircleDetails() {
         setCirclePackageId(resolvedPackageId);
       }
 
-      // Read-only: its queryEvents answers with every event, not a first page.
+      // Read-only. Its queryEvents pages as JSON-RPC does (a limit gives the
+      // first page); loadRecoveryExecutionStatus follows every page to the end.
       const client = getReadingSuiClient();
       const executionStatus = await loadRecoveryExecutionStatus({
         client,
