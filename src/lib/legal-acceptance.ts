@@ -32,15 +32,22 @@ export function isLegalLocale(value: unknown): value is LegalLocale {
  * the matching markdown file.
  */
 export const CURRENT_LEGAL_VERSIONS: Record<LegalDocId, string> = {
-  terms: '1.0.0',
+  // 1.1.0 (2026-10-01 text, bumped 2026-11-20): Enoki (Mysten Labs)
+  // supplies the zkLogin salt, the recovery-code claims were dropped and
+  // Enoki joined the third-party list. Founder-approved change note below.
+  terms: '1.1.0',
   // 1.1.0 (2026-07-05): named Vercel + Neon explicitly in the processor
   // table (GDPR transparency — roadmap A2/A4).
   // 1.2.0 (2026-10-01): named Enoki (Mysten Labs) as the zkLogin salt and
   // proof processor, dropped the retired salt-server and recovery-code
   // claims, and stopped describing deletion as locking the wallet. Terms
-  // and risk changed in the same release WITHOUT a bump (owner's call).
+  // and risk changed in the same release; their 1.1.0 bump (with change
+  // notes) followed on 2026-11-20.
   privacy: '1.2.0',
-  risk: '1.0.0',
+  // 1.1.0 (2026-10-01 text, bumped 2026-11-20): spells out the risk of
+  // losing your login (no recovery codes, sign-in relies on Enoki).
+  // Founder-approved change note below.
+  risk: '1.1.0',
 };
 
 /**
@@ -58,6 +65,16 @@ export const LEGAL_CHANGE_NOTES: Partial<
     version: '1.2.0',
     en: 'Enoki (Mysten Labs), which helps sign you in, is now listed among the services that process your data. Recovery codes, which the app does not offer, are no longer mentioned. Deleting your data does not affect your wallet.',
     fr: "Enoki (Mysten Labs), qui intervient dans votre connexion, figure désormais parmi les services qui traitent vos données. Les codes de récupération, que l'application ne propose pas, ne sont plus mentionnés. La suppression de vos données n'affecte pas votre portefeuille.",
+  },
+  terms: {
+    version: '1.1.0',
+    en: "Your wallet address now also depends on a private value (a 'salt') that Enoki, run by Mysten Labs, supplies each time you sign in, and Enoki is listed among the third-party services. Recovery codes, which the app does not offer, are no longer mentioned: without your social account there is no way to restore access to your wallet. If Enoki stopped supplying your salt, you could lose access to your wallet.",
+    fr: "L'adresse de votre portefeuille dépend désormais aussi d'une valeur privée (un « sel ») qu'Enoki, exploité par Mysten Labs, fournit à chaque connexion, et Enoki figure parmi les services tiers. Les codes de récupération, que l'application ne propose pas, ne sont plus mentionnés : sans votre compte social, il n'existe aucun moyen de rétablir l'accès à votre portefeuille. Si Enoki cessait de fournir votre sel, vous pourriez perdre l'accès à votre portefeuille.",
+  },
+  risk: {
+    version: '1.1.0',
+    en: "The risk of losing your login is spelled out: Njangi On-Chain has no recovery codes and cannot restore your access. Signing in also relies on Enoki, run by Mysten Labs; if it stopped working for Njangi On-Chain, you could lose access to your wallet. Keep your social account's recovery options up to date.",
+    fr: "Le risque de perdre votre connexion est désormais précisé : Njangi On-Chain n'a pas de codes de récupération et ne peut pas rétablir votre accès. La connexion repose aussi sur Enoki, exploité par Mysten Labs ; s'il cessait de fonctionner pour Njangi On-Chain, vous pourriez perdre l'accès à votre portefeuille. Tenez à jour les options de récupération de votre compte social.",
   },
 };
 

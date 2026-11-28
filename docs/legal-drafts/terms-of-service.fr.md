@@ -1,6 +1,6 @@
 ---
 title: "Njangi On-Chain — Conditions Générales d'Utilisation"
-version: 1.0.0
+version: 1.1.0
 effective_date: "{{EFFECTIVE_DATE}}"
 language: fr
 ---
@@ -13,7 +13,7 @@ language: fr
 
 # Conditions Générales d'Utilisation
 
-**Version 1.0.0 — Date d'entrée en vigueur : {{EFFECTIVE_DATE}}**
+**Version 1.1.0 — Date d'entrée en vigueur : {{EFFECTIVE_DATE}}**
 
 Les présentes Conditions Générales d'Utilisation (les « Conditions ») constituent un contrat entre vous et {{COMPANY_LEGAL_NAME}}, {{COMPANY_ADDRESS}} (« Njangi On-Chain », « nous »), exploitant du site, des applications et des services associés Njangi On-Chain (ensemble, le « Service »). En créant un compte, en acceptant les présentes Conditions dans l'application ou en utilisant le Service, vous acceptez d'être lié par celles-ci. Si vous ne les acceptez pas, n'utilisez pas le Service.
 

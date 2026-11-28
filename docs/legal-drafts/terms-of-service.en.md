@@ -1,6 +1,6 @@
 ---
 title: "Njangi On-Chain — Terms of Service"
-version: 1.0.0
+version: 1.1.0
 effective_date: "{{EFFECTIVE_DATE}}"
 language: en
 ---
@@ -12,7 +12,7 @@ language: en
 
 # Terms of Service
 
-**Version 1.0.0 — Effective {{EFFECTIVE_DATE}}**
+**Version 1.1.0 — Effective {{EFFECTIVE_DATE}}**
 
 These Terms of Service (the "Terms") are an agreement between you and {{COMPANY_LEGAL_NAME}}, {{COMPANY_ADDRESS}} ("Njangi On-Chain", "we", "us"), the operator of the Njangi On-Chain website, applications, and related services (together, the "Service"). By creating an account, accepting these Terms in the app, or using the Service, you agree to be bound by them. If you do not agree, do not use the Service.
 

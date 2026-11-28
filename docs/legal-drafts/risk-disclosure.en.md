@@ -1,6 +1,6 @@
 ---
 title: "Njangi On-Chain — Risk Disclosure"
-version: 1.0.0
+version: 1.1.0
 effective_date: "{{EFFECTIVE_DATE}}"
 language: en
 ---
