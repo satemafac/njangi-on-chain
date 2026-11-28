@@ -23,6 +23,8 @@ describe('recovery-execution helpers', () => {
               },
             },
           ],
+          hasNextPage: false,
+          nextCursor: null,
         })
         .mockResolvedValueOnce({
           data: [
@@ -51,6 +53,8 @@ describe('recovery-execution helpers', () => {
               },
             },
           ],
+          hasNextPage: false,
+          nextCursor: null,
         })
         .mockResolvedValueOnce({
           data: [
@@ -63,6 +67,8 @@ describe('recovery-execution helpers', () => {
               },
             },
           ],
+          hasNextPage: false,
+          nextCursor: null,
         }),
     };
 
@@ -97,9 +103,9 @@ describe('recovery-execution helpers', () => {
     const client = {
       queryEvents: jest
         .fn()
-        .mockResolvedValueOnce({ data: [] })
-        .mockResolvedValueOnce({ data: [] })
-        .mockResolvedValueOnce({ data: [] }),
+        .mockResolvedValueOnce({ data: [], hasNextPage: false, nextCursor: null })
+        .mockResolvedValueOnce({ data: [], hasNextPage: false, nextCursor: null })
+        .mockResolvedValueOnce({ data: [], hasNextPage: false, nextCursor: null }),
     };
 
     await expect(
@@ -109,6 +115,48 @@ describe('recovery-execution helpers', () => {
         circleId: '0xCircle',
       }),
     ).resolves.toBeNull();
+  });
+
+  // A page that does not say the list ends (hasNextPage: false) is not the
+  // whole list: the load rejects rather than answer from what it read so far.
+  const startedEvent = {
+    id: { txDigest: 'tx-started-1', eventSeq: '0' },
+    timestampMs: '1000',
+    parsedJson: {
+      circle_id: '0xCircle',
+      timestamp: '1000',
+      executor: '0xAdmin',
+      member_count: '4',
+      total_sui_refund: '0',
+      total_stablecoin_refund: '0',
+      used_auto_release: false,
+      trigger_role: '0',
+    },
+  };
+  const malformedStartedPages: Array<[string, unknown]> = [
+    ['hasNextPage is missing', { data: [startedEvent] }],
+    ['hasNextPage is missing from an empty page', { data: [] }],
+    ['hasNextPage is not a boolean', { data: [startedEvent], hasNextPage: 'false', nextCursor: null }],
+    ['hasNextPage is true with no cursor', { data: [startedEvent], hasNextPage: true, nextCursor: null }],
+    ['hasNextPage is true with a malformed cursor', { data: [startedEvent], hasNextPage: true, nextCursor: { txDigest: 'tx-started-1' } }],
+    ['the cursor never moves past the page', { data: [startedEvent], hasNextPage: true, nextCursor: { txDigest: 'tx-started-1', eventSeq: '0' } }],
+    ['data is not a list', { data: null, hasNextPage: false, nextCursor: null }],
+  ];
+
+  it.each(malformedStartedPages)('rejects instead of answering when %s', async (_label, page) => {
+    const queryEvents = jest.fn(async ({ query }: { query: { MoveEventType: string } }) =>
+      query.MoveEventType.endsWith('::RecoveryExecutionStarted')
+        ? page
+        : { data: [], hasNextPage: false, nextCursor: null },
+    );
+
+    await expect(
+      loadRecoveryExecutionStatus({
+        client: { queryEvents } as never,
+        packageId: '0xpackage',
+        circleId: '0xCircle',
+      }),
+    ).rejects.toThrow('RecoveryExecutionStarted');
   });
 });
 

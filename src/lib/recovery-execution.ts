@@ -8,7 +8,7 @@
 // (carries the literal "stablecoin", not a type) and StablecoinHoldingUpdated
 // (an unprefixed type name).
 
-import type { SuiClient, SuiEvent } from '@mysten/sui/client';
+import type { EventId, PaginatedEvents, SuiClient, SuiEvent } from '@mysten/sui/client';
 
 export interface RecoveryMemberRefundSummary {
   member: string;
@@ -68,28 +68,73 @@ const matchesCircle = (circleId: string, event: SuiEvent): boolean => {
   return typeof parsed?.circle_id === 'string' && parsed.circle_id.toLowerCase() === circleId.toLowerCase();
 };
 
+const isEventId = (value: unknown): value is EventId => {
+  const record = asRecord(value);
+  return typeof record?.txDigest === 'string' && typeof record.eventSeq === 'string';
+};
+
+/**
+ * Every event of `moveEventType`, read `pageSize` at a time from the oldest,
+ * following nextCursor until a page says hasNextPage: false. The reading
+ * client pages as JSON-RPC does, so one call answers with the first page
+ * only. Fails closed: a page that cannot be read rejects as it is, and a
+ * page whose data is not a list, whose hasNextPage is not a boolean, or that
+ * says more follow without a cursor that moves past it throws, rather than
+ * pass the events read so far off as the whole list.
+ */
+async function readAllEvents(
+  client: RecoveryExecutionClient,
+  moveEventType: string,
+  pageSize: number,
+): Promise<SuiEvent[]> {
+  const what = `[recovery-execution] ${moveEventType}`;
+  const events: SuiEvent[] = [];
+  let cursor: EventId | null = null;
+  for (;;) {
+    const page: PaginatedEvents | null | undefined = await client.queryEvents({
+      query: { MoveEventType: moveEventType },
+      ...(cursor ? { cursor } : {}),
+      limit: pageSize,
+      order: 'ascending',
+    });
+    if (!page || !Array.isArray(page.data)) {
+      throw new Error(`${what}: a page of events did not come back as a list`);
+    }
+    // Only an explicit false ends the list: a missing or malformed
+    // hasNextPage does not prove the events read so far are all of them.
+    const hasNextPage: unknown = page.hasNextPage;
+    if (typeof hasNextPage !== 'boolean') {
+      throw new Error(`${what}: a page of events did not say whether more follow`);
+    }
+    events.push(...page.data);
+    if (hasNextPage === false) return events;
+    const next: unknown = page.nextCursor;
+    if (
+      !isEventId(next) ||
+      (cursor !== null && next.txDigest === cursor.txDigest && next.eventSeq === cursor.eventSeq)
+    ) {
+      throw new Error(`${what}: a page says more events follow but no cursor moves past it`);
+    }
+    cursor = { txDigest: next.txDigest, eventSeq: next.eventSeq };
+  }
+}
+
 export async function loadRecoveryExecutionStatus(args: {
   client: RecoveryExecutionClient;
   packageId: string;
   circleId: string;
 }): Promise<RecoveryExecutionStatus | null> {
   const { client, packageId, circleId } = args;
+  // Each list is read whole (every page, readAllEvents), so a circle's events
+  // are found however many other circles emitted; a page that cannot be read
+  // rejects the call, which callers show as a read failure, not as none.
   const [startedEvents, memberRefundEvents, completedEvents] = await Promise.all([
-    client.queryEvents({
-      query: { MoveEventType: `${packageId}::njangi_circles::RecoveryExecutionStarted` },
-      limit: 20,
-    }),
-    client.queryEvents({
-      query: { MoveEventType: `${packageId}::njangi_circles::RecoveryMemberRefunded` },
-      limit: 200,
-    }),
-    client.queryEvents({
-      query: { MoveEventType: `${packageId}::njangi_circles::RecoveryExecutionCompleted` },
-      limit: 20,
-    }),
+    readAllEvents(client, `${packageId}::njangi_circles::RecoveryExecutionStarted`, 20),
+    readAllEvents(client, `${packageId}::njangi_circles::RecoveryMemberRefunded`, 200),
+    readAllEvents(client, `${packageId}::njangi_circles::RecoveryExecutionCompleted`, 20),
   ]);
 
-  const latestStarted = [...startedEvents.data]
+  const latestStarted = [...startedEvents]
     .filter((event) => matchesCircle(circleId, event))
     .sort((left, right) => Number(right.timestampMs || 0) - Number(left.timestampMs || 0))[0];
 
@@ -103,7 +148,7 @@ export async function loadRecoveryExecutionStatus(args: {
   }
 
   const startedAt = Number(parseU64Like(startedFields.timestamp));
-  const memberRefunds = memberRefundEvents.data
+  const memberRefunds = memberRefundEvents
     .filter((event) => matchesCircle(circleId, event))
     .map((event) => {
       const parsed = asRecord(event.parsedJson);
@@ -126,7 +171,7 @@ export async function loadRecoveryExecutionStatus(args: {
     .filter((entry) => entry.timestamp >= startedAt)
     .sort((left, right) => right.timestamp - left.timestamp);
 
-  const latestCompleted = [...completedEvents.data]
+  const latestCompleted = [...completedEvents]
     .filter((event) => matchesCircle(circleId, event))
     .sort((left, right) => Number(right.timestampMs || 0) - Number(left.timestampMs || 0))[0];
   const completedFields = asRecord(latestCompleted?.parsedJson);
