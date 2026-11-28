@@ -78,11 +78,33 @@ export interface CustodyWalletResolution {
   source: CustodyDiscoverySource;
 }
 
-/** Shape of the injected event reader (pages pass `queryEventsCached`). */
+/** A CustodyWalletCreated event id: the cursor the events tier pages by. */
+export type CustodyEventCursor = { txDigest: string; eventSeq: string };
+
+/**
+ * Shape of the injected event reader (pages pass `queryEventsCached`; the
+ * default is `client.queryEvents`). Both page by `limit` and resume after
+ * `cursor`, so the events tier follows `nextCursor` while `hasNextPage`: the
+ * first page of the list is not the list.
+ */
 export type CustodyEventReader = (params: {
   query: { MoveEventType: string };
   limit: number;
-}) => Promise<{ data: Array<{ parsedJson?: unknown }> }>;
+  cursor?: CustodyEventCursor | null;
+}) => Promise<{
+  data: Array<{ parsedJson?: unknown }>;
+  hasNextPage?: boolean;
+  nextCursor?: CustodyEventCursor | null;
+}>;
+
+/** Events requested per page, as readAllEvents (sui-read.ts) requests them. */
+const EVENT_PAGE_SIZE = 50;
+
+/**
+ * Pages the events tier follows before calling the read a failure, the same
+ * guard as sui-read.ts's MAX_JSON_RPC_LIST_PAGES.
+ */
+const MAX_EVENT_PAGES = 200;
 
 export interface ResolveCustodyWalletArgs {
   client: SuiClient;
@@ -318,6 +340,15 @@ async function fromCreationTransaction(
   }
 }
 
+/**
+ * Tier 3: this circle's `CustodyWalletCreated` event, read page by page
+ * (oldest first) until it is found or the last page has been searched. Both
+ * readers page by `limit` (the reading client since NJA-3967, JSON-RPC always),
+ * so stopping after one page would report every circle past the oldest 50 as
+ * absent. A page that fails, a next page without a new cursor or more than
+ * MAX_EVENT_PAGES pages is a read failure, not "not found": warned, and the
+ * wallet stays unresolved (null) so the later tiers still try.
+ */
 async function fromEvents(
   args: Required<Pick<ResolveCustodyWalletArgs, 'client' | 'circleId' | 'packageId'>> &
     Pick<ResolveCustodyWalletArgs, 'queryEvents'>,
@@ -326,22 +357,47 @@ async function fromEvents(
     const read: CustodyEventReader =
       args.queryEvents ??
       ((params) => args.client.queryEvents(params) as ReturnType<CustodyEventReader>);
-    const events = await read({
-      query: {
-        MoveEventType: `${args.packageId}::njangi_custody::CustodyWalletCreated`,
-      },
-      limit: 50,
+    const query = {
+      MoveEventType: `${args.packageId}::njangi_custody::CustodyWalletCreated`,
+    };
+    const circle = normalizeId(args.circleId);
+    let cursor: CustodyEventCursor | null = null;
+    for (let page = 1; ; page += 1) {
+      if (page > MAX_EVENT_PAGES) {
+        throw new Error(`${query.MoveEventType}: more than ${MAX_EVENT_PAGES} pages`);
+      }
+      const events: Awaited<ReturnType<CustodyEventReader>> = await read({
+        query,
+        limit: EVENT_PAGE_SIZE,
+        ...(cursor ? { cursor } : {}),
+      });
+      if (!Array.isArray(events?.data)) {
+        throw new Error(`${query.MoveEventType}: a page without a data list`);
+      }
+      const hit = events.data.find((event) => {
+        const parsed = event.parsedJson as { circle_id?: string } | undefined;
+        return typeof parsed?.circle_id === 'string' && normalizeId(parsed.circle_id) === circle;
+      });
+      if (hit) {
+        const walletId = (hit.parsedJson as { wallet_id?: string } | undefined)?.wallet_id;
+        if (typeof walletId !== 'string') {
+          throw new Error(`${query.MoveEventType}: this circle's event carries no wallet_id`);
+        }
+        return walletId;
+      }
+      // Only the last page, searched without a hit, means "not in the events".
+      if (events.hasNextPage !== true) return null;
+      const next: CustodyEventCursor | null = events.nextCursor ?? null;
+      if (!next || JSON.stringify(next) === JSON.stringify(cursor)) {
+        throw new Error(`${query.MoveEventType}: a next page without a new cursor`);
+      }
+      cursor = next;
+    }
+  } catch (error) {
+    console.warn('[custody-discovery] events read failed; wallet unresolved', {
+      circleId: args.circleId,
+      error,
     });
-    const hit = events.data.find((event) => {
-      const parsed = event.parsedJson as { circle_id?: string } | undefined;
-      return (
-        typeof parsed?.circle_id === 'string' &&
-        normalizeId(parsed.circle_id) === normalizeId(args.circleId)
-      );
-    });
-    const walletId = (hit?.parsedJson as { wallet_id?: string } | undefined)?.wallet_id;
-    return typeof walletId === 'string' ? walletId : null;
-  } catch {
     return null;
   }
 }
